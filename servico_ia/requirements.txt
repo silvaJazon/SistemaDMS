@@ -1,0 +1,7 @@
+#Documentação: Lista de pacotes Python necessários para o projeto.
+
+#Usamos a versão "headless" porque o nosso script vai rodar num servidor (Docker)
+
+#sem uma interface gráfica direta. É otimizada para este tipo de uso.
+
+opencv-python-headless
