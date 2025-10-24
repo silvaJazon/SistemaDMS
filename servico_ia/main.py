@@ -227,7 +227,7 @@ def capture_and_detect():
 
             res_h, res_w, _ = output_frame_display.shape
             # Log INFO apenas quando processa um frame
-            logging.info(f"Frame {frame_count} PROCESSADO | Res: {res_w}x{res_h} | Pessoas: {detections_count} | Inferência: {inference_time:.3f}s | FPS Proc: {fps:.1f}")
+            logging.debug(f"Frame {frame_count} PROCESSADO | Res: {res_w}x{res_h} | Pessoas: {detections_count} | Inferência: {inference_time:.3f}s | FPS Proc: {fps:.1f}")
 
         else:
             # Frame NÃO processado pela IA
