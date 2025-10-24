@@ -1,4 +1,4 @@
-# Documentação: docker-compose.yml para o Projeto FluxoAI (Arquitetura Microsserviços)
+# Documentação: docker-compose.yml para o Projeto FluxoAI (Arquitetura Microsserviços Completa)
 
 services:
   # Serviço Mosquitto MQTT Broker
@@ -6,9 +6,8 @@ services:
     image: eclipse-mosquitto:2
     container_name: fluxoai-mosquitto
     ports:
-      - "1883:1883"
+      - "1883:1883" # Expõe a porta MQTT para a rede do host
     volumes:
-      # Monta a configuração personalizada para permitir conexões de outros containers
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
     restart: unless-stopped
     networks:
@@ -16,75 +15,89 @@ services:
 
   # Serviço de Captura de Vídeo
   servico_captura:
-    build: ./servico_captura # Pasta do serviço de captura
-    image: jazonbatista/fluxoai-servico-captura:latest # Nome da imagem a ser construída/usada
+    build: ./servico_captura
+    image: jazonbatista/fluxoai-servico-captura:latest
     container_name: fluxoai-servico_captura
     environment:
-      # Configurações passadas para o script main.py do servico_captura
-      - MQTT_BROKER_HOST=mosquitto # Nome do serviço do broker na rede Docker
+      - MQTT_BROKER_HOST=mosquitto
       - MQTT_BROKER_PORT=1883
-      - VIDEO_SOURCE=${VIDEO_SOURCE:-0} # Fonte do vídeo (padrão: câmara 0, pode ser sobreposto)
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}   # Nível de log (padrão: INFO, pode ser sobreposto pelo Makefile)
-      - FRAME_WIDTH=${FRAME_WIDTH:-640} # Largura desejada para os frames publicados
-      - FRAME_HEIGHT=${FRAME_HEIGHT:-480} # Altura desejada para os frames publicados
-      - PUBLISH_TOPIC=fluxoai/frames/raw # Tópico onde os frames crus serão publicados
+      - VIDEO_SOURCE=${VIDEO_SOURCE:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FRAME_WIDTH=${FRAME_WIDTH:-640}
+      - FRAME_HEIGHT=${FRAME_HEIGHT:-480}
+      - PUBLISH_TOPIC=fluxoai/frames/raw
     depends_on:
-      - mosquitto # Garante que o mosquitto inicie antes deste serviço
+      - mosquitto
     devices:
-      - "/dev/video0:/dev/video0" # Mapeia a câmara USB do host para dentro do container
+      - "/dev/video0:/dev/video0" # Acesso à câmara USB
     restart: unless-stopped
     networks:
-      - fluxoai_net # Conecta este serviço à rede interna
+      - fluxoai_net
 
   # Serviço de Inteligência Artificial
   servico_ia:
-    build: ./servico_ia # Pasta do serviço de IA
-    image: jazonbatista/fluxoai-servico-ia:latest # Nome da imagem a ser construída/usada
+    build: ./servico_ia
+    image: jazonbatista/fluxoai-servico-ia:latest
     container_name: fluxoai-servico_ia
     environment:
-      # Configurações passadas para o script main.py do servico_ia
-      - MQTT_BROKER_HOST=mosquitto # Nome do serviço do broker
+      - MQTT_BROKER_HOST=mosquitto
       - MQTT_BROKER_PORT=1883
-      - SUBSCRIBE_TOPIC=fluxoai/frames/raw # Tópico que este serviço vai ouvir
-      - PUBLISH_TOPIC_DATA=fluxoai/detections # Tópico para publicar dados JSON das deteções
-      - PUBLISH_TOPIC_IMG=fluxoai/frames/detected # Tópico para publicar imagem JPEG com caixas
-      - LOG_LEVEL=${LOG_LEVEL:-INFO} # Nível de log
-      - DETECTION_THRESHOLD=${DETECTION_THRESHOLD:-0.55} # Limite de confiança da IA
+      - SUBSCRIBE_TOPIC=fluxoai/frames/raw
+      - PUBLISH_TOPIC_DATA=fluxoai/detections
+      - PUBLISH_TOPIC_IMG=fluxoai/frames/detected # Opcional: Publica imagem com caixas IA
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DETECTION_THRESHOLD=${DETECTION_THRESHOLD:-0.55}
     depends_on:
-      - mosquitto # Garante que o mosquitto inicie antes
+      - mosquitto
     restart: unless-stopped
     networks:
-      - fluxoai_net # Conecta este serviço à rede interna
-    # NOTA: Este serviço não precisa mais de acesso direto à câmara (`devices`)
-    # nem de expor portas (`ports`), pois comunica apenas via MQTT.
+      - fluxoai_net
 
-  # Serviço de Análise de Comportamento (Modificado)
+  # Serviço de Análise de Comportamento
   servico_analise:
-    build: ./servico_analise # Pasta do novo serviço
-    image: jazonbatista/fluxoai-servico-analise:latest # Novo nome de imagem
+    build: ./servico_analise
+    image: jazonbatista/fluxoai-servico-analise:latest
     container_name: fluxoai-servico_analise
     environment:
       - MQTT_BROKER_HOST=mosquitto
       - MQTT_BROKER_PORT=1883
-      - SUBSCRIBE_TOPIC_DATA=fluxoai/detections # Ouve os dados das deteções
-      - SUBSCRIBE_TOPIC_RAW_IMG=fluxoai/frames/raw # Ouve os frames crus
-      # - PUBLISH_TOPIC_STATUS=fluxoai/status/loitering # Onde publicar o status (futuro)
-      - PUBLISH_TOPIC_ANALYZED_IMG=fluxoai/frames/analyzed # Onde publicar imagem final
+      - SUBSCRIBE_TOPIC_DATA=fluxoai/detections
+      - SUBSCRIBE_TOPIC_RAW_IMG=fluxoai/frames/raw
+      - PUBLISH_TOPIC_ANALYZED_IMG=fluxoai/frames/analyzed # Publica imagem final
+      # - PUBLISH_TOPIC_STATUS=fluxoai/status/loitering # Futuro
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOITERING_THRESHOLD_SECONDS=${LOITERING_THRESHOLD_SECONDS:-10}
       - LOITERING_MAX_DISTANCE=${LOITERING_MAX_DISTANCE:-30}
-      - JPEG_QUALITY=${JPEG_QUALITY:-50} # Qualidade para publicar imagem final
+      - JPEG_QUALITY=${JPEG_QUALITY:-50}
     depends_on:
-      - mosquitto # Depende do broker
+      - mosquitto
     restart: unless-stopped
     networks:
-      - fluxoai_net # Conecta à mesma rede
+      - fluxoai_net
 
-  # --- Serviços Futuros (Placeholders) ---
-  # servico_web: ...
+  # Serviço Web (Frontend)
+  servico_web:
+    build: ./servico_web # Pasta do novo serviço web
+    image: jazonbatista/fluxoai-servico-web:latest # Nova imagem
+    container_name: fluxoai-servico_web
+    ports:
+      - "5000:5000" # Expõe a porta 5000 do container para a porta 5000 do host
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - MQTT_BROKER_PORT=1883
+      - SUBSCRIBE_TOPIC_ANALYZED=fluxoai/frames/analyzed # Ouve os frames finais
+      - FLASK_PORT=5000 # Porta interna do Flask
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - FRAME_WIDTH=${FRAME_WIDTH:-640}   # Usado para placeholder
+      - FRAME_HEIGHT=${FRAME_HEIGHT:-480} # Usado para placeholder
+    depends_on:
+      - mosquitto
+      - servico_analise # Garante que a análise inicie antes da web
+    restart: unless-stopped
+    networks:
+      - fluxoai_net
 
-# Define a rede interna que todos os serviços usarão para comunicar
 networks:
   fluxoai_net:
-    driver: bridge # Tipo de rede padrão do Docker
+    driver: bridge
 

@@ -1,0 +1,6 @@
+#Documentação: Dependências para o serviço web
+
+Flask # Servidor web
+paho-mqtt # Cliente MQTT
+numpy # Para manipulação de imagem (descodificar)
+opencv-python-headless # Para descodificar o frame JPEG
