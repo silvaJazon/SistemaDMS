@@ -58,7 +58,10 @@ def update_tracking(detections):
         if det['label'] != TARGET_LABEL:
             continue
             
-        center_x, center_y = calculate_center(*det['box'])
+        # CORREÇÃO: Usar 'box_pixels' que é o campo que o servico_ia envia
+        ymin, xmin, ymax, xmax = det['box_pixels']
+        
+        center_x, center_y = calculate_center(xmin, ymin, xmax, ymax)
         
         best_match_id = -1
         min_distance = float('inf')
@@ -94,14 +97,14 @@ def update_tracking(detections):
                     logging.info(f"Pessoa ID {track_id} DETETADA vadiando (tempo: {time_stopped:.1f}s)")
             
             # Adiciona aos resultados atuais
-            new_detections.append({'box': det['box'], 'score': det['score'], 'is_loitering': tracked_persons[track_id]['is_loitering'], 'track_id': track_id})
+            new_detections.append({'box': [ymin, xmin, ymax, xmax], 'score': det['score'], 'is_loitering': tracked_persons[track_id]['is_loitering'], 'track_id': track_id})
             matched_track_ids.add(track_id)
 
         else:
             # Cria novo track
             track_id = next_track_id
             tracked_persons[track_id] = {
-                'box': det['box'],
+                'box': [ymin, xmin, ymax, xmax],
                 'center': (center_x, center_y),
                 'start_time': current_time,
                 'is_loitering': False,
@@ -109,7 +112,7 @@ def update_tracking(detections):
             }
             logging.info(f"Novo Track ID {track_id} criado.")
             next_track_id += 1
-            new_detections.append({'box': det['box'], 'score': det['score'], 'is_loitering': False, 'track_id': track_id})
+            new_detections.append({'box': [ymin, xmin, ymax, xmax], 'score': det['score'], 'is_loitering': False, 'track_id': track_id})
 
     # 2. Remove tracks antigos (que não foram vistos recentemente)
     ids_to_remove = [track_id for track_id, data in tracked_persons.items() if current_time - data['last_seen'] > 3] # Remove se não visto por 3 segundos
@@ -203,7 +206,8 @@ def on_message_data(client, userdata, msg):
     # 3. Desenha e publica o frame final (CRUCIAL)
     frame_to_analyze = None
     
-    # CRITICAL: Copy the latest raw frame ONLY inside the lock
+    # CRITICAL: Copia o frame cru e garante que o último frame (para desenho) é usado
+    # A correção está aqui: Garante que a cópia é feita ANTES da publicação.
     with lock:
         if latest_raw_frame is not None:
             # Pega no último frame cru e clona
