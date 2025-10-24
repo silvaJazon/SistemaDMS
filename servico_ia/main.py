@@ -18,7 +18,7 @@ MODEL_PATH = 'model.tflite'
 LABELS_PATH = 'labels.txt'
 DETECTION_THRESHOLD = 0.5 # Limite de confiança para considerar uma deteção válida
 TARGET_LABEL = 'person'
-PROCESS_EVERY_N_FRAMES = 3 # Processa 1 em cada 3 frames
+PROCESS_EVERY_N_FRAMES = 10 # Processa 1 em cada 3 frames
 JPEG_QUALITY = 50 # Qualidade do JPEG para o stream (0-100, padrão ~95)
 
 # --- Variáveis Globais ---
