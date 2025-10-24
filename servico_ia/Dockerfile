@@ -21,6 +21,7 @@ COPY requirements.txt .
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        unzip \
         libgl1-mesa-glx \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -33,10 +34,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Documentação:
 # Descarrega o modelo TFLite (do TF Hub) e o ficheiro de etiquetas diretamente para o diretório /app.
 # A flag -L segue redirecionamentos, -f falha em caso de erro do servidor, -o especifica o nome do ficheiro de saída.
-RUN curl -fL -o model.tflite \
-      https://tfhub.dev/tensorflow/lite-model/ssd_mobilenet_v1/1/default/1?lite-format=tflite && \
-    curl -fL -o labels.txt \
-      https://storage.googleapis.com/download.tensorflow.org/data/mscoco_label_map.txt
+RUN curl -fL -o model.zip https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip && \
+    unzip model.zip && \
+    mv detect.tflite model.tflite && \
+    curl -fL -o labels.txt https://storage.googleapis.com/download.tensorflow.org/data/mscoco_label_map.txt && \
+    rm model.zip
 
 # --- Estágio Final ---
 # Copia todo o código Python (main.py) para dentro do contentor.
