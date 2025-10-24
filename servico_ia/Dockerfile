@@ -1,12 +1,13 @@
-# Documentação:
-# Etapa 1: Definir a nossa imagem base.
-# Usamos uma imagem oficial do Python, versão 3.9, baseada no Debian Bullseye.
-# A tag "slim" significa que é uma versão mais leve, ideal para produção.
+# Documentação: Dockerfile para o Serviço de IA do Projeto FluxoAI
+
+# Etapa 1: Base
+# Usamos uma imagem oficial do Python, versão 3.9, otimizada (slim)
+# e baseada no Debian Bullseye, que é compatível com o Raspberry Pi OS.
 FROM python:3.9-slim-bullseye
 
 # Documentação:
 # Define o diretório de trabalho dentro do contentor.
-# Todos os comandos a seguir serão executados a partir desta pasta.
+# Todos os comandos seguintes serão executados a partir daqui.
 WORKDIR /app
 
 # Documentação:
@@ -14,10 +15,12 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Documentação:
-# Instala as dependências do sistema necessárias para o OpenCV.
-# Bibliotecas como libgl1 são cruciais para o processamento de imagem.
+# Instala as dependências do sistema necessárias para o OpenCV e o wget.
+# O OpenCV precisa de algumas bibliotecas gráficas (mesmo a versão headless).
 # "--no-install-recommends" torna a instalação mais leve.
+# "rm -rf /var/lib/apt/lists/*" limpa o cache do apt para reduzir o tamanho da imagem.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -28,11 +31,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Documentação:
-# Copia todo o resto do nosso código (o script Python) do nosso PC para dentro do contentor.
+# Descarrega o modelo TFLite e o ficheiro de etiquetas diretamente para o diretório /app.
+RUN wget https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -O model.tflite && \
+    wget https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -O labels.txt
+
+# Documentação:
+# Copia todo o resto do nosso código (o script main.py)
+# da pasta atual no PC para o diretório /app dentro do contentor.
 COPY . .
 
 # Documentação:
-# Define o comando que será executado quando o contentor iniciar.
-# Neste caso, ele vai executar o nosso script principal com o Python.
+# Expõe a porta 5000, que o nosso servidor Flask vai usar para o streaming web.
+EXPOSE 5000
+
+# Documentação:
+# Comando que será executado quando o contentor iniciar.
+# Executa o nosso script Python principal.
 CMD ["python", "main.py"]
 
