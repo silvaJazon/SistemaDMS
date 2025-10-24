@@ -1,28 +1,28 @@
-# Documentação: Dockerfile para o Serviço de IA do Projeto FluxoAI
+# Documentação: Dockerfile para o Serviço de IA do Projeto FluxoAI (Fase 3)
+# Baseado em Python 3.9, otimizado para Raspberry Pi (arm64)
 
-# Etapa 1: Base
-# Usamos uma imagem oficial do Python, versão 3.9, otimizada (slim)
-# e baseada no Debian Bullseye, que é compatível com o Raspberry Pi OS.
-FROM python:3.9-slim-bullseye
+# --- Estágio Base ---
+# Usamos a imagem oficial Python 3.9 slim (Debian Bullseye), compatível com arm64.
+FROM python:3.9-slim-bullseye AS base
 
-# Documentação:
 # Define o diretório de trabalho dentro do contentor.
-# Todos os comandos seguintes serão executados a partir daqui.
 WORKDIR /app
 
-# Documentação:
-# Copia o ficheiro de requisitos do nosso PC para dentro do contentor.
+# --- Estágio de Dependências ---
+# Copia apenas o ficheiro de requisitos primeiro para aproveitar o cache do Docker.
 COPY requirements.txt .
 
 # Documentação:
-# Instala as dependências do sistema necessárias para o OpenCV e o wget.
-# O OpenCV precisa de algumas bibliotecas gráficas (mesmo a versão headless).
-# "--no-install-recommends" torna a instalação mais leve.
-# "rm -rf /var/lib/apt/lists/*" limpa o cache do apt para reduzir o tamanho da imagem.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+# Instala as dependências de sistema necessárias ANTES das dependências Python.
+# - wget/curl: Ferramentas para descarregar ficheiros.
+# - libgl1-mesa-glx, libglib2.0-0: Bibliotecas essenciais para o OpenCV funcionar sem interface gráfica.
+# Usamos "--no-install-recommends" para manter a instalação mais leve.
+# Limpamos o cache do apt no final para reduzir o tamanho da imagem.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Documentação:
@@ -31,17 +31,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Documentação:
-# Descarrega o modelo TFLite e o ficheiro de etiquetas diretamente para o diretório /app.
-RUN wget https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -O model.tflite && \
-    wget https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -O labels.txt
+# Descarrega o modelo TFLite e o ficheiro de etiquetas diretamente para o diretório /app usando curl.
+# A flag -L segue redirecionamentos, -o especifica o nome do ficheiro de saída.
+RUN curl -L https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -o model.tflite && \
+    curl -L https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -o labels.txt
 
-# Documentação:
-# Copia todo o resto do nosso código (o script main.py)
-# da pasta atual no PC para o diretório /app dentro do contentor.
+# --- Estágio Final ---
+# Copia todo o resto do nosso código (o script main.py) para dentro do contentor.
 COPY . .
 
 # Documentação:
-# Expõe a porta 5000, que o nosso servidor Flask vai usar para o streaming web.
+# Expõe a porta 5000, que o nosso servidor Flask vai usar para o stream de vídeo.
 EXPOSE 5000
 
 # Documentação:
