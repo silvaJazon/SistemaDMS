@@ -14,7 +14,7 @@ COPY requirements.txt .
 
 # Documentação:
 # Instala as dependências de sistema necessárias ANTES das dependências Python.
-# - wget/curl: Ferramentas para descarregar ficheiros.
+# - curl: Ferramenta para descarregar ficheiros.
 # - libgl1-mesa-glx, libglib2.0-0: Bibliotecas essenciais para o OpenCV funcionar sem interface gráfica.
 # Usamos "--no-install-recommends" para manter a instalação mais leve.
 # Limpamos o cache do apt no final para reduzir o tamanho da imagem.
@@ -32,9 +32,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Documentação:
 # Descarrega o modelo TFLite e o ficheiro de etiquetas diretamente para o diretório /app usando curl.
-# A flag -L segue redirecionamentos, -o especifica o nome do ficheiro de saída.
-RUN curl -L https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -o model.tflite && \
-    curl -L https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -o labels.txt
+# A flag -L segue redirecionamentos, -f falha em caso de erro do servidor, -o especifica o nome do ficheiro de saída.
+RUN curl -fL https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -o model.tflite && \
+    curl -fL https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -o labels.txt
 
 # --- Estágio Final ---
 # Copia todo o resto do nosso código (o script main.py) para dentro do contentor.
