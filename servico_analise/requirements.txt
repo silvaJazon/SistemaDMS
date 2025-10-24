@@ -1,6 +1,0 @@
-#Documentação: Dependências para o serviço de análise
-
-paho-mqtt # Cliente MQTT
-numpy # Para cálculos de distância
-
-opencv-python-headless # Adicionar se formos desenhar/processar frames aqui
