@@ -1,5 +1,5 @@
 # Documentação: Serviço de Análise de Comportamento para o Projeto FluxoAI
-# Responsabilidade: Receber dados de deteção e frames crus, aplicar lógica de Vadiagem e publicar frame final.
+# Responsabilidade: Receber dados de deteção e frames crus, aplicar lógica de Vadiagem e publicar frame final continuamente.
 
 import cv2
 import time
@@ -36,6 +36,7 @@ mqtt_client = None
 tracked_persons = {} 
 next_track_id = 0
 latest_raw_frame = None # O último frame cru (numpy array)
+latest_analyzed_frame_bytes = None # O último frame analisado em BYTES para a thread de publicação
 lock = threading.Lock() # Para acesso seguro às variáveis globais
 TARGET_LABEL = 'person' # O objeto que estamos a seguir
 
@@ -160,7 +161,42 @@ def draw_detections(frame, detections_with_tracking):
         
     return frame, loitering_count
 
-# --- Funções de Conexão MQTT ---
+# --- Thread de Publicação Contínua (Heartbeat) ---
+
+def publish_heartbeat():
+    """Publica o último frame analisado continuamente para garantir o stream do servico_web."""
+    global latest_analyzed_frame_bytes, lock, mqtt_client
+    
+    # Placeholder Frame (para exibição enquanto espera)
+    # Codifica o placeholder APENAS UMA VEZ
+    placeholder_frame = np.zeros((480, 640, 3), dtype=np.uint8) # 640x480 padrão
+    cv2.putText(placeholder_frame, "Aguardando frames e analise...", (10, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    (flag, encodedImage) = cv2.imencode(".jpg", placeholder_frame)
+    placeholder_bytes = bytearray(encodedImage) if flag else None
+    
+    if placeholder_bytes is None:
+         logging.error("Falha ao codificar imagem de placeholder. Terminando thread de publicação.")
+         return 
+
+    while True:
+        bytes_to_publish = None
+        
+        with lock:
+            if latest_analyzed_frame_bytes is not None:
+                # Usa o último frame analisado (com caixas)
+                bytes_to_publish = latest_analyzed_frame_bytes
+            else:
+                 # Usa o placeholder se ainda não processou o primeiro frame
+                 bytes_to_publish = placeholder_bytes
+
+        if bytes_to_publish is not None and mqtt_client is not None and mqtt_client.is_connected():
+             mqtt_client.publish(PUBLISH_TOPIC_ANALYZED_IMG, bytes_to_publish, qos=0)
+             logging.debug(f"Frame (heartbeat) publicado ({len(bytes_to_publish)} bytes).")
+        
+        # Controla o FPS do stream (30 FPS)
+        time.sleep(1/30) 
+
+# --- Funções de Conexão MQTT e Callbacks ---
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
@@ -188,8 +224,8 @@ def on_message_raw_img(client, userdata, msg):
         logging.warning("Frame cru recebido, mas falha ao descodificar.")
 
 def on_message_data(client, userdata, msg):
-    """Callback ao receber dados de deteção (JSON) do servico_ia."""
-    global latest_raw_frame, lock
+    """Callback ao receber dados de deteção (JSON) do servico_ia)."""
+    global latest_raw_frame, latest_analyzed_frame_bytes, lock
     
     # 1. Deserializa os dados de deteção
     try:
@@ -204,13 +240,12 @@ def on_message_data(client, userdata, msg):
     detections_with_tracking = update_tracking(detections)
     
     # 3. Desenha e publica o frame final (CRUCIAL)
-    frame_to_analyze = None
     
     # CRITICAL: Copia o frame cru e garante que o último frame (para desenho) é usado
-    # A correção está aqui: Garante que a cópia é feita ANTES da publicação.
+    frame_to_analyze = None
+    
     with lock:
         if latest_raw_frame is not None:
-            # Pega no último frame cru e clona
             frame_to_analyze = latest_raw_frame.copy() 
         else:
             logging.warning("Não encontrou frame cru correspondente para desenhar as deteções. Frame ignorado.")
@@ -224,16 +259,18 @@ def on_message_data(client, userdata, msg):
     (flag, encodedImage) = cv2.imencode(".jpg", frame_analyzed, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     
     if flag:
-        # Publica o frame analisado
+        # Publica o frame analisado (apenas atualiza a variável global)
         frame_bytes = bytearray(encodedImage)
-        client.publish(PUBLISH_TOPIC_ANALYZED_IMG, frame_bytes, qos=0)
-        logging.info(f"Frame analisado publicado ({len(frame_bytes)} bytes). Vadiando: {loitering_count}")
+        with lock:
+            latest_analyzed_frame_bytes = frame_bytes
+        logging.info(f"Frame analisado (c/ desenho) gerado ({len(frame_bytes)} bytes). Vadiando: {loitering_count}")
     else:
          logging.warning("Falha ao codificar o frame analisado para JPEG.")
 
 
 def setup_mqtt():
     """Configura e inicia o cliente MQTT."""
+    global mqtt_client
     client_id = f'fluxoai-analise-1'
     # Utiliza a API v2 para resolver o DeprecationWarning
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
@@ -256,6 +293,11 @@ if __name__ == '__main__':
     
     # Configuração e início do MQTT
     mqtt_client = setup_mqtt()
+
+    # Inicia a thread de publicação contínua
+    heartbeat_thread = threading.Thread(target=publish_heartbeat)
+    heartbeat_thread.daemon = True
+    heartbeat_thread.start()
 
     try:
         # Mantém o programa a correr indefinidamente
