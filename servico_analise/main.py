@@ -181,6 +181,8 @@ def on_message_raw_img(client, userdata, msg):
         with lock:
             latest_raw_frame = frame
         logging.debug("Frame cru recebido para análise.")
+    else:
+        logging.warning("Frame cru recebido, mas falha ao descodificar.")
 
 def on_message_data(client, userdata, msg):
     """Callback ao receber dados de deteção (JSON) do servico_ia."""
@@ -199,27 +201,31 @@ def on_message_data(client, userdata, msg):
     detections_with_tracking = update_tracking(detections)
     
     # 3. Desenha e publica o frame final (CRUCIAL)
+    # Copia o frame cru e garante que o último frame (para desenho) é usado
+    frame_to_analyze = None
     with lock:
         if latest_raw_frame is not None:
-            # Pega no último frame cru e clona
             frame_to_analyze = latest_raw_frame.copy() 
-            
-            # Desenha as caixas (verde/vermelho) no frame
-            frame_analyzed, loitering_count = draw_detections(frame_to_analyze, detections_with_tracking)
-            
-            # Codifica o frame final para JPEG
-            # Frame é publicado aqui, mas quem subscreve é o servico_web
-            (flag, encodedImage) = cv2.imencode(".jpg", frame_analyzed, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            
-            if flag:
-                # Publica o frame analisado
-                frame_bytes = bytearray(encodedImage)
-                client.publish(PUBLISH_TOPIC_ANALYZED_IMG, frame_bytes, qos=0)
-                logging.info(f"Frame analisado publicado ({len(frame_bytes)} bytes). Vadiando: {loitering_count}")
-            else:
-                 logging.warning("Falha ao codificar o frame analisado para JPEG.")
+            # Reset the latest_raw_frame to None after copying to ensure we are always processing the NEWEST frame
+            # latest_raw_frame = None # Comentado para garantir que não se perde frames se o IA for mais rápido
         else:
             logging.warning("Não encontrou frame cru correspondente para desenhar as deteções.")
+            return # Sai se não houver frame para desenhar
+            
+    # Se chegámos aqui, temos um frame para desenhar
+    # Desenha as caixas (verde/vermelho) no frame
+    frame_analyzed, loitering_count = draw_detections(frame_to_analyze, detections_with_tracking)
+    
+    # Codifica o frame final para JPEG
+    (flag, encodedImage) = cv2.imencode(".jpg", frame_analyzed, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+    
+    if flag:
+        # Publica o frame analisado
+        frame_bytes = bytearray(encodedImage)
+        client.publish(PUBLISH_TOPIC_ANALYZED_IMG, frame_bytes, qos=0)
+        logging.info(f"Frame analisado publicado ({len(frame_bytes)} bytes). Vadiando: {loitering_count}")
+    else:
+         logging.warning("Falha ao codificar o frame analisado para JPEG.")
 
 
 def setup_mqtt():
