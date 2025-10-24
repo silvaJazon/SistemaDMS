@@ -33,6 +33,7 @@ LOITERING_THRESHOLD_SECONDS = int(os.environ.get('LOITERING_THRESHOLD_SECONDS', 
 LOITERING_MAX_DISTANCE = int(os.environ.get('LOITERING_MAX_DISTANCE', 30))
 JPEG_QUALITY = int(os.environ.get('JPEG_QUALITY', 35)) # Qualidade baixa (35) para reduzir o trabalho de encode no RPi
 MIN_BOX_SIZE = 30 # Tamanho mínimo (em pixels) para a caixa de deteção (para filtrar falsos positivos)
+DETECTION_THRESHOLD = 0.55 # Limite de confiança para considerar uma deteção válida (Adicionado aqui para o Canvas)
 
 # --- Variáveis Globais de Microsserviço ---
 mqtt_client = None
@@ -52,6 +53,7 @@ def calculate_center(xmin, ymin, xmax, ymax):
 def update_tracking(detections):
     """Associa deteções atuais a tracks existentes e atualiza o estado de vadiagem."""
     global tracked_persons, next_track_id
+    global DETECTION_THRESHOLD # CORREÇÃO CRÍTICA: Declara como global para resolver o NameError
     
     current_time = time.time()
     matched_track_ids = set()
@@ -229,7 +231,7 @@ def publish_heartbeat():
                     last_pub_time = time.time()
                 else:
                     logging.warning("Falha ao codificar o frame analisado para JPEG no heartbeat.")
-                    bytes_to_publish = placeholder_bytes 
+                    bytes_to_publish = placeholder_bytes # Usa o placeholder em caso de falha de codificação
             else:
                 # Frame não mudou e não é necessário publicar
                 bytes_to_publish = None # Não publica nada
