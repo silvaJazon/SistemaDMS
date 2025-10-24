@@ -1,5 +1,5 @@
 opencv-python-headless # Biblioteca para processamento de imagens
 Flask # Servidor web para o Flask
 tflite-runtime # O motor de inferência otimizado para ARM
-numpy # Biblioteca para operações numéricas
+numpy < 2 # Biblioteca para operações numéricas
 requests # Biblioteca para fazer requisições HTTP
