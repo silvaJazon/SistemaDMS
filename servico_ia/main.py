@@ -19,7 +19,7 @@ LABELS_PATH = 'labels.txt'
 DETECTION_THRESHOLD = 0.6 # Voltando para 40%
 TARGET_LABEL = 'person'
 PROCESS_EVERY_N_FRAMES = 3 # Processa 1 em cada 3 frames
-JPEG_QUALITY = 95 # Qualidade do JPEG para o stream (0-100, padrão ~95)
+JPEG_QUALITY = 65 # Qualidade do JPEG para o stream (0-100, padrão ~95)
 
 # --- Variáveis Globais ---
 output_frame_display = None
