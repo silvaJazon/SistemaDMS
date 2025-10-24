@@ -1,5 +1,5 @@
 # Documentação: Script principal para o Serviço de IA do Projeto FluxoAI
-# Fase 3: Deteção de Pessoas (Caixas Persistentes - Sem Piscar)
+# Fase 3: Deteção de Pessoas (Caixas Persistentes - Correção Stream)
 
 import cv2
 import time
@@ -108,7 +108,8 @@ def draw_single_detection(frame_display, box, class_id, score, labels, color=(0,
         if xmax > xmin and ymax > ymin:
             cv2.rectangle(frame_display, (xmin, ymin), (xmax, ymax), color, 2)
             label_text = f'{label}: {int(score*100)}%'
-            if persistent_tag: label_text += ' (P)' # Adiciona (P) se for persistente (opcional)
+            # Removido o tag (P) para evitar piscar
+            # if persistent_tag: label_text += ' (P)'
 
             label_size, base_line = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
             label_ymin = max(ymin, label_size[1] + 10)
@@ -148,14 +149,11 @@ def draw_new_detections_and_update_last(frame_display, boxes, classes, scores, l
 def draw_last_valid_detections(frame_display, labels):
     """Redesenha as últimas caixas válidas guardadas no frame atual (sempre verde)."""
     global last_valid_boxes, last_valid_classes, last_valid_scores
-    detections_count = 0
     if last_valid_boxes:
         for i in range(len(last_valid_scores)):
-             # Sempre desenha em verde, sem a tag (P)
-            if draw_single_detection(frame_display, last_valid_boxes[i], last_valid_classes[i], last_valid_scores[i], labels, color=(0, 255, 0)):
-                 detections_count +=1 # Conta quantas caixas persistentes foram desenhadas
+             # Sempre desenha em verde
+            draw_single_detection(frame_display, last_valid_boxes[i], last_valid_classes[i], last_valid_scores[i], labels, color=(0, 255, 0))
 
-    # Não retorna a contagem aqui, pois é usada apenas para redesenhar
     return frame_display
 
 
@@ -240,24 +238,34 @@ def capture_and_detect():
 # --- Servidor Web Flask ---
 
 def generate_frames():
-    """Gera frames para o stream HTTP."""
+    """Gera frames para o stream HTTP com qualidade JPEG ajustada."""
     global output_frame_display, lock
     while True:
         frame_to_encode = None
+        frame_bytes = None # Garante que a variável existe
         with lock:
-            if output_frame_display is not None: frame_to_encode = output_frame_display.copy()
+            if output_frame_display is not None:
+                frame_to_encode = output_frame_display.copy()
 
         if frame_to_encode is None:
             placeholder = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
-            cv2.putText(placeholder, "Aguardando...",(30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+            cv2.putText(placeholder, "Aguardando...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             (flag, encodedImage) = cv2.imencode(".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            if not flag: continue; frame_bytes = bytearray(encodedImage); time.sleep(0.5)
+            if flag: # Só define frame_bytes se a codificação funcionar
+                frame_bytes = bytearray(encodedImage)
+            time.sleep(0.5) # Pausa mesmo se a codificação falhar
         else:
             (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            if not flag: continue; frame_bytes = bytearray(encodedImage)
+            if flag: # Só define frame_bytes se a codificação funcionar
+                 frame_bytes = bytearray(encodedImage)
 
-        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        time.sleep(0.01)
+        # Só envia o frame se frame_bytes foi definido com sucesso
+        if frame_bytes is not None:
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
+                   frame_bytes + b'\r\n')
+
+        time.sleep(0.01) # Pequena pausa para não sobrecarregar CPU com envio
+
 
 @app.route("/")
 def index():
