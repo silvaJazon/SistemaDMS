@@ -37,7 +37,9 @@ DETECTION_THRESHOLD = 0.55 # Limite de confiança para considerar uma deteção 
 
 # --- Variáveis Globais de Microsserviço ---
 mqtt_client = None
+# Guarda apenas os dados de deteção para serem desenhados
 latest_detections_for_draw = [] 
+# {track_id: {'box': [ymin, xmin, ymax, xmax], 'center': (x,y), 'start_time': t, 'is_loitering': False, 'last_seen': t}}
 tracked_persons = {} 
 next_track_id = 0
 latest_raw_frame = None # O último frame cru (numpy array)
@@ -52,8 +54,7 @@ def calculate_center(xmin, ymin, xmax, ymax):
 
 def update_tracking(detections):
     """Associa deteções atuais a tracks existentes e atualiza o estado de vadiagem."""
-    global tracked_persons, next_track_id
-    global DETECTION_THRESHOLD # CORREÇÃO CRÍTICA: Declara como global para resolver o NameError
+    global tracked_persons, next_track_id, DETECTION_THRESHOLD
     
     current_time = time.time()
     matched_track_ids = set()
@@ -196,15 +197,13 @@ def publish_heartbeat():
          logging.error("Falha ao codificar imagem de placeholder. Terminando thread de publicação.")
          return 
 
-    # Variáveis para otimização de CPU
-    last_frame_hash = None
-    last_pub_time = 0
-    min_interval = 0.2  # 5 FPS máximo (Otimização de CPU)
-
     while True:
         frame_to_publish = None
         bytes_to_publish = None
         current_loitering_count = 0
+        
+        # OTIMIZAÇÃO CRÍTICA: Não usar hash para evitar o alto consumo de CPU
+        # Publicar sempre que a thread acordar (30 FPS)
         
         with lock:
             if latest_raw_frame is not None:
@@ -217,32 +216,22 @@ def publish_heartbeat():
                  bytes_to_publish = placeholder_bytes
 
         if frame_to_publish is not None:
-            # OPTIMIZAÇÃO: Verifica se o frame mudou significativamente
-            frame_hash = hash(frame_to_publish.tobytes())
+            # Codifica o frame analisado para JPEG
+            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_publish, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             
-            # Publica se (frame mudou) OU (passou mais de 1 segundo sem publicação)
-            if frame_hash != last_frame_hash or (time.time() - last_pub_time) > 1:
-                # Codifica o frame analisado para JPEG
-                (flag, encodedImage) = cv2.imencode(".jpg", frame_to_publish, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-                
-                if flag:
-                    bytes_to_publish = bytearray(encodedImage)
-                    last_frame_hash = frame_hash
-                    last_pub_time = time.time()
-                else:
-                    logging.warning("Falha ao codificar o frame analisado para JPEG no heartbeat.")
-                    bytes_to_publish = placeholder_bytes # Usa o placeholder em caso de falha de codificação
+            if flag:
+                bytes_to_publish = bytearray(encodedImage)
             else:
-                # Frame não mudou e não é necessário publicar
-                bytes_to_publish = None # Não publica nada
+                logging.warning("Falha ao codificar o frame analisado para JPEG no heartbeat.")
+                bytes_to_publish = placeholder_bytes # Usa o placeholder em caso de falha de codificação
         
-        # Publica o frame APENAS se houver bytes para publicar (o que evita publicar o placeholder 30x/seg)
+        # Publica o frame APENAS se houver bytes para publicar (o que garante o stream contínuo)
         if bytes_to_publish is not None and mqtt_client is not None and mqtt_client.is_connected():
              mqtt_client.publish(PUBLISH_TOPIC_ANALYZED_IMG, bytes_to_publish, qos=0)
              logging.debug(f"Frame (heartbeat) publicado ({len(bytes_to_publish)} bytes). Suspeita: {current_loitering_count}")
         
-        # Controla o FPS do stream para 5 FPS máximo (Otimização de CPU)
-        time.sleep(min_interval) 
+        # CRITICAL: Controla o FPS do stream para 30 FPS FIXOS
+        time.sleep(1/30) 
 
 # --- Funções de Conexão MQTT e Callbacks ---
 
