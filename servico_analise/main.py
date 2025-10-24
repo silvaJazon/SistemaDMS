@@ -201,15 +201,15 @@ def on_message_data(client, userdata, msg):
     detections_with_tracking = update_tracking(detections)
     
     # 3. Desenha e publica o frame final (CRUCIAL)
-    # Copia o frame cru e garante que o último frame (para desenho) é usado
     frame_to_analyze = None
+    
+    # CRITICAL: Copy the latest raw frame ONLY inside the lock
     with lock:
         if latest_raw_frame is not None:
+            # Pega no último frame cru e clona
             frame_to_analyze = latest_raw_frame.copy() 
-            # Reset the latest_raw_frame to None after copying to ensure we are always processing the NEWEST frame
-            # latest_raw_frame = None # Comentado para garantir que não se perde frames se o IA for mais rápido
         else:
-            logging.warning("Não encontrou frame cru correspondente para desenhar as deteções.")
+            logging.warning("Não encontrou frame cru correspondente para desenhar as deteções. Frame ignorado.")
             return # Sai se não houver frame para desenhar
             
     # Se chegámos aqui, temos um frame para desenhar
