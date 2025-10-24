@@ -14,13 +14,12 @@ COPY requirements.txt .
 
 # Documentação:
 # Instala as dependências de sistema necessárias ANTES das dependências Python.
-# - curl: Ferramenta para descarregar ficheiros.
 # - libgl1-mesa-glx, libglib2.0-0: Bibliotecas essenciais para o OpenCV funcionar sem interface gráfica.
 # Usamos "--no-install-recommends" para manter a instalação mais leve.
 # Limpamos o cache do apt no final para reduzir o tamanho da imagem.
+# NOTA: Removemos curl/wget pois não são mais necessários durante o build.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
         libgl1-mesa-glx \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -30,14 +29,9 @@ RUN apt-get update && \
 # Usamos "--no-cache-dir" para manter a imagem final mais pequena.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Documentação:
-# Descarrega o modelo TFLite e o ficheiro de etiquetas diretamente para o diretório /app usando curl.
-# A flag -L segue redirecionamentos, -f falha em caso de erro do servidor, -o especifica o nome do ficheiro de saída.
-RUN curl -fL https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/lite-model_ssd_mobilenet_v1_1_metadata_2.tflite -o model.tflite && \
-    curl -fL https://storage.googleapis.com/download.tensorflow.org/models/object_detection/coco_labels.txt -o labels.txt
-
 # --- Estágio Final ---
-# Copia todo o resto do nosso código (o script main.py) para dentro do contentor.
+# Copia todo o código E os ficheiros do modelo (que já descarregamos manualmente) para dentro do contentor.
+# O Dockerfile assume que model.tflite e labels.txt estão na mesma pasta que ele.
 COPY . .
 
 # Documentação:
