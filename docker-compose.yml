@@ -1,47 +1,73 @@
-# Documentação: Ficheiro de orquestração para o Docker Compose do projeto FluxoAI.
-# Define os serviços que compõem a aplicação e como eles se conectam.
-# NOTA: O atributo 'version' é obsoleto e foi removido.
+# Documentação: docker-compose.yml para o Projeto FluxoAI (Arquitetura Microsserviços)
+
+# OBS: A linha 'version' é obsoleta na v2+ do Compose, mas mantida por compatibilidade com algumas ferramentas.
+# Pode ser removida se não causar problemas.
+# version: '3.8' # Linha obsoleta, pode remover
 
 services:
-  # --- Serviço de Inteligência Artificial ---
-  servico_ia:
-    # Nome da imagem a ser usada para este serviço.
-    # Usamos a tag 'latest' que construímos localmente.
-    image: jazonbatista/fluxoai-servico-ia:latest
-
-    # Nome do contentor (opcional, mas útil para identificação).
-    container_name: fluxoai-servico_ia-1
-
-    # Política de reinício: Tenta reiniciar o contentor automaticamente se ele falhar.
-    restart: unless-stopped
-
-    # Variáveis de ambiente passadas para o contentor.
-    environment:
-      # O nosso script main.py vai ler esta variável para saber qual câmara usar.
-      # O valor "0" refere-se à primeira câmara USB/local.
-      # Para usar um DVR: "rtsp://user:pass@ip:port/path"
-      - VIDEO_SOURCE=0
-      # Adiciona a variável LOG_LEVEL, que será definida pelo Makefile ou terá INFO como padrão.
-      # O script main.py usará esta variável para configurar o nível de logging.
-      - LOG_LEVEL=${LOG_LEVEL:-INFO} # Usa o valor de LOG_LEVEL do ambiente, ou 'INFO' se não definido
-
-    # Mapeamento de portas: Liga a porta 5000 do Raspberry Pi à porta 5000 do contentor.
-    # Isto permite aceder ao servidor web Flask a partir da rede local.
+  # Serviço Mosquitto MQTT Broker
+  mosquitto:
+    image: eclipse-mosquitto:2 # Imagem oficial do Mosquitto
+    container_name: fluxoai-mosquitto
     ports:
-      - "5000:5000"
+      - "1883:1883" # Porta padrão do MQTT
+      # - "9001:9001" # Porta para WebSockets (opcional, se precisarmos no futuro)
+    volumes:
+      # Monta ficheiros de configuração (opcional, por agora usamos o padrão)
+      # - ./mosquitto/config:/mosquitto/config
+      # Monta diretório para persistência de dados (opcional)
+      # - ./mosquitto/data:/mosquitto/data
+      # Monta diretório para logs (opcional)
+      # - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+    networks:
+      - fluxoai_net
 
-    # Mapeamento de dispositivos: Dá ao contentor acesso ao dispositivo da câmara USB.
-    # '/dev/video0' é o caminho padrão para a primeira câmara no Linux (Raspberry Pi OS).
-    # Se a sua câmara aparecer como /dev/video1, altere aqui.
+  # Serviço de Captura de Vídeo (Novo)
+  servico_captura:
+    build: ./servico_captura # O Docker Compose vai construir a imagem a partir desta pasta
+    image: jazonbatista/fluxoai-servico-captura:latest # Nome da imagem a ser construída/usada
+    container_name: fluxoai-servico_captura
+    environment:
+      - MQTT_BROKER_HOST=mosquitto # Nome do serviço do broker na rede Docker
+      - MQTT_BROKER_PORT=1883
+      - VIDEO_SOURCE=${VIDEO_SOURCE:-0} # Usa variável externa ou default 0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO} # Usa variável externa ou default INFO
+      - FRAME_WIDTH=${FRAME_WIDTH:-640} # Largura desejada para captura/publicação
+      - FRAME_HEIGHT=${FRAME_HEIGHT:-480} # Altura desejada para captura/publicação
+      - PUBLISH_TOPIC=fluxoai/frames/raw
+    depends_on:
+      - mosquitto # Garante que o broker inicia antes deste serviço
     devices:
-      - "/dev/video0:/dev/video0"
+      - "/dev/video0:/dev/video0" # Mapeia a câmara USB (necessário se VIDEO_SOURCE=0)
+    restart: unless-stopped
+    networks:
+      - fluxoai_net
 
-# (Opcional) Define uma rede personalizada para os serviços comunicarem entre si.
-# Útil quando adicionarmos mais serviços no futuro.
-# networks:
-#   fluxoai_net:
-#     driver: bridge
+  # Serviço de IA (Será modificado para usar MQTT) - POR FAZER
+  # servico_ia:
+  #   build: ./servico_ia
+  #   image: jazonbatista/fluxoai-servico-ia:latest
+  #   container_name: fluxoai-servico_ia
+  #   environment:
+  #     - MQTT_BROKER_HOST=mosquitto
+  #     - MQTT_BROKER_PORT=1883
+  #     - SUBSCRIBE_TOPIC=fluxoai/frames/raw
+  #     - PUBLISH_TOPIC=fluxoai/frames/detected
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #   depends_on:
+  #     - mosquitto
+  #   restart: unless-stopped
+  #   networks:
+  #     - fluxoai_net
 
-# Nota: Se descomentar a secção 'networks', precisa de adicionar 'networks: - fluxoai_net'
-# dentro da definição do serviço 'servico_ia'.
+  # Serviço de Análise (Será criado) - POR FAZER
+  # servico_analise: ...
+
+  # Serviço Web (Será modificado para usar MQTT) - POR FAZER
+  # servico_web: ...
+
+networks:
+  fluxoai_net: # Define a rede partilhada para os serviços
+    driver: bridge
 

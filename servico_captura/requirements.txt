@@ -1,0 +1,3 @@
+opencv-python-headless # Para captura e processamento de imagem
+paho-mqtt # Cliente MQTT para Python
+numpy # Para manipulação de arrays (necessário para codificar frame)
