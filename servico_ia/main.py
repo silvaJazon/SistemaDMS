@@ -1,5 +1,5 @@
 # Documentação: Script principal para o Serviço de IA do Projeto FluxoAI
-# Fase 3: Deteção de Pessoas (Otimizado)
+# Fase 3: Deteção de Pessoas (Otimizado + Debug)
 
 import cv2
 import time
@@ -16,9 +16,9 @@ FRAME_WIDTH_DISPLAY = 640  # Largura para exibir no stream
 FRAME_HEIGHT_DISPLAY = 480 # Altura para exibir no stream
 MODEL_PATH = 'model.tflite'
 LABELS_PATH = 'labels.txt'
-DETECTION_THRESHOLD = 0.4 # REDUZIDO para testes (40%)
+DETECTION_THRESHOLD = 0.2 # BAIXADO AINDA MAIS para debug (20%)
 TARGET_LABEL = 'person'
-PROCESS_EVERY_N_FRAMES = 2 # Processa 1 em cada 2 frames para melhorar performance
+PROCESS_EVERY_N_FRAMES = 3 # AUMENTADO para melhorar fluidez do stream
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -34,13 +34,21 @@ def load_labels(path):
     labels = {}
     try:
         with open(path, 'r') as f:
+            # Assume que o ficheiro tem um nome por linha, começando do índice 0
+            # Alguns modelos podem começar do índice 1 se o 0 for 'background'
+            # Vamos carregar a partir do índice 0 por agora.
             for i, line in enumerate(f.readlines()):
-                # Assume que o modelo pode retornar classe 0 ou 1 para 'person'
-                # (dependendo se há classe 'background')
                 labels[i] = line.strip()
         print(f">>> Etiquetas carregadas ({len(labels)}): {list(labels.values())[:5]}...") # Mostra as 5 primeiras
         if TARGET_LABEL not in labels.values():
             print(f"!!! AVISO: A etiqueta alvo '{TARGET_LABEL}' não foi encontrada nas primeiras {len(labels)} etiquetas!")
+        # Encontra o ID da classe 'person'
+        person_id = -1
+        for key, value in labels.items():
+            if value == TARGET_LABEL:
+                person_id = key
+                break
+        print(f">>> ID da classe '{TARGET_LABEL}': {person_id}") # DEBUG
         return labels
     except FileNotFoundError:
         print(f"!!! ERRO FATAL: Ficheiro de etiquetas não encontrado em {path}")
@@ -77,9 +85,8 @@ def detect_objects(frame_model_input, interpreter, input_details, output_details
     input_data = np.expand_dims(frame_model_input, axis=0)
 
     if floating_model:
-        # Normalização para modelos que esperam float entre -1 e 1
         input_data = (np.float32(input_data) - 127.5) / 127.5
-    # else: Modelo uint8 não precisa de normalização extra aqui
+    # else: Modelo uint8 (nosso caso) não precisa de normalização extra aqui
 
     interpreter.set_tensor(input_details[0]['index'], input_data)
 
@@ -87,28 +94,17 @@ def detect_objects(frame_model_input, interpreter, input_details, output_details
     interpreter.invoke()
     inference_time = time.time() - start_time
 
-    # Tenta obter os resultados na ordem mais comum para SSD MobileNet
+    # Tenta obter os resultados na ordem confirmada pelos logs
+    # output_details[0]: boxes (index 167)
+    # output_details[1]: classes (index 168)
+    # output_details[2]: scores (index 169)
     try:
         boxes = interpreter.get_tensor(output_details[0]['index'])[0]
         classes = interpreter.get_tensor(output_details[1]['index'])[0]
         scores = interpreter.get_tensor(output_details[2]['index'])[0]
-        # num_detections = int(interpreter.get_tensor(output_details[3]['index'])[0]) # Opcional
-    except IndexError:
-         # Tenta ordem alternativa (ex: modelos EfficientDet podem ter scores primeiro)
-        try:
-            scores = interpreter.get_tensor(output_details[0]['index'])[0]
-            boxes = interpreter.get_tensor(output_details[1]['index'])[0]
-            classes = interpreter.get_tensor(output_details[2]['index'])[0] # Assume 3 outputs
-            print("--- Aviso: Ordem alternativa de outputs do modelo detetada (Score, Box, Class).")
-        except IndexError as e:
-            print(f"!!! ERRO CRÍTICO ao obter outputs do modelo. Verifique 'Detalhes dos Outputs' acima. Erro: {e}")
-            return [], [], [], 0 # Retorna vazio se não conseguir interpretar
-
-    # DEBUG: Imprime as primeiras 5 deteções brutas
-    # print(f"--- DEBUG: Scores crus: {scores[:5]}")
-    # print(f"--- DEBUG: Classes crus: {classes[:5]}")
-    # print(f"--- DEBUG: Boxes crus: {boxes[:5]}")
-
+    except IndexError as e:
+        print(f"!!! ERRO CRÍTICO ao obter outputs do modelo. Verifique 'Detalhes dos Outputs'. Erro: {e}")
+        return [], [], [], 0 # Retorna vazio se não conseguir interpretar
 
     return boxes, classes, scores, inference_time
 
@@ -116,31 +112,26 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
     """Desenha as caixas no frame de exibição (display)."""
     display_height, display_width, _ = frame_display.shape
     detections_count = 0
+    detected_something = False # Flag para debug
 
     for i in range(len(scores)):
         if scores[i] > DETECTION_THRESHOLD:
+            detected_something = True # Marcar que algo foi detectado acima do limiar
             class_id = int(classes[i])
             label = labels.get(class_id, f'ID:{class_id}')
 
-            # DEBUG: Imprime a deteção válida
-            # print(f"--- DEBUG: Deteção Válida - Índice: {i}, Score: {scores[i]:.2f}, Classe ID: {class_id}, Etiqueta: {label}")
+            # *** DEBUG: Imprime TODAS as deteções válidas ***
+            print(f"--- DETECTADO (Score > {DETECTION_THRESHOLD}): Índice: {i}, Score: {scores[i]:.2f}, Classe ID: {class_id}, Etiqueta: '{label}'")
 
             if label == TARGET_LABEL:
                 detections_count += 1
-                # Coordenadas [ymin, xmin, ymax, xmax] normalizadas (0 a 1)
                 ymin, xmin, ymax, xmax = boxes[i]
-
-                # Converte coordenadas normalizadas para pixels no frame de DISPLAY
                 xmin = int(xmin * display_width)
                 xmax = int(xmax * display_width)
                 ymin = int(ymin * display_height)
                 ymax = int(ymax * display_height)
-
-                # Garante limites
-                xmin = max(0, xmin)
-                ymin = max(0, ymin)
-                xmax = min(display_width - 1, xmax)
-                ymax = min(display_height - 1, ymax)
+                xmin = max(0, xmin); ymin = max(0, ymin)
+                xmax = min(display_width - 1, xmax); ymax = min(display_height - 1, ymax)
 
                 if xmax > xmin and ymax > ymin:
                     cv2.rectangle(frame_display, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2) # Verde
@@ -151,6 +142,10 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
                                   (xmin + label_size[0], label_ymin - base_line - 10), (255, 255, 255), cv2.FILLED) # Branco
                     cv2.putText(frame_display, label_text, (xmin, label_ymin - 7),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Preto
+
+    # Se nada foi detectado acima do limiar, imprime uma mensagem de debug
+    # if not detected_something:
+    #     print(f"--- Nenhuma deteção acima do limiar {DETECTION_THRESHOLD} neste frame.")
 
     return frame_display, detections_count
 
@@ -189,41 +184,28 @@ def capture_and_detect():
     while True:
         ret, frame = cap.read()
         if not ret:
-            # Lógica de reconexão (simplificada)
             print("!!! Frame não recebido. A tentar reconectar em 5s...")
             cap.release()
             time.sleep(5)
             cap = cv2.VideoCapture(video_source_arg)
-            if not cap.isOpened():
-                print("!!! Falha ao reconectar. A terminar.")
-                break
-            else:
-                print(">>> Reconectado!")
-                continue
+            if not cap.isOpened(): print("!!! Falha ao reconectar. A terminar."); break
+            else: print(">>> Reconectado!"); continue
 
         frame_count += 1
-
-        # Redimensiona para o tamanho de exibição desejado
         frame_display = cv2.resize(frame, (FRAME_WIDTH_DISPLAY, FRAME_HEIGHT_DISPLAY))
 
-        # --- Otimização: Processa apenas alguns frames ---
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
             start_process_time = time.time()
-
-            # Redimensiona para o tamanho esperado pelo MODELO
             frame_model_input = cv2.resize(frame, (model_width, model_height))
 
-            # Executa a deteção
             boxes, classes, scores, inference_time = detect_objects(
                 frame_model_input, interpreter, input_details, output_details, floating_model
             )
 
-            # Desenha as deteções no frame de EXIBIÇÃO
             frame_display_with_detections, detections_count = draw_detections(
                 frame_display.copy(), boxes, classes, scores, labels, model_width, model_height
             )
 
-            # Guarda o último frame processado e as estatísticas
             last_processed_frame_with_detections = frame_display_with_detections
             last_inference_time = inference_time
             last_detections_count = detections_count
@@ -232,7 +214,6 @@ def capture_and_detect():
             process_time = end_process_time - start_process_time
             fps = 1 / process_time if process_time > 0 else 0
 
-            # Atualiza frame de saída e imprime log (APENAS quando processa)
             with lock:
                 output_frame_display = last_processed_frame_with_detections.copy()
 
@@ -240,14 +221,12 @@ def capture_and_detect():
             print(f">>> Frame {frame_count} PROCESSADO | Res: {res_w}x{res_h} | Pessoas: {detections_count} | Inferência: {inference_time:.3f}s | FPS Proc: {fps:.1f}")
 
         else:
-            # --- Para frames não processados, apenas atualiza o frame de saída com o último resultado ---
             if last_processed_frame_with_detections is not None:
-                # Adiciona info sobre o último processamento no canto
-                info_text = f"P: {last_detections_count} ({last_inference_time*1000:.0f}ms)"
+                info_text = f"P: {last_detections_count} ({last_inference_time*1000:.0f}ms @ F{frame_count - (frame_count % PROCESS_EVERY_N_FRAMES)})"
                 cv2.putText(frame_display, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
             with lock:
-                output_frame_display = frame_display.copy() # Mostra o frame atual sem novas deteções
+                output_frame_display = frame_display.copy()
 
     cap.release()
     print(">>> Loop de captura terminado.")
@@ -264,7 +243,6 @@ def generate_frames():
                 frame_to_encode = output_frame_display.copy()
 
         if frame_to_encode is None:
-            # Frame Placeholder
             placeholder = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
             cv2.putText(placeholder, "Aguardando...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             (flag, encodedImage) = cv2.imencode(".jpg", placeholder)
@@ -272,15 +250,13 @@ def generate_frames():
             frame_bytes = bytearray(encodedImage)
             time.sleep(0.5)
         else:
-            # Codifica o frame com deteções (ou o frame normal se foi saltado)
             (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode)
             if not flag: continue
             frame_bytes = bytearray(encodedImage)
 
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
                frame_bytes + b'\r\n')
-        # Pequena pausa para não sobrecarregar CPU com encoding/yield
-        time.sleep(0.01) # Reduzido para tentar stream mais fluído
+        time.sleep(0.01)
 
 @app.route("/")
 def index():
@@ -300,12 +276,11 @@ def index():
             <h1>FluxoAI - Deteção ao Vivo</h1>
             <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
              <script>
-                 // Recarrega a imagem se ela falhar (útil se o servidor reiniciar)
                  var stream = document.getElementById("stream");
                  stream.onerror = function() {
                      console.log("Erro no stream, a tentar recarregar em 5s...");
                      setTimeout(function() {
-                         stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime(); // Adiciona timestamp para evitar cache
+                         stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
                      }, 5000);
                  };
              </script>
