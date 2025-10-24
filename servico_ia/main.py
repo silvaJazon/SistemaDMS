@@ -19,6 +19,7 @@ LABELS_PATH = 'labels.txt'
 DETECTION_THRESHOLD = 0.2 # BAIXADO AINDA MAIS para debug (20%)
 TARGET_LABEL = 'person'
 PROCESS_EVERY_N_FRAMES = 3 # AUMENTADO para melhorar fluidez do stream
+JPEG_QUALITY = 75 # Qualidade do JPEG para o stream (0-100, padrão ~95)
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -121,7 +122,7 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
             label = labels.get(class_id, f'ID:{class_id}')
 
             # *** DEBUG: Imprime TODAS as deteções válidas ***
-            print(f"--- DETECTADO (Score > {DETECTION_THRESHOLD}): Índice: {i}, Score: {scores[i]:.2f}, Classe ID: {class_id}, Etiqueta: '{label}'")
+            # print(f"--- DETECTADO (Score > {DETECTION_THRESHOLD}): Índice: {i}, Score: {scores[i]:.2f}, Classe ID: {class_id}, Etiqueta: '{label}'")
 
             if label == TARGET_LABEL:
                 detections_count += 1
@@ -222,8 +223,9 @@ def capture_and_detect():
 
         else:
             if last_processed_frame_with_detections is not None:
+                # Adiciona info sobre o último processamento no canto
                 info_text = f"P: {last_detections_count} ({last_inference_time*1000:.0f}ms @ F{frame_count - (frame_count % PROCESS_EVERY_N_FRAMES)})"
-                cv2.putText(frame_display, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                cv2.putText(frame_display, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2) # Vermelho para info
 
             with lock:
                 output_frame_display = frame_display.copy()
@@ -234,7 +236,7 @@ def capture_and_detect():
 # --- Servidor Web Flask ---
 
 def generate_frames():
-    """Gera frames para o stream HTTP."""
+    """Gera frames para o stream HTTP com qualidade JPEG ajustada."""
     global output_frame_display, lock
     while True:
         frame_to_encode = None
@@ -245,12 +247,14 @@ def generate_frames():
         if frame_to_encode is None:
             placeholder = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
             cv2.putText(placeholder, "Aguardando...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            (flag, encodedImage) = cv2.imencode(".jpg", placeholder)
+            # Codifica o placeholder com a qualidade definida
+            (flag, encodedImage) = cv2.imencode(".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not flag: continue
             frame_bytes = bytearray(encodedImage)
             time.sleep(0.5)
         else:
-            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode)
+            # Codifica o frame com deteções com a qualidade definida
+            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not flag: continue
             frame_bytes = bytearray(encodedImage)
 
