@@ -1,0 +1,36 @@
+version: '3.8' # Define a versão da sintaxe do Compose
+
+services:
+  # Define o nosso primeiro serviço: o de IA
+  servico_ia:
+    # Nome da imagem que o serviço vai usar.
+    # A tag 'latest' refere-se à versão mais recente construída e enviada.
+    image: jazonbatista/fluxoai-servico-ia:latest
+
+    # Mapeia a porta 5000 do Raspberry Pi para a porta 5000 dentro do contentor.
+    # Isto permite-nos aceder ao stream web.
+    ports:
+      - "5000:5000"
+
+    # Variáveis de ambiente a serem passadas para o contentor.
+    # O nosso main.py vai ler esta variável para saber qual câmara usar.
+    # MUDE este valor para o seu URL RTSP quando for usar o DVR.
+    environment:
+      - VIDEO_SOURCE=0 # Default para a primeira câmara local (/dev/video0)
+      # - VIDEO_SOURCE=rtsp://admin:comercio123@<IP_DO_DVR>:<PORTA>/... # Exemplo para RTSP
+
+    # Mapeia o dispositivo da câmara USB do Raspberry Pi para dentro do contentor.
+    # NECESSÁRIO para que o OpenCV consiga aceder à câmara.
+    # Verifique se /dev/video0 é o nome correto no seu Pi com 'ls /dev/video*'.
+    devices:
+      - "/dev/video0:/dev/video0"
+
+    # Política de reinício: O Docker tentará reiniciar o contentor
+    # automaticamente se ele falhar, a menos que o tenhamos parado manualmente.
+    restart: unless-stopped
+
+    # (Opcional, mas recomendado no futuro) Mapear volumes para guardar dados,
+    # como configurações ou logs, fora do contentor.
+    # volumes:
+    #   - ./servico_ia_config:/app/config # Exemplo
+
