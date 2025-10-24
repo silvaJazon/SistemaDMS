@@ -32,11 +32,12 @@ JPEG_QUALITY = int(os.environ.get('JPEG_QUALITY', 50))
 
 # --- Variáveis Globais de Microsserviço ---
 mqtt_client = None
+# Guarda apenas os dados de deteção para serem desenhados
+latest_detections_for_draw = [] 
 # {track_id: {'box': [ymin, xmin, ymax, xmax], 'center': (x,y), 'start_time': t, 'is_loitering': False, 'last_seen': t}}
 tracked_persons = {} 
 next_track_id = 0
 latest_raw_frame = None # O último frame cru (numpy array)
-latest_analyzed_frame_bytes = None # O último frame analisado em BYTES para a thread de publicação
 lock = threading.Lock() # Para acesso seguro às variáveis globais
 TARGET_LABEL = 'person' # O objeto que estamos a seguir
 
@@ -60,6 +61,7 @@ def update_tracking(detections):
             continue
             
         # CORREÇÃO: Usar 'box_pixels' que é o campo que o servico_ia envia
+        # Assumindo que box_pixels está no formato [ymin, xmin, ymax, xmax] do frame de detecção (640x480)
         ymin, xmin, ymax, xmax = det['box_pixels']
         
         center_x, center_y = calculate_center(xmin, ymin, xmax, ymax)
@@ -89,13 +91,13 @@ def update_tracking(detections):
                 tracked_persons[track_id]['start_time'] = current_time
                 if tracked_persons[track_id]['is_loitering']:
                     tracked_persons[track_id]['is_loitering'] = False
-                    logging.info(f"Pessoa ID {track_id} deixou de vadiar.")
+                    logging.info(f"Pessoa ID {track_id} deixou de ter Atitude Suspeita (Moveu).")
             else:
                 # Pessoa está parada, verifica tempo
                 time_stopped = current_time - tracked_persons[track_id]['start_time']
                 if time_stopped > LOITERING_THRESHOLD_SECONDS and not tracked_persons[track_id]['is_loitering']:
                     tracked_persons[track_id]['is_loitering'] = True
-                    logging.info(f"Pessoa ID {track_id} DETETADA vadiando (tempo: {time_stopped:.1f}s)")
+                    logging.info(f"Pessoa ID {track_id} DETETADA com ATITUDE SUSPEITA (tempo: {time_stopped:.1f}s)")
             
             # Adiciona aos resultados atuais
             new_detections.append({'box': [ymin, xmin, ymax, xmax], 'score': det['score'], 'is_loitering': tracked_persons[track_id]['is_loitering'], 'track_id': track_id})
@@ -119,26 +121,25 @@ def update_tracking(detections):
     ids_to_remove = [track_id for track_id, data in tracked_persons.items() if current_time - data['last_seen'] > 3] # Remove se não visto por 3 segundos
     for track_id in ids_to_remove:
         if tracked_persons[track_id]['is_loitering']:
-             logging.info(f"Pessoa ID {track_id} (que estava vadiando) desapareceu.")
+             logging.info(f"Pessoa ID {track_id} (que tinha Atitude Suspeita) desapareceu.")
         del tracked_persons[track_id]
         logging.debug(f"Track ID {track_id} removido por inatividade.")
         
     return new_detections
 
-def draw_detections(frame, detections_with_tracking):
+def draw_detections(frame, detections_to_draw):
     """Desenha as caixas de deteção no frame, usando o estado de vadiagem."""
-    frame_height, frame_width, _ = frame.shape
     
     loitering_count = 0
 
-    for det in detections_with_tracking:
-        # As caixas já estão em coordenadas de pixel (vindos do servico_ia)
+    for det in detections_to_draw:
+        # As caixas já estão em coordenadas de pixel
         ymin, xmin, ymax, xmax = det['box']
         score = det['score']
         is_loitering = det['is_loitering']
         track_id = det['track_id']
 
-        color = (0, 0, 255) if is_loitering else (0, 255, 0) # Vermelho para vadiagem, Verde normal
+        color = (0, 0, 255) if is_loitering else (0, 255, 0) # Vermelho para Suspeita, Verde normal
         loitering_count += 1 if is_loitering else 0
 
         # Desenha o retângulo
@@ -147,7 +148,7 @@ def draw_detections(frame, detections_with_tracking):
         # Prepara o texto da etiqueta
         label_text = f'ID:{track_id} {int(score*100)}%'
         if is_loitering:
-             label_text += " (VADIA)"
+             label_text += " (SUSPEITA)" # CORREÇÃO: Nova Terminologia
 
         # Prepara as coordenadas para o texto
         label_size, base_line = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
@@ -164,8 +165,8 @@ def draw_detections(frame, detections_with_tracking):
 # --- Thread de Publicação Contínua (Heartbeat) ---
 
 def publish_heartbeat():
-    """Publica o último frame analisado continuamente para garantir o stream do servico_web."""
-    global latest_analyzed_frame_bytes, lock, mqtt_client
+    """Publica o frame final analisado continuamente para garantir o stream do servico_web."""
+    global latest_raw_frame, latest_detections_for_draw, lock, mqtt_client
     
     # Placeholder Frame (para exibição enquanto espera)
     # Codifica o placeholder APENAS UMA VEZ
@@ -179,19 +180,32 @@ def publish_heartbeat():
          return 
 
     while True:
-        bytes_to_publish = None
+        frame_to_publish = None
+        current_loitering_count = 0
         
         with lock:
-            if latest_analyzed_frame_bytes is not None:
-                # Usa o último frame analisado (com caixas)
-                bytes_to_publish = latest_analyzed_frame_bytes
+            if latest_raw_frame is not None:
+                # 1. Copia o frame cru mais recente
+                frame_to_publish = latest_raw_frame.copy()
+                # 2. Desenha as ÚLTIMAS detecções/tracks conhecidos (mesmo que tenham 1s)
+                frame_to_publish, current_loitering_count = draw_detections(frame_to_publish, latest_detections_for_draw)
             else:
-                 # Usa o placeholder se ainda não processou o primeiro frame
+                 # 3. Usa o placeholder se não houver frame cru
                  bytes_to_publish = placeholder_bytes
 
+        if frame_to_publish is not None:
+            # Codifica o frame analisado para JPEG
+            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_publish, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+            
+            if flag:
+                bytes_to_publish = bytearray(encodedImage)
+            else:
+                logging.warning("Falha ao codificar o frame analisado para JPEG no heartbeat.")
+                bytes_to_publish = placeholder_bytes # Usa o placeholder em caso de falha de codificação
+        
         if bytes_to_publish is not None and mqtt_client is not None and mqtt_client.is_connected():
              mqtt_client.publish(PUBLISH_TOPIC_ANALYZED_IMG, bytes_to_publish, qos=0)
-             logging.debug(f"Frame (heartbeat) publicado ({len(bytes_to_publish)} bytes).")
+             logging.debug(f"Frame (heartbeat) publicado ({len(bytes_to_publish)} bytes). Suspeita: {current_loitering_count}")
         
         # Controla o FPS do stream (30 FPS)
         time.sleep(1/30) 
@@ -225,7 +239,7 @@ def on_message_raw_img(client, userdata, msg):
 
 def on_message_data(client, userdata, msg):
     """Callback ao receber dados de deteção (JSON) do servico_ia)."""
-    global latest_raw_frame, latest_analyzed_frame_bytes, lock
+    global latest_detections_for_draw, lock
     
     # 1. Deserializa os dados de deteção
     try:
@@ -239,33 +253,11 @@ def on_message_data(client, userdata, msg):
     # 2. Aplica a lógica de tracking e vadiagem
     detections_with_tracking = update_tracking(detections)
     
-    # 3. Desenha e publica o frame final (CRUCIAL)
-    
-    # CRITICAL: Copia o frame cru e garante que o último frame (para desenho) é usado
-    frame_to_analyze = None
-    
+    # 3. CRITICAL: Atualiza a variável global de desenho
     with lock:
-        if latest_raw_frame is not None:
-            frame_to_analyze = latest_raw_frame.copy() 
-        else:
-            logging.warning("Não encontrou frame cru correspondente para desenhar as deteções. Frame ignorado.")
-            return # Sai se não houver frame para desenhar
-            
-    # Se chegámos aqui, temos um frame para desenhar
-    # Desenha as caixas (verde/vermelho) no frame
-    frame_analyzed, loitering_count = draw_detections(frame_to_analyze, detections_with_tracking)
-    
-    # Codifica o frame final para JPEG
-    (flag, encodedImage) = cv2.imencode(".jpg", frame_analyzed, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-    
-    if flag:
-        # Publica o frame analisado (apenas atualiza a variável global)
-        frame_bytes = bytearray(encodedImage)
-        with lock:
-            latest_analyzed_frame_bytes = frame_bytes
-        logging.info(f"Frame analisado (c/ desenho) gerado ({len(frame_bytes)} bytes). Vadiando: {loitering_count}")
-    else:
-         logging.warning("Falha ao codificar o frame analisado para JPEG.")
+        # A thread de heartbeat irá ler esta variável e desenhar no frame cru mais recente
+        latest_detections_for_draw = detections_with_tracking
+        logging.info(f"Análise concluída. Pessoas: {len(latest_detections_for_draw)}. Suspeita: {len([d for d in latest_detections_for_draw if d['is_loitering']])}")
 
 
 def setup_mqtt():
