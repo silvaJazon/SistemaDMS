@@ -1,5 +1,8 @@
+#Documentação: Lista de pacotes Python necessários para o servico_ia
+
 opencv-python-headless # Biblioteca para processamento de imagens
-Flask # Servidor web para o Flask
+
 tflite-runtime # O motor de inferência otimizado para ARM
-numpy < 2 # Biblioteca para operações numéricas
-requests # Biblioteca para fazer requisições HTTP
+numpy<2 # Biblioteca para operações numéricas (FIXADO < 2 para compatibilidade com tflite)
+requests # Biblioteca para fazer requisições HTTP (pode ser útil no futuro)
+paho-mqtt # Cliente MQTT para comunicar com o broker
