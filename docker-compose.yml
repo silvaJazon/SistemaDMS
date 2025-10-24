@@ -3,58 +3,55 @@
 services:
   # Serviço Mosquitto MQTT Broker
   mosquitto:
-    image: eclipse-mosquitto:2 # Imagem oficial do Mosquitto
+    image: eclipse-mosquitto:2
     container_name: fluxoai-mosquitto
     ports:
-      - "1883:1883" # Porta padrão do MQTT
+      - "1883:1883"
+    volumes:
+      # Monta o nosso ficheiro de configuração personalizado.
+      # O Mosquitto irá ler este ficheiro em vez da configuração padrão.
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
     restart: unless-stopped
     networks:
       - fluxoai_net
-    # A secção 'volumes:' foi removida pois não era necessária e causava erro.
 
   # Serviço de Captura de Vídeo
   servico_captura:
     build: ./servico_captura
-    image: jazonbatista/fluxoai-servico-captura:latest
+    image: jazonbatista/fluxoai-servico-captura:latest # Usaremos esta tag por padrão agora
     container_name: fluxoai-servico_captura
     environment:
       - MQTT_BROKER_HOST=mosquitto
       - MQTT_BROKER_PORT=1883
-      - VIDEO_SOURCE=${VIDEO_SOURCE:-0}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VIDEO_SOURCE=${VIDEO_SOURCE:-0} # Padrão para câmara 0, pode ser sobreposto
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}   # Padrão INFO, pode ser sobreposto
       - FRAME_WIDTH=${FRAME_WIDTH:-640}
       - FRAME_HEIGHT=${FRAME_HEIGHT:-480}
       - PUBLISH_TOPIC=fluxoai/frames/raw
     depends_on:
-      - mosquitto
+      - mosquitto # Garante que o mosquitto inicia antes
     devices:
       - "/dev/video0:/dev/video0" # Mapeia a câmara USB
     restart: unless-stopped
     networks:
       - fluxoai_net
 
-  # Serviço de IA (Será modificado para usar MQTT) - POR FAZER
+  # --- Serviços Futuros (Placeholders) ---
+  # Adicionaremos aqui o servico_ia modificado, servico_analise e servico_web
   # servico_ia:
-  #   build: ./servico_ia
-  #   image: jazonbatista/fluxoai-servico-ia:latest
-  #   container_name: fluxoai-servico_ia
-  #   environment:
-  #     - MQTT_BROKER_HOST=mosquitto
-  #     - MQTT_BROKER_PORT=1883
-  #     - SUBSCRIBE_TOPIC=fluxoai/frames/raw
-  #     - PUBLISH_TOPIC=fluxoai/frames/detected
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   depends_on:
-  #     - mosquitto
-  #   restart: unless-stopped
-  #   networks:
-  #     - fluxoai_net
-
-  # Serviço de Análise (Será criado) - POR FAZER
-  # servico_analise: ...
-
-  # Serviço Web (Será modificado para usar MQTT) - POR FAZER
-  # servico_web: ...
+  #   build: ./servico_ia
+  #   image: jazonbatista/fluxoai-servico-ia:latest
+  #   container_name: fluxoai-servico_ia
+  #   environment:
+  #     - MQTT_BROKER_HOST=mosquitto
+  #     - SUBSCRIBE_TOPIC=fluxoai/frames/raw
+  #     - PUBLISH_TOPIC=fluxoai/frames/detected
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #   depends_on:
+  #     - mosquitto
+  #   restart: unless-stopped
+  #   networks:
+  #     - fluxoai_net
 
 networks:
   fluxoai_net:
