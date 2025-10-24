@@ -58,7 +58,7 @@ services:
     # NOTA: Este serviço não precisa mais de acesso direto à câmara (`devices`)
     # nem de expor portas (`ports`), pois comunica apenas via MQTT.
 
-  # Serviço de Análise de Comportamento (Novo)
+  # Serviço de Análise de Comportamento (Modificado)
   servico_analise:
     build: ./servico_analise # Pasta do novo serviço
     image: jazonbatista/fluxoai-servico-analise:latest # Novo nome de imagem
@@ -67,12 +67,13 @@ services:
       - MQTT_BROKER_HOST=mosquitto
       - MQTT_BROKER_PORT=1883
       - SUBSCRIBE_TOPIC_DATA=fluxoai/detections # Ouve os dados das deteções
-      # - SUBSCRIBE_TOPIC_IMG=fluxoai/frames/raw # Poderia ouvir frames crus também
-      # - PUBLISH_TOPIC_STATUS=fluxoai/status/loitering # Onde publicar o status
-      # - PUBLISH_TOPIC_IMG=fluxoai/frames/analyzed # Onde publicar imagem final
+      - SUBSCRIBE_TOPIC_RAW_IMG=fluxoai/frames/raw # Ouve os frames crus
+      # - PUBLISH_TOPIC_STATUS=fluxoai/status/loitering # Onde publicar o status (futuro)
+      - PUBLISH_TOPIC_ANALYZED_IMG=fluxoai/frames/analyzed # Onde publicar imagem final
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOITERING_THRESHOLD_SECONDS=${LOITERING_THRESHOLD_SECONDS:-10}
       - LOITERING_MAX_DISTANCE=${LOITERING_MAX_DISTANCE:-30}
+      - JPEG_QUALITY=${JPEG_QUALITY:-50} # Qualidade para publicar imagem final
     depends_on:
       - mosquitto # Depende do broker
     restart: unless-stopped
