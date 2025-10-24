@@ -1,36 +1,47 @@
-version: '3.8' # Define a versão da sintaxe do Compose
+# Documentação: Ficheiro de orquestração para o Docker Compose do projeto FluxoAI.
+# Define os serviços que compõem a aplicação e como eles se conectam.
+# NOTA: O atributo 'version' é obsoleto e foi removido.
 
 services:
-  # Define o nosso primeiro serviço: o de IA
+  # --- Serviço de Inteligência Artificial ---
   servico_ia:
-    # Nome da imagem que o serviço vai usar.
-    # A tag 'latest' refere-se à versão mais recente construída e enviada.
+    # Nome da imagem a ser usada para este serviço.
+    # Usamos a tag 'latest' que construímos localmente.
     image: jazonbatista/fluxoai-servico-ia:latest
 
-    # Mapeia a porta 5000 do Raspberry Pi para a porta 5000 dentro do contentor.
-    # Isto permite-nos aceder ao stream web.
+    # Nome do contentor (opcional, mas útil para identificação).
+    container_name: fluxoai-servico_ia-1
+
+    # Política de reinício: Tenta reiniciar o contentor automaticamente se ele falhar.
+    restart: unless-stopped
+
+    # Variáveis de ambiente passadas para o contentor.
+    environment:
+      # O nosso script main.py vai ler esta variável para saber qual câmara usar.
+      # O valor "0" refere-se à primeira câmara USB/local.
+      # Para usar um DVR: "rtsp://user:pass@ip:port/path"
+      - VIDEO_SOURCE=0
+      # Adiciona a variável LOG_LEVEL, que será definida pelo Makefile ou terá INFO como padrão.
+      # O script main.py usará esta variável para configurar o nível de logging.
+      - LOG_LEVEL=${LOG_LEVEL:-INFO} # Usa o valor de LOG_LEVEL do ambiente, ou 'INFO' se não definido
+
+    # Mapeamento de portas: Liga a porta 5000 do Raspberry Pi à porta 5000 do contentor.
+    # Isto permite aceder ao servidor web Flask a partir da rede local.
     ports:
       - "5000:5000"
 
-    # Variáveis de ambiente a serem passadas para o contentor.
-    # O nosso main.py vai ler esta variável para saber qual câmara usar.
-    # MUDE este valor para o seu URL RTSP quando for usar o DVR.
-    environment:
-      - VIDEO_SOURCE=0 # Default para a primeira câmara local (/dev/video0)
-      # - VIDEO_SOURCE=rtsp://admin:comercio123@<IP_DO_DVR>:<PORTA>/... # Exemplo para RTSP
-
-    # Mapeia o dispositivo da câmara USB do Raspberry Pi para dentro do contentor.
-    # NECESSÁRIO para que o OpenCV consiga aceder à câmara.
-    # Verifique se /dev/video0 é o nome correto no seu Pi com 'ls /dev/video*'.
+    # Mapeamento de dispositivos: Dá ao contentor acesso ao dispositivo da câmara USB.
+    # '/dev/video0' é o caminho padrão para a primeira câmara no Linux (Raspberry Pi OS).
+    # Se a sua câmara aparecer como /dev/video1, altere aqui.
     devices:
       - "/dev/video0:/dev/video0"
 
-    # Política de reinício: O Docker tentará reiniciar o contentor
-    # automaticamente se ele falhar, a menos que o tenhamos parado manualmente.
-    restart: unless-stopped
+# (Opcional) Define uma rede personalizada para os serviços comunicarem entre si.
+# Útil quando adicionarmos mais serviços no futuro.
+# networks:
+#   fluxoai_net:
+#     driver: bridge
 
-    # (Opcional, mas recomendado no futuro) Mapear volumes para guardar dados,
-    # como configurações ou logs, fora do contentor.
-    # volumes:
-    #   - ./servico_ia_config:/app/config # Exemplo
+# Nota: Se descomentar a secção 'networks', precisa de adicionar 'networks: - fluxoai_net'
+# dentro da definição do serviço 'servico_ia'.
 
