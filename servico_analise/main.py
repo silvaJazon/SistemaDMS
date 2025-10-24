@@ -12,6 +12,7 @@ import threading
 from paho.mqtt import client as mqtt
 
 # --- Configuração do Logging ---
+# O nível é lido do environment, default é INFO
 default_log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(level=default_log_level,
                     format='%(asctime)s - Análise - %(levelname)s - %(message)s',
@@ -31,9 +32,10 @@ JPEG_QUALITY = int(os.environ.get('JPEG_QUALITY', 50))
 
 # --- Variáveis Globais de Microsserviço ---
 mqtt_client = None
-tracked_persons = {} # {track_id: {'box': [], 'center': (x,y), 'start_time': t, 'is_loitering': False, 'last_seen': t}}
+# {track_id: {'box': [ymin, xmin, ymax, xmax], 'center': (x,y), 'start_time': t, 'is_loitering': False, 'last_seen': t}}
+tracked_persons = {} 
 next_track_id = 0
-latest_raw_frame = None # O último frame cru recebido do servico_captura
+latest_raw_frame = None # O último frame cru (numpy array)
 lock = threading.Lock() # Para acesso seguro às variáveis globais
 TARGET_LABEL = 'person' # O objeto que estamos a seguir
 
@@ -49,9 +51,8 @@ def update_tracking(detections):
     
     current_time = time.time()
     matched_track_ids = set()
-    
-    new_detections = []
-    
+    new_detections = [] # Deteções com status de tracking atualizado
+
     # 1. Tenta associar deteções atuais a tracks existentes
     for det in detections:
         if det['label'] != TARGET_LABEL:
@@ -74,13 +75,12 @@ def update_tracking(detections):
             # Atualiza track existente
             track_id = best_match_id
             tracked_persons[track_id]['last_seen'] = current_time
-            matched_track_ids.add(track_id)
 
             # Verifica vadiagem
             distance_moved = np.linalg.norm(np.array(tracked_persons[track_id]['center']) - np.array((center_x, center_y)))
             
-            # Se moveu significativamente, reinicia o contador
             if distance_moved > LOITERING_MAX_DISTANCE:
+                # Pessoa moveu-se, reinicia contador de vadiagem
                 tracked_persons[track_id]['center'] = (center_x, center_y)
                 tracked_persons[track_id]['start_time'] = current_time
                 if tracked_persons[track_id]['is_loitering']:
@@ -95,6 +95,7 @@ def update_tracking(detections):
             
             # Adiciona aos resultados atuais
             new_detections.append({'box': det['box'], 'score': det['score'], 'is_loitering': tracked_persons[track_id]['is_loitering'], 'track_id': track_id})
+            matched_track_ids.add(track_id)
 
         else:
             # Cria novo track
@@ -127,6 +128,7 @@ def draw_detections(frame, detections_with_tracking):
     loitering_count = 0
 
     for det in detections_with_tracking:
+        # As caixas já estão em coordenadas de pixel (vindos do servico_ia)
         ymin, xmin, ymax, xmax = det['box']
         score = det['score']
         is_loitering = det['is_loitering']
@@ -163,6 +165,7 @@ def on_connect(client, userdata, flags, reason_code, properties):
         # Subscreve aos tópicos de dados e de frames crus
         client.subscribe(SUBSCRIBE_TOPIC_DATA, qos=0)
         client.subscribe(SUBSCRIBE_TOPIC_RAW_IMG, qos=0)
+        logging.info(f"A subscrever aos tópicos de dados: {SUBSCRIBE_TOPIC_DATA} e frames crus: {SUBSCRIBE_TOPIC_RAW_IMG}")
     else:
         logging.error(f"Falha na conexão ao MQTT, código: {reason_code}")
 
@@ -198,13 +201,14 @@ def on_message_data(client, userdata, msg):
     # 3. Desenha e publica o frame final (CRUCIAL)
     with lock:
         if latest_raw_frame is not None:
-            # Pega no último frame cru
+            # Pega no último frame cru e clona
             frame_to_analyze = latest_raw_frame.copy() 
             
             # Desenha as caixas (verde/vermelho) no frame
             frame_analyzed, loitering_count = draw_detections(frame_to_analyze, detections_with_tracking)
             
             # Codifica o frame final para JPEG
+            # Frame é publicado aqui, mas quem subscreve é o servico_web
             (flag, encodedImage) = cv2.imencode(".jpg", frame_analyzed, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             
             if flag:
@@ -239,9 +243,6 @@ def setup_mqtt():
 
 if __name__ == '__main__':
     logging.info("--- Iniciando Serviço de Análise FluxoAI ---")
-    
-    # Verifica se os ficheiros do modelo são necessários (neste serviço, não são, mas é bom ter o check)
-    # Aqui a IA foi removida, por isso não há necessidade de verificar ficheiros de modelo.
     
     # Configuração e início do MQTT
     mqtt_client = setup_mqtt()
