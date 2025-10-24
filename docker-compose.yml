@@ -6,7 +6,7 @@ services:
     image: eclipse-mosquitto:2
     container_name: fluxoai-mosquitto
     ports:
-      - "1883:1883" # Expõe a porta MQTT padrão
+      - "1883:1883"
     volumes:
       # Monta a configuração personalizada para permitir conexões de outros containers
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
@@ -36,7 +36,7 @@ services:
     networks:
       - fluxoai_net # Conecta este serviço à rede interna
 
-  # Serviço de Inteligência Artificial (Agora como Microsserviço)
+  # Serviço de Inteligência Artificial
   servico_ia:
     build: ./servico_ia # Pasta do serviço de IA
     image: jazonbatista/fluxoai-servico-ia:latest # Nome da imagem a ser construída/usada
@@ -58,27 +58,29 @@ services:
     # NOTA: Este serviço não precisa mais de acesso direto à câmara (`devices`)
     # nem de expor portas (`ports`), pois comunica apenas via MQTT.
 
+  # Serviço de Análise de Comportamento (Novo)
+  servico_analise:
+    build: ./servico_analise # Pasta do novo serviço
+    image: jazonbatista/fluxoai-servico-analise:latest # Novo nome de imagem
+    container_name: fluxoai-servico_analise
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - MQTT_BROKER_PORT=1883
+      - SUBSCRIBE_TOPIC_DATA=fluxoai/detections # Ouve os dados das deteções
+      # - SUBSCRIBE_TOPIC_IMG=fluxoai/frames/raw # Poderia ouvir frames crus também
+      # - PUBLISH_TOPIC_STATUS=fluxoai/status/loitering # Onde publicar o status
+      # - PUBLISH_TOPIC_IMG=fluxoai/frames/analyzed # Onde publicar imagem final
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOITERING_THRESHOLD_SECONDS=${LOITERING_THRESHOLD_SECONDS:-10}
+      - LOITERING_MAX_DISTANCE=${LOITERING_MAX_DISTANCE:-30}
+    depends_on:
+      - mosquitto # Depende do broker
+    restart: unless-stopped
+    networks:
+      - fluxoai_net # Conecta à mesma rede
+
   # --- Serviços Futuros (Placeholders) ---
-  # servico_analise:
-  #   build: ./servico_analise
-  #   ...
-  #   depends_on:
-  #     - mosquitto
-  #   restart: unless-stopped
-  #   networks:
-  #     - fluxoai_net
-
-  # servico_web:
-  #   build: ./servico_web
-  #   ...
-  #   ports:
-  #     - "8080:80" # Exemplo de porta para a interface web
-  #   depends_on:
-  #     - mosquitto
-  #   restart: unless-stopped
-  #   networks:
-  #     - fluxoai_net
-
+  # servico_web: ...
 
 # Define a rede interna que todos os serviços usarão para comunicar
 networks:
