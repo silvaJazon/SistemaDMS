@@ -1,139 +1,165 @@
 import cv2
-import time
 import os
-import sys
+import time
 import threading
 from flask import Flask, Response, render_template_string
 
-# Variável global para armazenar o último frame codificado em JPEG
-output_frame = None
-# Lock para garantir acesso seguro ao output_frame por múltiplas threads
-lock = threading.Lock()
+# Variáveis globais para partilhar o frame mais recente e o estado
+latest_frame = None
+lock = threading.Lock() # Para evitar conflitos ao aceder ao latest_frame
+camera_status = "A iniciar..."
 
-# Cria a aplicação Flask
+# --- Configuração do Flask ---
 app = Flask(__name__)
 
-# String HTML simples para a página web
-HTML_PAGE = """
+# HTML simples para exibir o vídeo
+HTML_TEMPLATE = """
+<!DOCTYPE html>
 <html>
 <head>
     <title>FluxoAI - Vídeo ao Vivo</title>
 </head>
 <body>
     <h1>FluxoAI - Vídeo ao Vivo</h1>
-    <img src="{{ url_for('video_feed') }}" width="640" height="480">
+    <p>Status da Câmara: <span id="status">{{ status }}</span></p>
+    <img id="bg" src="{{ url_for('video_feed') }}" width="640" height="480">
+
+    <script>
+        // Atualiza o status periodicamente (opcional)
+        // setInterval(function() {
+        //     fetch('/status')
+        //         .then(response => response.text())
+        //         .then(text => document.getElementById('status').innerText = text);
+        // }, 2000);
+    </script>
 </body>
 </html>
 """
 
+def generate_frames():
+    """Gera frames de vídeo formatados para streaming MJPEG."""
+    global latest_frame, lock, camera_status
+    while True:
+        with lock:
+            if latest_frame is None:
+                # Se não houver frame, espera um pouco
+                time.sleep(0.1)
+                continue
+            # Codifica o frame para JPEG
+            (flag, encodedImage) = cv2.imencode(".jpg", latest_frame)
+            if not flag:
+                continue
+
+        # Produz o frame no formato MJPEG
+        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
+               bytearray(encodedImage) + b'\r\n')
+        time.sleep(0.03) # Limita um pouco a taxa de frames para não sobrecarregar
+
+@app.route('/')
+def index():
+    """Rota principal que serve a página HTML."""
+    global camera_status
+    return render_template_string(HTML_TEMPLATE, status=camera_status)
+
+@app.route('/video_feed')
+def video_feed():
+    """Rota que fornece o stream de vídeo."""
+    return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/status')
+def get_status():
+    """Rota para obter o status atual da câmara (opcional)."""
+    global camera_status
+    return Response(camera_status, mimetype='text/plain')
+
+# --- Lógica de Captura OpenCV (numa thread separada) ---
 def capture_video():
-    """Função que roda numa thread separada para capturar e processar vídeo."""
-    global output_frame, lock
+    """Função que corre numa thread separada para capturar vídeo."""
+    global latest_frame, lock, camera_status
 
     print(">>> Serviço de IA do FluxoAI a iniciar (Fase 2.5: Web Stream)...")
     print(f">>> Versão do OpenCV: {cv2.__version__}")
 
-    video_source = os.environ.get('VIDEO_SOURCE')
-    if video_source is None:
-        print("!!! ERRO: VIDEO_SOURCE não definido.", flush=True)
-        sys.exit(1)
+    video_source = os.environ.get("VIDEO_SOURCE", "0") # Default para câmara 0 se não definida
 
-    is_rtsp = video_source.startswith("rtsp://")
     cap = None
-    retry_delay = 5
+    source_description = ""
+    frame_count = 0 # Contador para logs menos frequentes
 
-    while True: # Loop principal para manter a captura a correr e tentar reconectar
-        if cap is None or not cap.isOpened():
-            try:
-                if is_rtsp:
-                    print(f">>> A tentar conectar-se ao stream: {video_source}", flush=True)
-                    cap = cv2.VideoCapture(video_source, cv2.CAP_FFMPEG)
-                else:
-                    camera_index = int(video_source)
-                    print(f">>> A tentar conectar-se à câmara local: {camera_index}", flush=True)
-                    cap = cv2.VideoCapture(camera_index)
+    while True: # Loop principal para tentar conectar e capturar
+        try:
+            if cap is None or not cap.isOpened():
+                camera_status = f"A tentar conectar a: {video_source}..."
+                print(f">>> {camera_status}")
 
-                if cap is None or not cap.isOpened():
-                    raise ValueError("Falha ao abrir VideoCapture")
+                # Tenta converter para inteiro (câmara local)
+                try:
+                    source_index = int(video_source)
+                    source_description = f"câmara local no índice: {source_index}"
+                    cap = cv2.VideoCapture(source_index)
+                    # Tenta definir uma resolução menor para webcams USB (pode falhar, mas tentamos)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                except ValueError:
+                    # Se não for inteiro, assume que é URL RTSP
+                    source_description = f"stream de rede: {video_source}"
+                    cap = cv2.VideoCapture(video_source)
 
-                print(">>> Fonte de vídeo conectada!", flush=True)
+                if not cap.isOpened():
+                    camera_status = f"ERRO: Não foi possível abrir {source_description}. A tentar novamente em 5s..."
+                    print(f"!!! {camera_status}")
+                    cap = None # Garante que tentamos reconectar
+                    time.sleep(5)
+                    continue # Volta ao início do loop while
 
-            except Exception as e:
-                print(f"!!! ERRO ao abrir fonte: {e}", flush=True)
-                print(f">>> A tentar novamente em {retry_delay}s...", flush=True)
-                cap = None
-                time.sleep(retry_delay)
-                continue # Volta ao início do loop while True
+                camera_status = f"Conectado com sucesso a {source_description}!"
+                print(f">>> {camera_status}")
+                print(">>> A iniciar loop de captura...")
 
-        # Lê um frame
-        ret, frame = cap.read()
+            # Lê um frame
+            ret, frame = cap.read()
+            frame_count += 1
 
-        if not ret:
-            print("!!! ERRO: Não foi possível ler o frame. A tentar reconectar...", flush=True)
+            if not ret:
+                camera_status = "ERRO: Stream/Câmara desconectado. A tentar reconectar..."
+                print(f"!!! {camera_status}")
+                cap.release()
+                cap = None # Força a reconexão no próximo ciclo
+                time.sleep(2)
+                continue # Volta ao início do loop while
+
+            # Guarda o frame capturado para a thread do Flask
+            with lock:
+                latest_frame = frame.copy()
+                # Atualiza o status com a resolução (apenas a cada 100 frames para não poluir)
+                if frame_count % 100 == 1: # Atualiza no primeiro frame e depois a cada 100
+                    h, w = frame.shape[:2]
+                    camera_status = f"Captura a funcionar | Resolução: {w}x{h}"
+                    print(f">>> {camera_status} (Frame {frame_count})")
+
+
+            # Pequena pausa para não consumir 100% da CPU
+            time.sleep(0.01)
+
+        except Exception as e:
+            camera_status = f"ERRO inesperado na captura: {e}. A tentar recuperar..."
+            print(f"!!! {camera_status}")
             if cap is not None:
                 cap.release()
             cap = None
-            time.sleep(retry_delay) # Espera antes de tentar reconectar
-            continue # Volta ao início do loop while True
+            time.sleep(5)
 
-        # --- Área para IA ---
-        # Aqui podemos processar o 'frame' com o modelo de IA
-        # e desenhar caixas, etc., antes de o codificar.
-        # --- Fim da IA ---
-
-        # Codifica o frame como JPEG
-        (flag, encoded_image) = cv2.imencode(".jpg", frame)
-
-        # Se a codificação falhar, pula este frame
-        if not flag:
-            continue
-
-        # Adquire o lock e atualiza o output_frame global
-        with lock:
-            output_frame = encoded_image.tobytes()
-
-        # Pequena pausa opcional
-        # time.sleep(0.01)
-
-
-def generate_stream():
-    """Gerador que produz o stream MJPEG para o Flask."""
-    global output_frame, lock
-
-    while True:
-        # Espera até que um frame esteja disponível
-        with lock:
-            if output_frame is None:
-                continue
-            frame_bytes = output_frame
-
-        # Produz o frame no formato multipart/x-mixed-replace
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-        # Pequena pausa para controlar o fluxo
-        time.sleep(0.03) # Aproximadamente 30 FPS
-
-
-@app.route("/")
-def index():
-    """Rota principal que serve a página HTML."""
-    return render_template_string(HTML_PAGE)
-
-@app.route("/video_feed")
-def video_feed():
-    """Rota que serve o stream de vídeo MJPEG."""
-    # Retorna uma resposta de streaming usando o gerador
-    return Response(generate_stream(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
+# --- Início da Aplicação ---
 if __name__ == '__main__':
     # Inicia a thread de captura de vídeo
-    video_thread = threading.Thread(target=capture_video)
-    video_thread.daemon = True # Permite que o programa principal saia mesmo se a thread estiver a correr
-    video_thread.start()
+    capture_thread = threading.Thread(target=capture_video)
+    capture_thread.daemon = True # Permite que o programa saia mesmo se a thread estiver a correr
+    capture_thread.start()
 
-    # Inicia o servidor web Flask
-    # host='0.0.0.0' torna o servidor acessível de fora do contentor
-    print(">>> A iniciar servidor web na porta 5000...", flush=True)
+    # Inicia o servidor Flask
+    print(">>> A iniciar servidor Flask na porta 5000...")
+    # Use threaded=True para lidar com múltiplos pedidos (necessário para streaming)
+    # Use debug=False em produção
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
 

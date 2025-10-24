@@ -1,8 +1,5 @@
-#Documentação: Lista de pacotes Python necessários para o projeto.
-
-#Usamos a versão "headless" porque o nosso script vai rodar num servidor (Docker)
-
-#sem uma interface gráfica direta. É otimizada para este tipo de uso.
-
-opencv-python-headless 
-Flask
+opencv-python-headless # Biblioteca para processamento de imagens
+Flask # Servidor web para o Flask
+tflite-runtime # O motor de inferência otimizado para ARM
+numpy # Biblioteca para operações numéricas
+requests # Biblioteca para fazer requisições HTTP
