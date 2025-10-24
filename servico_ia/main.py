@@ -1,5 +1,5 @@
 # Documentação: Script principal para o Serviço de IA do Projeto FluxoAI
-# Fase 3: Deteção de Pessoas (Otimizado + Debug)
+# Fase 3: Deteção de Pessoas (Caixas Persistentes)
 
 import cv2
 import time
@@ -16,15 +16,18 @@ FRAME_WIDTH_DISPLAY = 640  # Largura para exibir no stream
 FRAME_HEIGHT_DISPLAY = 480 # Altura para exibir no stream
 MODEL_PATH = 'model.tflite'
 LABELS_PATH = 'labels.txt'
-DETECTION_THRESHOLD = 0.2 # BAIXADO AINDA MAIS para debug (20%)
+DETECTION_THRESHOLD = 0.4 # Voltando para 40%
 TARGET_LABEL = 'person'
-PROCESS_EVERY_N_FRAMES = 3 # AUMENTADO para melhorar fluidez do stream
+PROCESS_EVERY_N_FRAMES = 3 # Processa 1 em cada 3 frames
 JPEG_QUALITY = 75 # Qualidade do JPEG para o stream (0-100, padrão ~95)
 
 # --- Variáveis Globais ---
 output_frame_display = None
 last_inference_time = 0
 last_detections_count = 0
+last_valid_boxes = [] # Guarda as últimas caixas válidas
+last_valid_classes = [] # Guarda as últimas classes válidas
+last_valid_scores = [] # Guarda os últimos scores válidos
 lock = threading.Lock()
 app = Flask(__name__)
 
@@ -35,25 +38,21 @@ def load_labels(path):
     labels = {}
     try:
         with open(path, 'r') as f:
-            # Assume que o ficheiro tem um nome por linha, começando do índice 0
-            # Alguns modelos podem começar do índice 1 se o 0 for 'background'
-            # Vamos carregar a partir do índice 0 por agora.
             for i, line in enumerate(f.readlines()):
                 labels[i] = line.strip()
-        print(f">>> Etiquetas carregadas ({len(labels)}): {list(labels.values())[:5]}...") # Mostra as 5 primeiras
+        print(f">>> Etiquetas carregadas ({len(labels)}): {list(labels.values())[:5]}...")
         if TARGET_LABEL not in labels.values():
-            print(f"!!! AVISO: A etiqueta alvo '{TARGET_LABEL}' não foi encontrada nas primeiras {len(labels)} etiquetas!")
-        # Encontra o ID da classe 'person'
+            print(f"!!! AVISO: A etiqueta alvo '{TARGET_LABEL}' não foi encontrada nas etiquetas!")
         person_id = -1
         for key, value in labels.items():
             if value == TARGET_LABEL:
                 person_id = key
                 break
-        print(f">>> ID da classe '{TARGET_LABEL}': {person_id}") # DEBUG
+        print(f">>> ID da classe '{TARGET_LABEL}': {person_id}")
         return labels
     except FileNotFoundError:
         print(f"!!! ERRO FATAL: Ficheiro de etiquetas não encontrado em {path}")
-        sys.exit(1) # Termina o programa se não encontrar as etiquetas
+        sys.exit(1)
     except Exception as e:
         print(f"!!! ERRO ao carregar etiquetas: {e}")
         sys.exit(1)
@@ -73,12 +72,12 @@ def initialize_model():
         print(f">>> Modelo TFLite carregado: {MODEL_PATH}")
         print(f">>> Input Shape: {input_details[0]['shape']}, Input Type: {input_details[0]['dtype']}")
         print(f">>> Modelo espera input flutuante: {floating_model}")
-        print(f">>> Detalhes dos Outputs: {output_details}") # DEBUG IMPORTANTE
+        # print(f">>> Detalhes dos Outputs: {output_details}") # Remover debug dos outputs
 
         return interpreter, input_details, output_details, height, width, floating_model
     except Exception as e:
         print(f"!!! ERRO FATAL ao carregar o modelo TFLite ({MODEL_PATH}): {e}")
-        sys.exit(1) # Termina o programa se não carregar o modelo
+        sys.exit(1)
 
 
 def detect_objects(frame_model_input, interpreter, input_details, output_details, floating_model):
@@ -87,7 +86,6 @@ def detect_objects(frame_model_input, interpreter, input_details, output_details
 
     if floating_model:
         input_data = (np.float32(input_data) - 127.5) / 127.5
-    # else: Modelo uint8 (nosso caso) não precisa de normalização extra aqui
 
     interpreter.set_tensor(input_details[0]['index'], input_data)
 
@@ -95,34 +93,30 @@ def detect_objects(frame_model_input, interpreter, input_details, output_details
     interpreter.invoke()
     inference_time = time.time() - start_time
 
-    # Tenta obter os resultados na ordem confirmada pelos logs
-    # output_details[0]: boxes (index 167)
-    # output_details[1]: classes (index 168)
-    # output_details[2]: scores (index 169)
     try:
         boxes = interpreter.get_tensor(output_details[0]['index'])[0]
         classes = interpreter.get_tensor(output_details[1]['index'])[0]
         scores = interpreter.get_tensor(output_details[2]['index'])[0]
     except IndexError as e:
         print(f"!!! ERRO CRÍTICO ao obter outputs do modelo. Verifique 'Detalhes dos Outputs'. Erro: {e}")
-        return [], [], [], 0 # Retorna vazio se não conseguir interpretar
+        return [], [], [], 0
 
     return boxes, classes, scores, inference_time
 
-def draw_detections(frame_display, boxes, classes, scores, labels, model_input_width, model_input_height):
-    """Desenha as caixas no frame de exibição (display)."""
+def draw_detections(frame_display, boxes, classes, scores, labels):
+    """Desenha as caixas no frame de exibição (display). Guarda as deteções válidas."""
+    global last_valid_boxes, last_valid_classes, last_valid_scores # Permite modificar as variáveis globais
+
     display_height, display_width, _ = frame_display.shape
     detections_count = 0
-    detected_something = False # Flag para debug
+    current_valid_boxes = []
+    current_valid_classes = []
+    current_valid_scores = []
 
     for i in range(len(scores)):
         if scores[i] > DETECTION_THRESHOLD:
-            detected_something = True # Marcar que algo foi detectado acima do limiar
             class_id = int(classes[i])
             label = labels.get(class_id, f'ID:{class_id}')
-
-            # *** DEBUG: Imprime TODAS as deteções válidas ***
-            # print(f"--- DETECTADO (Score > {DETECTION_THRESHOLD}): Índice: {i}, Score: {scores[i]:.2f}, Classe ID: {class_id}, Etiqueta: '{label}'")
 
             if label == TARGET_LABEL:
                 detections_count += 1
@@ -135,6 +129,12 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
                 xmax = min(display_width - 1, xmax); ymax = min(display_height - 1, ymax)
 
                 if xmax > xmin and ymax > ymin:
+                    # Guarda as informações da deteção válida
+                    current_valid_boxes.append(boxes[i])
+                    current_valid_classes.append(classes[i])
+                    current_valid_scores.append(scores[i])
+
+                    # Desenha a caixa e a etiqueta
                     cv2.rectangle(frame_display, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2) # Verde
                     label_text = f'{label}: {int(scores[i]*100)}%'
                     label_size, base_line = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
@@ -144,9 +144,10 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
                     cv2.putText(frame_display, label_text, (xmin, label_ymin - 7),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Preto
 
-    # Se nada foi detectado acima do limiar, imprime uma mensagem de debug
-    # if not detected_something:
-    #     print(f"--- Nenhuma deteção acima do limiar {DETECTION_THRESHOLD} neste frame.")
+    # Atualiza as últimas deteções válidas
+    last_valid_boxes = current_valid_boxes
+    last_valid_classes = current_valid_classes
+    last_valid_scores = current_valid_scores
 
     return frame_display, detections_count
 
@@ -156,6 +157,7 @@ def draw_detections(frame_display, boxes, classes, scores, labels, model_input_w
 def capture_and_detect():
     """Função principal: captura, processa (com saltos) e atualiza frame para stream."""
     global output_frame_display, lock, last_inference_time, last_detections_count
+    global last_valid_boxes, last_valid_classes, last_valid_scores # Acesso às últimas deteções
 
     print(">>> Serviço de IA do FluxoAI a iniciar (Fase 3: Deteção de Pessoas)...")
     print(f">>> Versão do OpenCV: {cv2.__version__}")
@@ -180,7 +182,6 @@ def capture_and_detect():
     print(">>> A iniciar loop de captura e deteção...")
 
     frame_count = 0
-    last_processed_frame_with_detections = None
 
     while True:
         ret, frame = cap.read()
@@ -194,41 +195,77 @@ def capture_and_detect():
 
         frame_count += 1
         frame_display = cv2.resize(frame, (FRAME_WIDTH_DISPLAY, FRAME_HEIGHT_DISPLAY))
+        frame_processed_now = False # Flag para saber se processámos este frame
 
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
+            frame_processed_now = True
             start_process_time = time.time()
-            frame_model_input = cv2.resize(frame, (model_width, model_height))
+            frame_model_input = cv2.resize(frame, (model_width, model_height)) # Usa frame original para IA
 
             boxes, classes, scores, inference_time = detect_objects(
                 frame_model_input, interpreter, input_details, output_details, floating_model
             )
 
+            # Desenha as NOVAS deteções no frame de display
             frame_display_with_detections, detections_count = draw_detections(
-                frame_display.copy(), boxes, classes, scores, labels, model_width, model_height
+                frame_display.copy(), boxes, classes, scores, labels
             )
 
-            last_processed_frame_with_detections = frame_display_with_detections
+            # Guarda os resultados para os próximos frames
             last_inference_time = inference_time
             last_detections_count = detections_count
+            # As caixas válidas (last_valid_...) são atualizadas dentro de draw_detections
 
             end_process_time = time.time()
             process_time = end_process_time - start_process_time
             fps = 1 / process_time if process_time > 0 else 0
 
+            # Atualiza o frame de saída com as novas deteções
             with lock:
-                output_frame_display = last_processed_frame_with_detections.copy()
+                output_frame_display = frame_display_with_detections.copy()
 
             res_h, res_w, _ = output_frame_display.shape
             print(f">>> Frame {frame_count} PROCESSADO | Res: {res_w}x{res_h} | Pessoas: {detections_count} | Inferência: {inference_time:.3f}s | FPS Proc: {fps:.1f}")
 
         else:
-            if last_processed_frame_with_detections is not None:
-                # Adiciona info sobre o último processamento no canto
-                info_text = f"P: {last_detections_count} ({last_inference_time*1000:.0f}ms @ F{frame_count - (frame_count % PROCESS_EVERY_N_FRAMES)})"
-                cv2.putText(frame_display, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2) # Vermelho para info
+            # Frame NÃO processado pela IA - Redesenha as ÚLTIMAS caixas válidas
+            if last_valid_boxes: # Verifica se temos deteções anteriores para desenhar
+                frame_display_with_old_detections = frame_display.copy() # Começa com o frame atual
+                display_height, display_width, _ = frame_display_with_old_detections.shape
 
-            with lock:
-                output_frame_display = frame_display.copy()
+                # Itera sobre as últimas deteções válidas guardadas
+                for i in range(len(last_valid_scores)):
+                    class_id = int(last_valid_classes[i])
+                    label = labels.get(class_id, f'ID:{class_id}')
+
+                    if label == TARGET_LABEL: # Certifica-se que é uma pessoa
+                        ymin, xmin, ymax, xmax = last_valid_boxes[i]
+                        xmin = int(xmin * display_width)
+                        xmax = int(xmax * display_width)
+                        ymin = int(ymin * display_height)
+                        ymax = int(ymax * display_height)
+                        xmin = max(0, xmin); ymin = max(0, ymin)
+                        xmax = min(display_width - 1, xmax); ymax = min(display_height - 1, ymax)
+
+                        if xmax > xmin and ymax > ymin:
+                            # Desenha a caixa ANTIGA no frame ATUAL
+                            cv2.rectangle(frame_display_with_old_detections, (xmin, ymin), (xmax, ymax), (0, 165, 255), 2) # Laranja para indicar que é antigo
+                            label_text = f'{label}: {int(last_valid_scores[i]*100)}% (P)' # Adiciona (P) para indicar persistente
+                            label_size, base_line = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                            label_ymin = max(ymin, label_size[1] + 10)
+                            cv2.rectangle(frame_display_with_old_detections, (xmin, label_ymin - label_size[1] - 10),
+                                          (xmin + label_size[0], label_ymin - base_line - 10), (255, 255, 255), cv2.FILLED) # Branco
+                            cv2.putText(frame_display_with_old_detections, label_text, (xmin, label_ymin - 7),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Preto
+
+                # Atualiza o frame de saída com as caixas antigas redesenhadas
+                with lock:
+                    output_frame_display = frame_display_with_old_detections.copy()
+            else:
+                 # Se ainda não houve deteções válidas, apenas atualiza com o frame atual
+                 with lock:
+                    output_frame_display = frame_display.copy()
+
 
     cap.release()
     print(">>> Loop de captura terminado.")
@@ -247,20 +284,18 @@ def generate_frames():
         if frame_to_encode is None:
             placeholder = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
             cv2.putText(placeholder, "Aguardando...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            # Codifica o placeholder com a qualidade definida
             (flag, encodedImage) = cv2.imencode(".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not flag: continue
             frame_bytes = bytearray(encodedImage)
             time.sleep(0.5)
         else:
-            # Codifica o frame com deteções com a qualidade definida
             (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if not flag: continue
             frame_bytes = bytearray(encodedImage)
 
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
                frame_bytes + b'\r\n')
-        time.sleep(0.01)
+        time.sleep(0.01) # Pequena pausa para não sobrecarregar CPU com envio
 
 @app.route("/")
 def index():
