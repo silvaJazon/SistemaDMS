@@ -1,7 +1,7 @@
 # Documentação: Thread de Captura de Vídeo
 # Esta classe é responsável por ler frames da fonte de vídeo (USB ou RTSP)
 # numa thread separada, para não bloquear a aplicação principal.
-# NOVO: Adicionada capacidade de rotação de imagem.
+# NOVO: Agora inclui lógica para rotacionar o frame.
 
 import cv2
 import threading
@@ -17,7 +17,7 @@ class CameraThread(threading.Thread):
     """
     Classe que gere a conexão da câmara numa thread dedicada.
     """
-    def __init__(self, video_source_str, frame_width, frame_height, rotate_angle_str="0"): # NOVO: Adicionado rotate_angle_str
+    def __init__(self, video_source_str, frame_width, frame_height, rotation_degrees=0):
         threading.Thread.__init__(self)
         self.daemon = True # Permite que a thread termine quando a app principal fechar
         
@@ -34,17 +34,20 @@ class CameraThread(threading.Thread):
         self.running = False
         self.connected = False
         
-        # NOVO: Define o código de rotação com base no parâmetro
-        self.rotate_code = None
-        if rotate_angle_str == "180":
-            self.rotate_code = cv2.ROTATE_180
-            logging.info(">>> Rotação de 180 graus ATIVADA.")
-        elif rotate_angle_str == "90":
-            self.rotate_code = cv2.ROTATE_90_CLOCKWISE
-            logging.info(">>> Rotação de 90 graus (horário) ATIVADA.")
-        elif rotate_angle_str == "270" or rotate_angle_str == "-90":
-            self.rotate_code = cv2.ROTATE_90_COUNTERCLOCKWISE
-            logging.info(">>> Rotação de 270 graus (anti-horário) ATIVADA.")
+        # --- NOVO: Lógica de Rotação ---
+        self.rotation_code = None # Código de rotação do OpenCV (ex: cv2.ROTATE_180)
+        if rotation_degrees == 90:
+            self.rotation_code = cv2.ROTATE_90_CLOCKWISE
+            logging.info(f">>> ROTAÇÃO DE 90 GRAUS (sentido horário) APLICADA.")
+        elif rotation_degrees == 180:
+            self.rotation_code = cv2.ROTATE_180
+            logging.info(f">>> ROTAÇÃO DE 180 GRAUS APLICADA.")
+        elif rotation_degrees == 270:
+            self.rotation_code = cv2.ROTATE_90_COUNTERCLOCKWISE
+            logging.info(f">>> ROTAÇÃO DE 270 GRAUS (sentido anti-horário) APLICADA.")
+        elif rotation_degrees != 0:
+            logging.warning(f"!!! Valor de rotação '{rotation_degrees}' inválido. Ignorando. (Usar 0, 90, 180, ou 270)")
+        # ------------------------------------
             
         self.connect_camera()
 
@@ -93,18 +96,21 @@ class CameraThread(threading.Thread):
                 if not ret:
                     logging.warning("!!! Frame não recebido. A verificar ligação...")
                     if self.is_rtsp:
+                        # Se for RTSP, a reconexão é a única solução
                         self.connected = False 
                     else:
+                        # Se for USB e falhar, é provável que seja um erro fatal
                         logging.error("Falha ao ler frame da câmara local. A terminar thread.")
                         self.running = False
                     continue
                 
+                # --- NOVO: Aplica a Rotação ---
+                if self.rotation_code is not None:
+                    frame = cv2.rotate(frame, self.rotation_code)
+                # --------------------------------
+                
                 # Redimensiona o frame para o tamanho de exibição padrão
                 frame_display = cv2.resize(frame, (self.frame_width, self.frame_height))
-
-                # NOVO: Aplica a rotação se o código estiver definido
-                if self.rotate_code is not None:
-                    frame_display = cv2.rotate(frame_display, self.rotate_code)
 
                 # Atualiza o último frame de forma segura
                 with self.lock:
@@ -113,7 +119,7 @@ class CameraThread(threading.Thread):
             except Exception as e:
                 logging.error(f"Erro no loop da câmara: {e}", exc_info=True)
                 self.connected = False
-                time.sleep(1.0) 
+                time.sleep(1.0) # Evita spam de logs em caso de erro rápido
 
         logging.info(">>> Thread da câmara terminada.")
         if self.cap:
