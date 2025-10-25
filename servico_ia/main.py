@@ -139,89 +139,94 @@ def update_tracking(boxes, classes, scores, frame_h, frame_w):
 
     # 1. Tenta associar deteções atuais a tracks existentes
     for i in range(len(scores)):
-        if scores[i] > DETECTION_THRESHOLD and int(classes[i]) == person_class_id:
-            ymin, xmin, ymax, xmax = boxes[i] # Coordenadas normalizadas (0.0 a 1.0)
+        # FILTRO: Ignora deteções que não são 'person' ou estão abaixo do limiar
+        if scores[i] < DETECTION_THRESHOLD or int(classes[i]) != person_class_id:
+            continue
             
-            # Converte coordenadas normalizadas para pixels no frame de DISPLAY
-            xmin_disp = int(xmin * frame_w)
-            xmax_disp = int(xmax * frame_w)
-            ymin_disp = int(ymin * frame_h)
-            ymax_disp = int(ymax * frame_h)
+        ymin, xmin, ymax, xmax = boxes[i] # Coordenadas normalizadas (0.0 a 1.0)
+        
+        # Converte coordenadas normalizadas para pixels no frame de DISPLAY
+        xmin_disp = int(xmin * frame_w)
+        xmax_disp = int(xmax * frame_w)
+        ymin_disp = int(ymin * frame_h)
+        ymax_disp = int(ymax * frame_h)
 
-            # Garante coordenadas válidas
-            xmin_disp = max(0, xmin_disp)
-            ymin_disp = max(0, ymin_disp)
-            xmax_disp = min(frame_w - 1, xmax_disp)
-            ymax_disp = min(frame_h - 1, ymax_disp)
+        # Garante coordenadas válidas
+        xmin_disp = max(0, xmin_disp)
+        ymin_disp = max(0, ymin_disp)
+        xmax_disp = min(frame_w - 1, xmax_disp)
+        ymax_disp = min(frame_h - 1, ymax_disp)
 
-            # FILTRO: Ignora deteções minúsculas (falsos positivos)
-            if (xmax_disp - xmin_disp) < MIN_BOX_SIZE or (ymax_disp - ymin_disp) < MIN_BOX_SIZE:
-                continue # Ignora caixas inválidas
+        # FILTRO: Ignora deteções minúsculas (falsos positivos)
+        if (xmax_disp - xmin_disp) < MIN_BOX_SIZE or (ymax_disp - ymin_disp) < MIN_BOX_SIZE:
+            continue # Ignora caixas inválidas
 
-            center_x, center_y = calculate_center(xmin_disp, ymin_disp, xmax_disp, ymax_disp)
-            current_detection = {'box': [ymin_disp, xmin_disp, ymax_disp, xmax_disp], 'center': (center_x, center_y), 'score': scores[i]}
-            current_detections.append(current_detection)
-            
-            best_match_id = -1
-            min_distance = float('inf')
+        center_x, center_y = calculate_center(xmin_disp, ymin_disp, xmax_disp, ymax_disp)
+        current_detection = {'box': [ymin_disp, xmin_disp, ymax_disp, xmax_disp], 'center': (center_x, center_y), 'score': scores[i]}
+        current_detections.append(current_detection)
+        
+        best_match_id = -1
+        min_distance = float('inf')
 
-            # Encontra o track mais próximo (se houver)
-            for track_id, data in tracked_persons.items():
-                distance = math.dist(data['center'], current_detection['center'])
-                # Verifica se a distância é razoável e se o track ainda não foi associado
-                if distance < LOITERING_MAX_DISTANCE * 2 and track_id not in matched_track_ids: # Um pouco mais flexível para associação
-                    if distance < min_distance:
-                        min_distance = distance
-                        best_match_id = track_id
+        # Encontra o track mais próximo (se houver)
+        for track_id, data in tracked_persons.items():
+            distance = math.dist(data['center'], current_detection['center'])
+            # Verifica se a distância é razoável e se o track ainda não foi associado
+            if distance < LOITERING_MAX_DISTANCE * 2 and track_id not in matched_track_ids: # Um pouco mais flexível para associação
+                if distance < min_distance:
+                    min_distance = distance
+                    best_match_id = track_id
 
-            if best_match_id != -1:
-                # Atualiza track existente
-                track_id = best_match_id
-                tracked_persons[track_id]['box'] = current_detection['box']
-                tracked_persons[track_id]['last_seen'] = current_time
-                matched_track_ids.add(best_match_id)
+        if best_match_id != -1:
+            # Atualiza track existente
+            track_id = best_match_id
+            tracked_persons[track_id]['box'] = current_detection['box']
+            tracked_persons[track_id]['last_seen'] = current_time
+            matched_track_ids.add(best_match_id)
 
-                # Verifica vadiagem (atitude suspeita)
-                distance_moved = math.dist(tracked_persons[track_id]['center'], current_detection['center'])
-                if distance_moved > LOITERING_MAX_DISTANCE:
-                    # Pessoa moveu-se, reinicia contador
-                    tracked_persons[track_id]['center'] = current_detection['center']
-                    tracked_persons[track_id]['start_time'] = current_time
+            # Verifica vadiagem (atitude suspeita)
+            distance_moved = math.dist(tracked_persons[track_id]['center'], current_detection['center'])
+            if distance_moved > LOITERING_MAX_DISTANCE:
+                # Pessoa moveu-se, reinicia contador
+                tracked_persons[track_id]['center'] = current_detection['center']
+                tracked_persons[track_id]['start_time'] = current_time
+                if tracked_persons[track_id]['is_loitering']:
                     tracked_persons[track_id]['is_loitering'] = False
-                else:
-                    # Pessoa está parada, verifica tempo
-                    time_stopped = current_time - tracked_persons[track_id]['start_time']
-                    if time_stopped > LOITERING_THRESHOLD_SECONDS and not tracked_persons[track_id]['is_loitering']:
-                        tracked_persons[track_id]['is_loitering'] = True
-                        logging.warning(f"Pessoa ID {best_match_id} DETETADA com ATITUDE SUSPEITA (tempo: {time_stopped:.1f}s)")
-                
-                # Guarda para desenhar
-                new_last_valid_detections.append({
-                         'box': tracked_persons[best_match_id]['box'],
-                         'score': current_detection['score'],
-                         'is_loitering': tracked_persons[best_match_id]['is_loitering'],
-                         'track_id': best_match_id
-                     })
-
+                    logging.info(f"Pessoa ID {track_id} deixou de ter Atitude Suspeita (Moveu).")
             else:
-                # Cria novo track
-                track_id = next_track_id
-                tracked_persons[track_id] = {
-                    'box': current_detection['box'],
-                    'center': current_detection['center'],
-                    'start_time': current_time,
-                    'is_loitering': False,
-                    'last_seen': current_time
-                }
-                 # Guarda para desenhar
-                new_last_valid_detections.append({
-                         'box': tracked_persons[track_id]['box'],
-                         'score': current_detection['score'],
-                         'is_loitering': False,
-                         'track_id': track_id
-                     })
-                logging.info(f"Novo Track ID {track_id} criado.")
-                next_track_id += 1
+                # Pessoa está parada, verifica tempo
+                time_stopped = current_time - tracked_persons[track_id]['start_time']
+                if time_stopped > LOITERING_THRESHOLD_SECONDS and not tracked_persons[track_id]['is_loitering']:
+                    tracked_persons[track_id]['is_loitering'] = True
+                    logging.warning(f"Pessoa ID {best_match_id} DETECTADA com ATITUDE SUSPEITA (tempo: {time_stopped:.1f}s)")
+            
+            # Guarda para desenhar
+            new_last_valid_detections.append({
+                     'box': tracked_persons[best_match_id]['box'],
+                     'score': current_detection['score'],
+                     'is_loitering': tracked_persons[best_match_id]['is_loitering'],
+                     'track_id': best_match_id
+                 })
+
+        else:
+            # Cria novo track
+            track_id = next_track_id
+            tracked_persons[track_id] = {
+                'box': current_detection['box'],
+                'center': current_detection['center'],
+                'start_time': current_time,
+                'is_loitering': False,
+                'last_seen': current_time
+            }
+             # Guarda para desenhar
+            new_last_valid_detections.append({
+                     'box': tracked_persons[track_id]['box'],
+                     'score': current_detection['score'],
+                     'is_loitering': False,
+                     'track_id': track_id
+                 })
+            logging.info(f"Novo Track ID {track_id} criado.")
+            next_track_id += 1
 
     # 2. Remove tracks antigos (que não foram vistos recentemente)
     ids_to_remove = [track_id for track_id, data in tracked_persons.items() if current_time - data['last_seen'] > 5] # Remove se não visto por 5 segundos
