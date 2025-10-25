@@ -1,5 +1,6 @@
 # Documentação: Dockerfile para o Serviço DMS
-# Versão 3: Usa MobileNet-SSD e copia os modelos localmente (em vez de curl)
+# Instala Python, OpenCV e Dlib
+# Copia os modelos Dlib, YOLOv4-tiny (COCO) localmente.
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -29,10 +30,11 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
-# --- Estágio de Cópia dos Modelos (MobileNet-SSD) ---
-# CORREÇÃO: Copia os modelos descarregados manualmente da pasta local
-COPY MobileNetSSD_deploy.prototxt .
-COPY MobileNetSSD_deploy.caffemodel .
+# --- Estágio de Cópia dos Modelos (YOLOv4-tiny) ---
+# Copia os modelos que foram descarregados manualmente para a pasta servico_dms/
+COPY coco.names .
+COPY yolov4-tiny.cfg .
+COPY yolov4-tiny.weights .
 
 # --- Estágio Final ---
 # Copia os scripts da aplicação

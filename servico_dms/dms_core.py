@@ -1,6 +1,6 @@
 # Documentação: Núcleo de Processamento do SistemaDMS
 # Responsável por:
-# 1. Carregar os modelos de IA (Dlib, MobileNet-SSD)
+# 1. Carregar os modelos de IA (Dlib, YOLOv4-tiny)
 # 2. Processar os frames de vídeo para detetar (Sonolência, Distração, Celular)
 
 import cv2
@@ -13,8 +13,10 @@ import math
 
 # --- Constantes de Caminho dos Modelos ---
 DLIB_MODEL_PATH = 'shape_predictor_68_face_landmarks.dat'
-MOBILENET_PROTOTXT_PATH = 'MobileNetSSD_deploy.prototxt'
-MOBILENET_MODEL_PATH = 'MobileNetSSD_deploy.caffemodel'
+# NOVO: Caminhos para os modelos YOLOv4-tiny
+YOLO_CONFIG_PATH = 'yolov4-tiny.cfg'
+YOLO_WEIGHTS_PATH = 'yolov4-tiny.weights'
+YOLO_NAMES_PATH = 'coco.names'
 
 # --- Constantes de Deteção ---
 
@@ -26,25 +28,11 @@ EAR_CONSEC_FRAMES = 15    # Frames consecutivos para alarme
 DISTRACTION_THRESHOLD_ANGLE = 30.0 # Ângulo (graus) para alarme
 DISTRACTION_CONSEC_FRAMES = 25     # Frames consecutivos para alarme
 
-# 3. Celular (MobileNet-SSD)
-# (MODO DEBUG) Baixamos a confiança para ver mais deteções
-CELLPHONE_MIN_CONFIDENCE = 0.2 
-CELLPHONE_CONSEC_FRAMES = 10     # Frames consecutivos para alarme
-
-# --- Mapeamento de Classes MobileNet-SSD (PASCAL VOC) ---
-# Usamos este modelo porque é leve, mas não tem "cell phone".
-# Vamos procurar por "tvmonitor" (ID 20) como um substituto.
-CLASSES_MOBILENET = {
-    0: "background", 1: "aeroplane", 2: "bicycle", 3: "bird", 4: "boat",
-    5: "bottle", 6: "bus", 7: "car", 8: "cat", 9: "chair", 10: "cow",
-    11: "diningtable", 12: "dog", 13: "horse", 14: "motorbike",
-    15: "person", 16: "pottedplant", 17: "sheep", 18: "sofa",
-    19: "train", 20: "tvmonitor" 
-}
-TARGET_CLASS_ID = 20 # ID de "tvmonitor"
-TARGET_CLASS_NAME = "Monitor/Celular" 
-# (MODO DEBUG) Cores para as caixas de depuração
-DEBUG_COLORS = np.random.uniform(0, 255, size=(len(CLASSES_MOBILENET), 3))
+# 3. Celular (YOLOv4-tiny)
+CELLPHONE_MIN_CONFIDENCE = 0.4  # Confiança mínima (YOLO é bom, podemos subir)
+CELLPHONE_NMS_THRESHOLD = 0.3   # Non-Maxima Suppression
+CELLPHONE_CONSEC_FRAMES = 10    # Frames consecutivos para alarme
+TARGET_CLASS_NAME = "cell phone" # Classe exata do dataset COCO
 
 # Índices Dlib para os olhos
 (lStart, lEnd) = (42, 48)
@@ -66,10 +54,11 @@ class DriverMonitor:
         self.dlib_detector = None
         self.dlib_predictor = None
         
-        # Modelos MobileNet-SSD
-        self.mobilenet_net = None
-        self.cellphone_min_conf = CELLPHONE_MIN_CONFIDENCE
-        self.target_class_id = TARGET_CLASS_ID
+        # Modelos YOLOv4-tiny
+        self.yolo_net = None
+        self.yolo_coco_classes = []
+        self.yolo_output_layers = []
+        self.target_class_id = -1 # Será definido no carregamento
 
         # Contadores de Alerta
         self.drowsiness_counter = 0
@@ -78,7 +67,7 @@ class DriverMonitor:
         
         # Inicializa todos os modelos
         self.initialize_dlib_models()
-        self.initialize_mobilenet_model()
+        self.initialize_yolo_model() # NOVO: Carrega YOLO
 
     def initialize_dlib_models(self):
         """Carrega o detetor de face e o preditor de landmarks do Dlib."""
@@ -92,16 +81,38 @@ class DriverMonitor:
             logging.info(">>> Modelos Dlib carregados com sucesso.")
         except Exception as e:
             logging.error(f"!!! ERRO FATAL ao carregar modelos Dlib: {e}", exc_info=True)
-            raise e # Propaga o erro para o app.py
+            raise e
 
-    def initialize_mobilenet_model(self):
-        """Carrega o modelo MobileNet-SSD (Caffe)."""
+    def initialize_yolo_model(self):
+        """Carrega o modelo YOLOv4-tiny (Darknet)."""
         try:
-            logging.info(f">>> Carregando modelo MobileNet-SSD (prototxt e caffemodel)...")
-            self.mobilenet_net = cv2.dnn.readNetFromCaffe(MOBILENET_PROTOTXT_PATH, MOBILENET_MODEL_PATH)
-            logging.info(">>> Modelo MobileNet-SSD carregado com sucesso.")
+            logging.info(f">>> Carregando nomes de classes COCO ({YOLO_NAMES_PATH})...")
+            with open(YOLO_NAMES_PATH, 'r') as f:
+                self.yolo_coco_classes = [line.strip() for line in f.readlines()]
+            
+            # Encontra o ID da classe "cell phone"
+            try:
+                self.target_class_id = self.yolo_coco_classes.index(TARGET_CLASS_NAME)
+                logging.info(f">>> Classe alvo '{TARGET_CLASS_NAME}' encontrada com ID: {self.target_class_id}")
+            except ValueError:
+                logging.error(f"!!! ERRO FATAL: Classe '{TARGET_CLASS_NAME}' não encontrada em {YOLO_NAMES_PATH}")
+                raise
+
+            logging.info(f">>> Carregando modelo YOLOv4-tiny (config e pesos)...")
+            self.yolo_net = cv2.dnn.readNetFromDarknet(YOLO_CONFIG_PATH, YOLO_WEIGHTS_PATH)
+            
+            # Otimizações para OpenCV DNN
+            self.yolo_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.yolo_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            
+            # Obtém os nomes das camadas de saída (necessário para o 'forward')
+            layer_names = self.yolo_net.getLayerNames()
+            # As 'out' layers são as que não estão conectadas
+            self.yolo_output_layers = [layer_names[i - 1] for i in self.yolo_net.getUnconnectedOutLayers().flatten()]
+
+            logging.info(">>> Modelo YOLOv4-tiny carregado com sucesso.")
         except Exception as e:
-            logging.error(f"!!! ERRO FATAL ao carregar modelo MobileNet-SSD: {e}", exc_info=True)
+            logging.error(f"!!! ERRO FATAL ao carregar modelo YOLOv4-tiny: {e}", exc_info=True)
             raise e
 
     def _eye_aspect_ratio(self, eye):
@@ -115,7 +126,6 @@ class DriverMonitor:
     def _estimate_head_pose(self, shape_np):
         """Estima a pose da cabeça (para onde o motorista está a olhar)."""
         
-        # Pontos de referência faciais 3D (modelo genérico)
         model_points = np.array([
                                 (0.0, 0.0, 0.0),      # Ponta do nariz (30)
                                 (0.0, -330.0, -65.0),  # Queixo (8)
@@ -125,7 +135,6 @@ class DriverMonitor:
                                 (150.0, -150.0, -125.0)  # Canto da boca direito (54)
                             ])
         
-        # Parâmetros da câmara (assumidos)
         focal_length = self.frame_width
         center = (self.frame_width / 2, self.frame_height / 2)
         camera_matrix = np.array(
@@ -134,16 +143,15 @@ class DriverMonitor:
                                 [0, 0, 1]], dtype = "double"
                                 )
         
-        dist_coeffs = np.zeros((4,1)) # Assumindo sem distorção de lente
+        dist_coeffs = np.zeros((4,1)) 
 
-        # Pontos 2D correspondentes do Dlib
         image_points = np.array([
-                                shape_np[30], # Ponta do nariz
-                                shape_np[8],  # Queixo
-                                shape_np[36], # Canto do olho esquerdo
-                                shape_np[45], # Canto do olho direito
-                                shape_np[48], # Canto da boca esquerdo
-                                shape_np[54]  # Canto da boca direito
+                                shape_np[30], 
+                                shape_np[8],  
+                                shape_np[36], 
+                                shape_np[45], 
+                                shape_np[48], 
+                                shape_np[54]  
                             ], dtype="double")
         
         try:
@@ -151,14 +159,14 @@ class DriverMonitor:
             (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
             angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
             
-            yaw = angles[1]   # Olhar para os lados
-            pitch = angles[0] # Olhar para cima/baixo
-            roll = angles[2]  # Inclinação
+            yaw = angles[1]   
+            pitch = angles[0] 
+            roll = angles[2]  
             
             return yaw, pitch, roll
         except Exception as e:
             logging.debug(f"Erro ao calcular pose da cabeça: {e}")
-            return 0, 0, 0 # Retorna 0 se falhar
+            return 0, 0, 0
 
     def _shape_to_np(self, shape):
         """Converte o objeto de landmarks do Dlib para um array NumPy."""
@@ -168,34 +176,79 @@ class DriverMonitor:
         return coords
 
     def _detect_cell_phone(self, frame):
-        """Executa a deteção de objetos com MobileNet-SSD."""
+        """Executa a deteção de objetos com YOLOv4-tiny."""
+        
+        # Listas para guardar as deteções
+        boxes = []
+        confidences = []
+        class_ids = []
+        found_cellphone = False
+
         try:
             # Cria um "blob" (imagem processada) para a rede neural
-            blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5)
+            # (416, 416) é o tamanho de entrada do YOLOv4-tiny
+            blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (416, 416), swapRB=True, crop=False)
             
-            # Passa o blob pela rede
-            self.mobilenet_net.setInput(blob)
-            detections = self.mobilenet_net.forward()
-            return detections
+            self.yolo_net.setInput(blob)
+            layer_outputs = self.yolo_net.forward(self.yolo_output_layers)
+
+            # Itera sobre as saídas da camada YOLO
+            for output in layer_outputs:
+                for detection in output:
+                    scores = detection[5:]
+                    class_id = np.argmax(scores)
+                    confidence = scores[class_id]
+                    
+                    # Verifica se é um telemóvel E se tem confiança suficiente
+                    if class_id == self.target_class_id and confidence > CELLPHONE_MIN_CONFIDENCE:
+                        # Escala a caixa de volta para o tamanho original do frame
+                        box = detection[0:4] * np.array([self.frame_width, self.frame_height, self.frame_width, self.frame_height])
+                        (centerX, centerY, width, height) = box.astype("int")
+                        
+                        # Converte (centroX, centroY) para (x, y) do canto superior esquerdo
+                        x = int(centerX - (width / 2))
+                        y = int(centerY - (height / 2))
+                        
+                        boxes.append([x, y, int(width), int(height)])
+                        confidences.append(float(confidence))
+                        class_ids.append(class_id)
+
+            # Aplica Non-Maxima Suppression (NMS) para remover caixas sobrepostas
+            indices = cv2.dnn.NMSBoxes(boxes, confidences, CELLPHONE_MIN_CONFIDENCE, CELLPHONE_NMS_THRESHOLD)
+            
+            if len(indices) > 0:
+                found_cellphone = True
+                # Itera apenas sobre os índices mantidos pelo NMS
+                for i in indices.flatten():
+                    (x, y) = (boxes[i][0], boxes[i][1])
+                    (w, h) = (boxes[i][2], boxes[i][3])
+                    
+                    # Desenha a caixa de deteção
+                    color = (255, 255, 0) # Ciano
+                    label = f"{TARGET_CLASS_NAME}: {confidences[i]:.2f}"
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                    cv2.putText(frame, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            return found_cellphone
+
         except Exception as e:
-            logging.warning(f"Falha ao executar a rede MobileNet-SSD: {e}")
-            return None
+            logging.warning(f"Falha ao executar a rede YOLOv4-tiny: {e}")
+            return False
+
 
     def process_frame(self, frame, gray):
         """
         Função principal que processa um único frame.
-        Recebe o frame colorido (para MobileNet) e em escala de cinza (para Dlib).
-        Retorna o frame com os desenhos e uma tupla de alarmes.
         """
         
-        # --- 1. Deteção de Rosto e Landmarks ---
+        # --- 1. Deteção de Rosto e Landmarks (Dlib) ---
         rects = self.dlib_detector(gray, 0)
         
         alarm_drowsy = False
         alarm_distraction = False
 
         if len(rects) > 0:
-            rect = rects[0] # Assume o primeiro rosto como o motorista
+            rect = rects[0]
             shape = self.dlib_predictor(gray, rect)
             shape_np = self._shape_to_np(shape)
 
@@ -206,7 +259,6 @@ class DriverMonitor:
             rightEAR = self._eye_aspect_ratio(rightEye)
             ear = (leftEAR + rightEAR) / 2.0
 
-            # Desenha os contornos dos olhos
             leftEyeHull = cv2.convexHull(leftEye)
             rightEyeHull = cv2.convexHull(rightEye)
             cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
@@ -231,63 +283,27 @@ class DriverMonitor:
             else:
                 self.distraction_counter = 0
                 
-            # Desenha infos de debug
             cv2.putText(frame, f"EAR: {ear:.2f}", (self.frame_width - 150, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Yaw: {yaw:.1f}", (self.frame_width - 150, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
         else:
-            # Se nenhuma face for detetada, reinicia os contadores
             self.drowsiness_counter = 0
             self.distraction_counter = 0
 
-        # --- 3. Deteção de Celular (MobileNet-SSD) ---
-        detections = self._detect_cell_phone(frame)
+        # --- 3. Deteção de Celular (YOLOv4-tiny) ---
+        found_cellphone = self._detect_cell_phone(frame)
         alarm_cellphone = False
         
-        if detections is not None:
-            # Loop sobre todas as deteções
-            for i in np.arange(0, detections.shape[2]):
-                confidence = detections[0, 0, i, 2]
-                
-                # (MODO DEBUG) Verificamos se a confiança é maior que o nosso limite baixo
-                if confidence > self.cellphone_min_conf:
-                    idx = int(detections[0, 0, i, 1])
-                    
-                    # Pega o nome da classe e a cor
-                    class_name = CLASSES_MOBILENET.get(idx, "desconhecido")
-                    color = DEBUG_COLORS[idx]
-
-                    # Calcula a caixa (bounding box)
-                    box = detections[0, 0, i, 3:7] * np.array([self.frame_width, self.frame_height, self.frame_width, self.frame_height])
-                    (startX, startY, endX, endY) = box.astype("int")
-
-                    # (MODO DEBUG) Desenha a caixa e o rótulo de TUDO o que for detetado
-                    label = f"{class_name}: {confidence:.2f}"
-                    cv2.rectangle(frame, (startX, startY), (endX, endY), color, 2)
-                    y = startY - 15 if startY - 15 > 15 else startY + 15
-                    cv2.putText(frame, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                    # Agora, verificamos se este objeto é o nosso ALVO (tvmonitor)
-                    if idx == self.target_class_id:
-                        self.cellphone_counter += 1
-                        if self.cellphone_counter >= CELLPHONE_CONSEC_FRAMES:
-                            alarm_cellphone = True
-                            logging.warning(f"DETEÇÃO DE {TARGET_CLASS_NAME} (Conf: {confidence:.2f})")
-                    # (Não reinicia o contador se outro objeto for visto,
-                    #  apenas se o telemóvel não for visto em nenhum loop)
-
-            # Se o telemóvel não foi detetado NENHUMA vez neste frame
-            if not alarm_cellphone:
-                 # Esta lógica está um pouco simplista, mas por agora:
-                 # Se não houve deteção do alvo, reinicia o contador
-                 # (Uma lógica melhor seria verificar se alguma deteção foi o alvo)
-                 
-                 # Vamos simplificar: se o alvo não foi detetado, reinicia
-                 found_target = any(int(detections[0, 0, i, 1]) == self.target_class_id and detections[0, 0, i, 2] > self.cellphone_min_conf for i in np.arange(0, detections.shape[2]))
-                 if not found_target:
-                     self.cellphone_counter = 0
+        if found_cellphone:
+            self.cellphone_counter += 1
+            if self.cellphone_counter >= CELLPHONE_CONSEC_FRAMES:
+                alarm_cellphone = True
+                # (O logging já é feito dentro do _detect_cell_phone se quisermos)
+                # Adicionamos um log principal de ALARME
+                logging.warning(f"ALARME DE {TARGET_CLASS_NAME.upper()}!")
+        else:
+            self.cellphone_counter = 0
 
 
         # --- 4. Desenha os Alertas Visuais Finais ---
@@ -298,7 +314,8 @@ class DriverMonitor:
              cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 60),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
         if alarm_cellphone:
-             cv2.putText(frame, f"ALERTA: {TARGET_CLASS_NAME}!", (10, 90),
+             # O nome da classe já é "cell phone", usamos o TARGET_CLASS_NAME
+             cv2.putText(frame, f"ALERTA: {TARGET_CLASS_NAME.upper()}!", (10, 90),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
         return frame, (alarm_drowsy, alarm_distraction, alarm_cellphone)
