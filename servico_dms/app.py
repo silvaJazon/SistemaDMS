@@ -136,7 +136,10 @@ def detection_loop():
             time_start = time.time()
             
             # 1. Obter o frame mais recente da thread da câmara
-            frame = cam_thread.read()
+            # --- CORREÇÃO AQUI ---
+            # A classe CameraThread armazena o frame na variável .frame
+            frame = cam_thread.frame
+            
             if frame is None:
                 logging.warning("Frame não recebido da câmara. A aguardar...")
                 time.sleep(0.5)
@@ -186,7 +189,6 @@ if __name__ == '__main__':
         # 3. Inicializa e inicia a thread da câmara
         logging.info(f">>> A iniciar thread da câmara (Fonte: {VIDEO_SOURCE})...")
         
-        # --- CORREÇÃO FINAL AQUI ---
         # A CameraThread também precisa da largura e altura
         cam_thread = CameraThread(VIDEO_SOURCE, 
                                 FRAME_WIDTH_DISPLAY, 
