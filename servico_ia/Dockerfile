@@ -1,45 +1,49 @@
-# Documentação: Dockerfile para o Serviço de IA do Projeto FluxoAI (Fase 3)
+# Documentação: Dockerfile para o Serviço de IA do Projeto FluxoAI (Monolítico YOLOv8)
 # Baseado em Python 3.9, otimizado para Raspberry Pi (arm64)
 
 # --- Estágio Base ---
-# Usamos a imagem oficial Python 3.9 slim (Debian Bullseye), compatível com arm64.
 FROM python:3.9-slim-bullseye AS base
-
-# Define o diretório de trabalho dentro do contentor.
 WORKDIR /app
 
 # --- Estágio de Dependências ---
-# Copia apenas o ficheiro de requisitos primeiro para aproveitar o cache do Docker.
 COPY requirements.txt .
 
-# Documentação:
-# Instala as dependências de sistema necessárias ANTES das dependências Python.
-# - libgl1-mesa-glx, libglib2.0-0: Bibliotecas essenciais para o OpenCV funcionar sem interface gráfica.
-# Usamos "--no-install-recommends" para manter a instalação mais leve.
-# Limpamos o cache do apt no final para reduzir o tamanho da imagem.
-# NOTA: Removemos curl pois não é mais necessário durante o build.
+# Instala dependências de sistema (OpenCV) e ferramentas (curl, unzip)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgl1-mesa-glx \
         libglib2.0-0 \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Documentação:
-# Instala as bibliotecas Python definidas no requirements.txt.
-# Usamos "--no-cache-dir" para manter a imagem final mais pequena.
+# Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- Estágio Final ---
-# Copia todo o código E os ficheiros do modelo (que já descarregamos manualmente) para dentro do contentor.
-# O Dockerfile assume que model.tflite e labels.txt estão na mesma pasta que ele.
-COPY . .
+# --- Estágio de Download do Modelo (YOLOv8s) ---
+# Descarrega o modelo YOLOv8s TFLite (quantizado por inteiros)
+RUN curl -L \
+    "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8s-int8.tflite" \
+    -o model.tflite
 
-# Documentação:
-# Expõe a porta 5000, que o nosso servidor Flask vai usar para o stream de vídeo.
+# Descarrega o ficheiro de etiquetas COCO (80 classes)
+# Nota: O ID de 'person' neste ficheiro é 0, o que o nosso script espera.
+RUN curl -L \
+    "https://raw.githubusercontent.com/ultralytics/ultralytics/main/ultralytics/cfg/datasets/coco8.yaml" \
+    -o coco.yaml && \
+    # Extrai apenas os nomes das etiquetas do ficheiro yaml e guarda em labels.txt
+    grep -oP '(?<=names:\n)([\s\S]*?)(?=\n\n)' coco.yaml | \
+    sed -e 's/^[ ]*- //g' -e "s/'//g" > labels.txt && \
+    rm coco.yaml
+
+# --- Estágio Final ---
+# Copia apenas o script principal (o resto já está na imagem)
+COPY main.py .
+
+# Expõe a porta do Flask
 EXPOSE 5000
 
-# Documentação:
-# Comando que será executado quando o contentor iniciar.
-# Executa o nosso script Python principal.
+# Comando de execução
 CMD ["python", "main.py"]
+
+    
 

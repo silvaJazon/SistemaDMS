@@ -32,13 +32,13 @@ FRAME_WIDTH_DISPLAY = 640  # Largura para exibir no stream
 FRAME_HEIGHT_DISPLAY = 480 # Altura para exibir no stream
 MODEL_PATH = 'model.tflite' # IMPORTANTE: Este deve ser um modelo YOLOv8s-TFLite
 LABELS_PATH = 'labels.txt'
-DETECTION_THRESHOLD = 0.70 # OTIMIZAÇÃO: Aumentado para maior precisão
+DETECTION_THRESHOLD = float(os.environ.get('DETECTION_THRESHOLD', 0.70)) # OTIMIZAÇÃO: Aumentado para maior precisão
 TARGET_LABEL = 'person'
-PROCESS_EVERY_N_FRAMES = 3 # OTIMIZAÇÃO: Reduzido para melhor precisão temporal
+PROCESS_EVERY_N_FRAMES = int(os.environ.get('PROCESS_EVERY_N_FRAMES', 3)) # OTIMIZAÇÃO: Reduzido para melhor precisão temporal
 JPEG_QUALITY = 35 # OTIMIZAÇÃO: Qualidade do JPEG mais baixa (35) para reduzir o trabalho de encode no RPi
 LOITERING_THRESHOLD_SECONDS = 10 # Tempo (em segundos) parado para considerar atitude suspeita
-LOITERING_MAX_DISTANCE = 50 # OTIMIZAÇÃO: Aumentado para tolerar pequenos movimentos
-MIN_BOX_SIZE = 40 # OTIMIZAÇÃO: Aumentado para filtrar falsos positivos
+LOITERING_MAX_DISTANCE = int(os.environ.get('LOITERING_MAX_DISTANCE', 50)) # OTIMIZAÇÃO: Aumentado para tolerar pequenos movimentos
+MIN_BOX_SIZE = int(os.environ.get('MIN_BOX_SIZE', 40)) # OTIMIZAÇÃO: Aumentado para filtrar falsos positivos
 
 # --- Variáveis Globais ---
 output_frame_display = None
