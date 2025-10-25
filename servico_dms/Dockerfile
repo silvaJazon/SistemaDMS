@@ -1,6 +1,5 @@
 # Documentação: Dockerfile para o Serviço DMS
-# Instala Python, OpenCV e Dlib
-# Copia os modelos Dlib, YOLOv4-tiny (COCO) localmente.
+# Foca-se apenas no Dlib (Sonolência e Distração) para otimizar o desempenho no RPi
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -10,6 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instala dependências de sistema
+# Essencial: cmake e g++ são necessários para COMPILAR o 'dlib' via pip
+# Essencial: bzip2 é necessário para descompactar o modelo de landmarks
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgl1-mesa-glx \
@@ -21,7 +22,7 @@ RUN apt-get update && \
         bzip2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala dependências Python
+# Instala dependências Python (dlib, opencv-python-headless, flask, numpy, scipy)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Estágio de Download do Modelo (Dlib) ---
@@ -30,14 +31,8 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
-# --- Estágio de Cópia dos Modelos (YOLOv4-tiny) ---
-# Copia os modelos que foram descarregados manualmente para a pasta servico_dms/
-COPY coco.names .
-COPY yolov4-tiny.cfg .
-COPY yolov4-tiny.weights .
-
 # --- Estágio Final ---
-# Copia os scripts da aplicação
+# Copia os 3 ficheiros principais da nossa aplicação refatorada
 COPY app.py .
 COPY dms_core.py .
 COPY camera_thread.py .

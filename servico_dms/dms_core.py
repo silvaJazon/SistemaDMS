@@ -1,7 +1,7 @@
 # Documentação: Núcleo de Processamento do SistemaDMS
 # Responsável por:
-# 1. Carregar os modelos de IA (Dlib, YOLOv4-tiny)
-# 2. Processar os frames de vídeo para detetar (Sonolência, Distração, Celular)
+# 1. Carregar os modelos de IA (Dlib)
+# 2. Processar os frames de vídeo para detetar (Sonolência, Distração)
 
 import cv2
 import time
@@ -13,29 +13,16 @@ import math
 
 # --- Constantes de Caminho dos ModelOS ---
 DLIB_MODEL_PATH = 'shape_predictor_68_face_landmarks.dat'
-YOLO_CONFIG_PATH = 'yolov4-tiny.cfg'
-YOLO_WEIGHTS_PATH = 'yolov4-tiny.weights'
-YOLO_NAMES_PATH = 'coco.names'
 
 # --- Constantes de Deteção ---
 
 # 1. Sonolência (EAR)
-EAR_THRESHOLD = 0.25
-EAR_CONSEC_FRAMES = 15
+EAR_THRESHOLD = 0.25      # Limite do Eye Aspect Ratio (Valores mais baixos = mais difícil de detetar)
+EAR_CONSEC_FRAMES = 15    # Frames consecutivos para alarme (Valores mais altos = menos sensível)
 
 # 2. Distração (Pose da Cabeça)
-DISTRACTION_THRESHOLD_ANGLE = 30.0
-DISTRACTION_CONSEC_FRAMES = 25
-
-# 3. Celular (YOLOv4-tiny)
-# (OTIMIZAÇÃO) Baixamos a confiança para 0.25 para ser mais sensível
-CELLPHONE_MIN_CONFIDENCE = 0.25
-CELLPHONE_NMS_THRESHOLD = 0.3
-CELLPHONE_CONSEC_FRAMES = 10 # Se o FPS for 10, isto é 1 segundo
-TARGET_CLASS_NAME = "cell phone"
-
-# (OTIMIZAÇÃO AVANÇADA) Só executamos o YOLO a cada N frames
-YOLO_FRAME_SKIP = 8 
+DISTRACTION_THRESHOLD_ANGLE = 30.0 # Ângulo (graus) para alarme (Valores mais altos = menos sensível)
+DISTRACTION_CONSEC_FRAMES = 25     # Frames consecutivos para alarme (Valores mais altos = menos sensível)
 
 # Índices Dlib para os olhos
 (lStart, lEnd) = (42, 48)
@@ -43,7 +30,7 @@ YOLO_FRAME_SKIP = 8
 
 class DriverMonitor:
     """
-    Classe principal que encapsula toda a lógica de deteção de IA.
+    Classe principal que encapsula toda a lógica de deteção de IA (apenas Dlib).
     """
     
     def __init__(self, frame_size):
@@ -56,24 +43,11 @@ class DriverMonitor:
         self.dlib_detector = None
         self.dlib_predictor = None
         
-        # Modelos YOLOv4-tiny
-        self.yolo_net = None
-        self.yolo_coco_classes = []
-        self.yolo_output_layers = []
-        self.target_class_id = -1
-
         # Contadores de Alerta
         self.drowsiness_counter = 0
         self.distraction_counter = 0
-        self.cellphone_counter = 0
-        
-        # (OTIMIZAÇÃO AVANÇADA) Contadores para decoupling
-        self.frame_counter = 0
-        self.cellphone_detected_in_last_check = False # "Memória" da deteção do telemóvel
-
         
         self.initialize_dlib_models()
-        self.initialize_yolo_model()
 
     def initialize_dlib_models(self):
         """Carrega o detetor de face e o preditor de landmarks do Dlib."""
@@ -87,34 +61,6 @@ class DriverMonitor:
             logging.info(">>> Modelos Dlib carregados com sucesso.")
         except Exception as e:
             logging.error(f"!!! ERRO FATAL ao carregar modelos Dlib: {e}", exc_info=True)
-            raise e
-
-    def initialize_yolo_model(self):
-        """Carrega o modelo YOLOv4-tiny (Darknet)."""
-        try:
-            logging.info(f">>> Carregando nomes de classes COCO ({YOLO_NAMES_PATH})...")
-            with open(YOLO_NAMES_PATH, 'r') as f:
-                self.yolo_coco_classes = [line.strip() for line in f.readlines()]
-            
-            try:
-                self.target_class_id = self.yolo_coco_classes.index(TARGET_CLASS_NAME)
-                logging.info(f">>> Classe alvo '{TARGET_CLASS_NAME}' encontrada com ID: {self.target_class_id}")
-            except ValueError:
-                logging.error(f"!!! ERRO FATAL: Classe '{TARGET_CLASS_NAME}' não encontrada em {YOLO_NAMES_PATH}")
-                raise
-
-            logging.info(f">>> Carregando modelo YOLOv4-tiny (config e pesos)...")
-            self.yolo_net = cv2.dnn.readNetFromDarknet(YOLO_CONFIG_PATH, YOLO_WEIGHTS_PATH)
-            
-            self.yolo_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-            self.yolo_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-            
-            layer_names = self.yolo_net.getLayerNames()
-            self.yolo_output_layers = [layer_names[i - 1] for i in self.yolo_net.getUnconnectedOutLayers().flatten()]
-
-            logging.info(">>> Modelo YOLOv4-tiny carregado com sucesso.")
-        except Exception as e:
-            logging.error(f"!!! ERRO FATAL ao carregar modelo YOLOv4-tiny: {e}", exc_info=True)
             raise e
 
     def _eye_aspect_ratio(self, eye):
@@ -177,77 +123,21 @@ class DriverMonitor:
             coords[i] = (shape.part(i).x, shape.part(i).y)
         return coords
 
-    def _detect_cell_phone(self, frame):
-        """Executa a deteção de objetos com YOLOv4-tiny."""
-        
-        boxes = []
-        confidences = []
-        class_ids = []
-        found_cellphone = False
-
-        try:
-            blob = cv2.dnn.blobFromImage(frame, 1 / 255.0, (416, 416), swapRB=True, crop=False)
-            
-            self.yolo_net.setInput(blob)
-            layer_outputs = self.yolo_net.forward(self.yolo_output_layers)
-
-            for output in layer_outputs:
-                for detection in output:
-                    scores = detection[5:]
-                    class_id = np.argmax(scores)
-                    confidence = scores[class_id]
-                    
-                    if class_id == self.target_class_id and confidence > CELLPHONE_MIN_CONFIDENCE:
-                        box = detection[0:4] * np.array([self.frame_width, self.frame_height, self.frame_width, self.frame_height])
-                        (centerX, centerY, width, height) = box.astype("int")
-                        
-                        x = int(centerX - (width / 2))
-                        y = int(centerY - (height / 2))
-                        
-                        boxes.append([x, y, int(width), int(height)])
-                        confidences.append(float(confidence))
-                        class_ids.append(class_id)
-
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, CELLPHONE_MIN_CONFIDENCE, CELLPHONE_NMS_THRESHOLD)
-            
-            if len(indices) > 0:
-                found_cellphone = True
-                for i in indices.flatten():
-                    (x, y) = (boxes[i][0], boxes[i][1])
-                    (w, h) = (boxes[i][2], boxes[i][3])
-                    
-                    color = (255, 255, 0) # Ciano
-                    label = f"{TARGET_CLASS_NAME}: {confidences[i]:.2f}"
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                    cv2.putText(frame, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-            
-            return found_cellphone
-
-        except Exception as e:
-            logging.warning(f"Falha ao executar a rede YOLOv4-tiny: {e}")
-            return False
-
-
     def process_frame(self, frame, gray):
         """
         Função principal que processa um único frame.
         """
         
         # --- 1. Deteção de Rosto e Landmarks (Dlib) ---
-        # (OTIMIZAÇÃO) Dlib corre em todos os frames
         rects = self.dlib_detector(gray, 0)
         
         alarm_drowsy = False
         alarm_distraction = False
-        alarm_cellphone = False # Começa como Falso
 
         if len(rects) > 0:
             rect = rects[0]
             shape = self.dlib_predictor(gray, rect)
             shape_np = self._shape_to_np(shape)
-
-            # (OTIMIZAÇÃO) Incrementa o contador de frames aqui
-            self.frame_counter += 1
 
             # --- 1a. Verificação de Sonolência (EAR) ---
             leftEye = shape_np[lStart:lEnd]
@@ -284,29 +174,11 @@ class DriverMonitor:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Yaw: {yaw:.1f}", (self.frame_width - 150, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-            # --- 3. Deteção de Celular (YOLOv4-tiny) ---
-            # (OTIMIZAÇÃO AVANÇADA) Só executamos o YOLO (lento) a cada N frames
-            if self.frame_counter % YOLO_FRAME_SKIP == 0:
-                # Corre a deteção pesada e atualiza a "memória"
-                self.cellphone_detected_in_last_check = self._detect_cell_phone(frame)
-            
-            # A lógica do alarme usa o resultado da última verificação ("memória")
-            if self.cellphone_detected_in_last_check:
-                self.cellphone_counter += 1
-                if self.cellphone_counter >= CELLPHONE_CONSEC_FRAMES:
-                    alarm_cellphone = True
-                    logging.warning(f"ALARME DE {TARGET_CLASS_NAME.upper()}!")
-            else:
-                self.cellphone_counter = 0
-
+        
         else:
-            # (OTIMIZAÇÃO) Se nenhum rosto for detetado, reinicia TODOS os contadores
+            # Se nenhum rosto for detetado, reinicia os contadores
             self.drowsiness_counter = 0
             self.distraction_counter = 0
-            self.cellphone_counter = 0
-            self.frame_counter = 0 # Reinicia o contador de frames
-            self.cellphone_detected_in_last_check = False # Limpa a "memória"
 
 
         # --- 4. Desenha os Alertas Visuais Finais ---
@@ -316,9 +188,6 @@ class DriverMonitor:
         if alarm_distraction:
              cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 60),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-        if alarm_cellphone:
-             cv2.putText(frame, f"ALERTA: {TARGET_CLASS_NAME.upper()}!", (10, 90),
-                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
-        return frame, (alarm_drowsy, alarm_distraction, alarm_cellphone)
+        return frame, (alarm_drowsy, alarm_distraction, False) # Retorna 'False' para o alarme de celular
 
