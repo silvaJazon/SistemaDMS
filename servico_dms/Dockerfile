@@ -1,5 +1,5 @@
-# Documentação: Dockerfile para o Serviço DMS (Fase 3.2: MobileNet-SSD)
-# Instala Python, OpenCV, Dlib e descarrega os modelos MobileNet-SSD.
+# Documentação: Dockerfile para o Serviço DMS
+# Versão 3: Usa MobileNet-SSD e copia os modelos localmente (em vez de curl)
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -24,15 +24,15 @@ RUN apt-get update && \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Estágio de Download do Modelo (Dlib) ---
-# O Dlib ainda descarregamos porque é fiável
+# Descarrega o modelo de 68 pontos de referência faciais
 RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o landmarks.dat.bz2 && \
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
-# --- Estágio de Download do Modelo (MobileNet-SSD) ---
-# Em vez de YOLO, descarregamos o MobileNet-SSD (mais leve)
-RUN curl -L "https://github.com/opencv/opencv/raw/3.4.0/samples/dnn/MobileNetSSD_deploy.prototxt" -o MobileNetSSD_deploy.prototxt && \
-    curl -L "https://github.com/opencv/opencv_extra/raw/3.4.0/testdata/dnn/MobileNetSSD_deploy.caffemodel" -o MobileNetSSD_deploy.caffemodel
+# --- Estágio de Cópia dos Modelos (MobileNet-SSD) ---
+# CORREÇÃO: Copia os modelos descarregados manualmente da pasta local
+COPY MobileNetSSD_deploy.prototxt .
+COPY MobileNetSSD_deploy.caffemodel .
 
 # --- Estágio Final ---
 # Copia os scripts da aplicação
@@ -43,6 +43,6 @@ COPY camera_thread.py .
 # Expõe a porta do Flask
 EXPOSE 5000
 
-# Comando de execução (agora usa app.py)
+# Comando de execução
 CMD ["python", "app.py"]
 
