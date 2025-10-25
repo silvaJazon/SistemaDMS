@@ -42,10 +42,10 @@ ROTATION_DEGREES = int(os.environ.get('ROTATE_FRAME', "0"))
 # ------------------------------------
 
 # --- NOVO: Alvo de Desempenho ---
-# O Raspberry Pi 4 consegue processar (Dlib) a cerca de 8 FPS.
+# O Raspberry Pi 4 consegue processar (Dlib) a cerca de 7 FPS (0.14s).
 # Definir um alvo realista evita os avisos de "LOOP LENTO".
-TARGET_FPS = 8 # Alvo realista (anteriormente era 15)
-TARGET_FRAME_TIME = 1.0 / TARGET_FPS # (ex: 1/8 = 0.125 segundos)
+TARGET_FPS = 7 # Alvo realista (anteriormente era 8)
+TARGET_FRAME_TIME = 1.0 / TARGET_FPS # (ex: 1/7 = ~0.142 segundos)
 # ---------------------------------
 
 # --- Variáveis Globais ---
@@ -113,7 +113,7 @@ def index():
         <body>
             <h1>SistemaDMS - Monitoramento ao Vivo</h1>
             <p>Fonte: Câmara {{ source }} | Resolução: {{ width }}x{{ height }}</p>
-            <div class="stream-container">
+            <div class.stream-container">
                 <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
             </div>
             
