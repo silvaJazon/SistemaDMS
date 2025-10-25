@@ -143,6 +143,7 @@ def detection_loop():
                 continue
                 
             # 2. Redimensionar o frame para o tamanho de processamento
+            # (O camera_thread já deve fornecer no tamanho certo, mas garantimos)
             frame_display = cv2.resize(frame, (FRAME_WIDTH_DISPLAY, FRAME_HEIGHT_DISPLAY))
             
             # 3. Converter para escala de cinza (necessário para Dlib)
@@ -176,7 +177,6 @@ if __name__ == '__main__':
     logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
     
     try:
-        # --- CORREÇÃO AQUI ---
         # 1. Define o frame_size que o DriverMonitor espera
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
@@ -185,7 +185,12 @@ if __name__ == '__main__':
         
         # 3. Inicializa e inicia a thread da câmara
         logging.info(f">>> A iniciar thread da câmara (Fonte: {VIDEO_SOURCE})...")
-        cam_thread = CameraThread(VIDEO_SOURCE)
+        
+        # --- CORREÇÃO FINAL AQUI ---
+        # A CameraThread também precisa da largura e altura
+        cam_thread = CameraThread(VIDEO_SOURCE, 
+                                FRAME_WIDTH_DISPLAY, 
+                                FRAME_HEIGHT_DISPLAY)
         cam_thread.start()
         
         # 4. Inicia o loop de deteção (em background)
