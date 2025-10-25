@@ -210,7 +210,8 @@ def detection_loop():
         
         # 2. Converter para Preto e Branco (Gray)
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR_GRAY)
+            # CORREÇÃO: Alterado de cv2.COLOR_BGR_GRAY para cv2.COLOR_BGR2GRAY
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         except cv2.error as e:
             logging.warning(f"Erro ao converter frame para gray: {e}")
             continue
