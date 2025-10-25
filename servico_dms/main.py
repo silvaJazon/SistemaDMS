@@ -1,5 +1,5 @@
 # Documentação: Script principal para o SistemaDMS (Monolítico)
-# Fase 1: Deteção de Sonolência (Eye Aspect Ratio - EAR)
+# Fase 2: Deteção de Sonolência (EAR) + Deteção de Distração (Pose da Cabeça)
 
 import cv2
 import time
@@ -11,6 +11,7 @@ import sys
 from flask import Flask, Response, render_template_string
 import dlib # Biblioteca para deteção de face e landmarks
 from scipy.spatial import distance as dist # Para calcular a distância euclidiana
+import math # Para a matemática da Pose da Cabeça
 
 # Habilita otimizações do OpenCV
 cv2.setUseOptimized(True)
@@ -30,9 +31,16 @@ FRAME_HEIGHT_DISPLAY = 480
 MODEL_PATH = 'shape_predictor_68_face_landmarks.dat' # Modelo Dlib
 JPEG_QUALITY = 50 
 
-# --- Configurações de Sonolência ---
+# --- Configurações de Alerta ---
+# Sonolência
 EAR_THRESHOLD = 0.25 # Limite do Eye Aspect Ratio para considerar "fechado"
 EAR_CONSEC_FRAMES = 15 # Número de frames consecutivos com olhos fechados para disparar o alarme
+
+# Distração (Pose da Cabeça)
+DISTRACTION_THRESHOLD_ANGLE = 30.0 # Ângulo (em graus) para considerar "distraído"
+DISTRACTION_CONSEC_FRAMES = 25 # Número de frames consecutivos distraído para disparar o alarme
+
+# Índices dos landmarks do Dlib
 EYE_AR_LEFT_START = 42
 EYE_AR_LEFT_END = 48
 EYE_AR_RIGHT_START = 36
@@ -46,21 +54,72 @@ detector = None
 predictor = None
 (lStart, lEnd) = (EYE_AR_LEFT_START, EYE_AR_LEFT_END)
 (rStart, rEnd) = (EYE_AR_RIGHT_START, EYE_AR_RIGHT_END)
-alarm_counter = 0 # Contador de frames com olhos fechados
-alarm_on = False # Se o alarme está ativo
+
+# Contadores de Alerta
+drowsiness_counter = 0 # Contador para sonolência
+distraction_counter = 0 # Contador para distração
 
 # --- Funções Auxiliares ---
 
 def eye_aspect_ratio(eye):
     """Calcula a distância euclidiana entre os pontos verticais e horizontais do olho."""
-    # Pontos verticais
     A = dist.euclidean(eye[1], eye[5])
     B = dist.euclidean(eye[2], eye[4])
-    # Ponto horizontal
     C = dist.euclidean(eye[0], eye[3])
-    # Cálculo do EAR
     ear = (A + B) / (2.0 * C)
     return ear
+
+def estimate_head_pose(shape, frame_size):
+    """Estima a pose da cabeça (para onde o motorista está a olhar)."""
+    
+    # Pontos de referência faciais 3D (modelo genérico)
+    model_points = np.array([
+                            (0.0, 0.0, 0.0),             # Ponta do nariz (30)
+                            (0.0, -330.0, -65.0),        # Queixo (8)
+                            (-225.0, 170.0, -135.0),     # Canto do olho esquerdo (36)
+                            (225.0, 170.0, -135.0),      # Canto do olho direito (45)
+                            (-150.0, -150.0, -125.0),    # Canto da boca esquerdo (48)
+                            (150.0, -150.0, -125.0)     # Canto da boca direito (54)
+                        ])
+    
+    # Parâmetros da câmara (assumidos)
+    focal_length = frame_size[1]
+    center = (frame_size[1]/2, frame_size[0]/2)
+    camera_matrix = np.array(
+                             [[focal_length, 0, center[0]],
+                             [0, focal_length, center[1]],
+                             [0, 0, 1]], dtype = "double"
+                             )
+    
+    dist_coeffs = np.zeros((4,1)) # Assumindo sem distorção de lente
+
+    # Pontos 2D correspondentes do Dlib
+    image_points = np.array([
+                            shape[30],     # Ponta do nariz
+                            shape[8],      # Queixo
+                            shape[36],     # Canto do olho esquerdo
+                            shape[45],     # Canto do olho direito
+                            shape[48],     # Canto da boca esquerdo
+                            shape[54]      # Canto da boca direito
+                        ], dtype="double")
+    
+    try:
+        # Resolve a pose da cabeça
+        (success, rotation_vector, translation_vector) = cv2.solvePnP(model_points, image_points, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+
+        # Converte o vetor de rotação em ângulos de Euler (pitch, yaw, roll)
+        (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
+        angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
+
+        # Ângulos em graus (Yaw é o mais importante para distração lateral)
+        yaw = angles[1]
+        pitch = angles[0]
+        roll = angles[2]
+        
+        return yaw, pitch, roll
+    except Exception as e:
+        logging.debug(f"Erro ao calcular pose da cabeça: {e}")
+        return 0, 0, 0 # Retorna 0 se falhar
 
 def initialize_model():
     """Carrega o detetor de face e o preditor de landmarks do Dlib."""
@@ -86,7 +145,7 @@ def shape_to_np(shape, dtype="int"):
 
 def capture_and_detect_loop():
     """Função principal executada em background para capturar e processar vídeo."""
-    global output_frame_display, lock, alarm_counter, alarm_on
+    global output_frame_display, lock, drowsiness_counter, distraction_counter
 
     logging.info(f">>> Serviço Monolítico DMS a iniciar...")
     
@@ -105,6 +164,8 @@ def capture_and_detect_loop():
         sys.exit(1)
 
     logging.info(">>> Fonte de vídeo conectada com sucesso! Iniciando loop.")
+    
+    frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
 
     while True:
         ret, frame = cap.read()
@@ -125,22 +186,19 @@ def capture_and_detect_loop():
         # Deteção de Faces
         rects = detector(gray, 0)
         
-        alarm_on = False # Reseta o alarme por frame
+        alarm_drowsy = False
+        alarm_distraction = False
 
         # Loop sobre as faces detetadas (deve ser apenas 1, o motorista)
         for rect in rects:
             shape = predictor(gray, rect)
             shape = shape_to_np(shape)
 
-            # Extrai coordenadas dos olhos
+            # --- 1. Verificação de Sonolência (EAR) ---
             leftEye = shape[lStart:lEnd]
             rightEye = shape[rStart:rEnd]
-            
-            # Calcula o EAR para ambos os olhos
             leftEAR = eye_aspect_ratio(leftEye)
             rightEAR = eye_aspect_ratio(rightEye)
-
-            # Média do EAR
             ear = (leftEAR + rightEAR) / 2.0
 
             # Desenha os contornos dos olhos
@@ -149,29 +207,44 @@ def capture_and_detect_loop():
             cv2.drawContours(frame_display, [leftEyeHull], -1, (0, 255, 0), 1)
             cv2.drawContours(frame_display, [rightEyeHull], -1, (0, 255, 0), 1)
 
-            # Verifica se o EAR está abaixo do limiar (sonolência)
             if ear < EAR_THRESHOLD:
-                alarm_counter += 1
-                logging.debug(f"Contador de sonolência: {alarm_counter}")
-                
-                # Se os olhos estiverem fechados por tempo suficiente, soa o alarme
-                if alarm_counter >= EAR_CONSEC_FRAMES:
-                    alarm_on = True
-                    cv2.putText(frame_display, "ALERTA: SONOLENCIA!", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+                drowsiness_counter += 1
+                if drowsiness_counter >= EAR_CONSEC_FRAMES:
+                    alarm_drowsy = True
                     logging.warning(f"DETEÇÃO DE SONOLÊNCIA (EAR: {ear:.2f})")
-            
             else:
-                # Se os olhos abriram, reinicia o contador
-                alarm_counter = 0
+                drowsiness_counter = 0
 
-            # Desenha o EAR no frame para debug
+            # --- 2. Verificação de Distração (Pose da Cabeça) ---
+            yaw, pitch, roll = estimate_head_pose(shape, frame_size)
+            
+            # Verifica se está a olhar para os lados (Yaw) ou muito para baixo (Pitch)
+            if abs(yaw) > DISTRACTION_THRESHOLD_ANGLE or pitch > DISTRACTION_THRESHOLD_ANGLE:
+                distraction_counter += 1
+                if distraction_counter >= DISTRACTION_CONSEC_FRAMES:
+                    alarm_distraction = True
+                    logging.warning(f"DETEÇÃO DE DISTRAÇÃO (Yaw: {yaw:.1f}, Pitch: {pitch:.1f})")
+            else:
+                distraction_counter = 0
+                
+            # Desenha informações de debug no frame
             cv2.putText(frame_display, f"EAR: {ear:.2f}", (FRAME_WIDTH_DISPLAY - 150, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Se nenhuma face for detetada, reinicia o contador
+            cv2.putText(frame_display, f"Yaw: {yaw:.1f}", (FRAME_WIDTH_DISPLAY - 150, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # Se nenhuma face for detetada, reinicia os contadores
         if not rects:
-             alarm_counter = 0
+             drowsiness_counter = 0
+             distraction_counter = 0
+
+        # Desenha os Alertas Visuais Finais
+        if alarm_drowsy:
+             cv2.putText(frame_display, "ALERTA: SONOLENCIA!", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        if alarm_distraction:
+             cv2.putText(frame_display, "ALERTA: DISTRACAO!", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
         # Atualiza o frame de saída para o servidor web
         with lock:
@@ -264,3 +337,4 @@ if __name__ == '__main__':
          sys.exit(1)
 
 logging.info(">>> Servidor Flask terminado.")
+
