@@ -33,9 +33,10 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
 
 # --- Estágio de Download do Modelo (YOLOv3-tiny) ---
 # Descarrega o modelo de Deteção de Objetos (para telemóvel, etc.)
-RUN curl -L "https://github.com/pjreddie/darknet/raw/master/data/coco.names" -o coco.names && \
-    curl -L "https://github.com/pjreddie/darknet/raw/master/cfg/yolov3-tiny.cfg" -o yolov3-tiny.cfg && \
-    curl -L "https://pjreddie.com/media/files/yolov3-tiny.weights" -o yolov3-tiny.weights
+# CORREÇÃO: A usar links diretos do repositório AlexeyAB/darknet (mais estáveis)
+RUN curl -L "https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names" -o coco.names && \
+    curl -L "https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-tiny.cfg" -o yolov3-tiny.cfg && \
+    curl -L "https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov3-tiny.weights" -o yolov3-tiny.weights
 
 # --- Estágio Final ---
 # Copia os novos scripts da aplicação refatorada
