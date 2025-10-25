@@ -13,7 +13,7 @@ import logging
 import sys
 import dlib # Biblioteca para deteção de face e landmarks
 from scipy.spatial import distance as dist # Para calcular a distância euclidiana
-import math # Para a matemática da Pose da CabeA
+import math # Para a matemática da Pose da Cabeça
 
 # --- Configurações de Alerta ---
 
@@ -141,7 +141,12 @@ class DriverMonitor:
     def _shape_to_np(self, shape, dtype="int"):
         """Converte o objeto de landmarks do Dlib para um array NumPy."""
         coords = np.zeros((shape.num_parts, 2), dtype=dtype)
-        for i in range(0, range(0, shape.num_parts)):
+        # --- CORREÇÃO DO BUG ---
+        # O erro 'TypeError: 'range' object cannot be interpreted as an integer'
+        # aconteceu porque eu escrevi 'range(0, shape.num_parts)' duas vezes.
+        # A versão correta é esta:
+        for i in range(0, shape.num_parts):
+        # ---------------------
             coords[i] = (shape.part(i).x, shape.part(i).y)
         return coords
 
@@ -161,7 +166,7 @@ class DriverMonitor:
         alarm_drowsy = False
         alarm_distraction = False
         
-        # --- NOVO: TENTATIVA DE MELHORIA PARA IR ---
+        # --- TENTATIVA DE MELHORIA PARA IR ---
         # Aplica Equalização de Histograma para aumentar o contraste
         # Isto pode ajudar o Dlib a "ver" as características em imagens IR
         try:

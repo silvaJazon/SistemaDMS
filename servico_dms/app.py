@@ -1,9 +1,7 @@
-# Documentação: Aplicação Principal Flask (Orquestrador)
+# Documentação: Aplicação Principal (Servidor Flask)
 # Responsável por:
-# 1. Iniciar o servidor web Flask.
-# 2. Iniciar o CameraThread (para ler a câmara).
-# 3. Iniciar o DriverMonitor (para a lógica de IA).
-# 4. Orquestrar o loop principal de deteção.
+# 1. Orquestrar as threads (Câmara, Deteção).
+# 2. Servir a aplicação web Flask (streaming de vídeo e UI).
 
 import cv2
 import time
@@ -15,169 +13,227 @@ import sys
 from flask import Flask, Response, render_template_string
 
 # --- Importações Locais ---
+# Importa as classes que refatorámos
 from camera_thread import CameraThread
 from dms_core import DriverMonitor
 
-# Habilita otimizações do OpenCV
-cv2.setUseOptimized(True)
-
 # --- Configuração do Logging ---
+# Define o nível de log a partir da variável de ambiente (padrão: INFO)
 default_log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(level=default_log_level,
                     format='%(asctime)s - DMS - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.WARNING) # Reduz o spam de logs do Flask
+
+# Reduz o log do servidor web (werkzeug) para apenas WARNINGS
+log_werkzeug = logging.getLogger('werkzeug')
+log_werkzeug.setLevel(logging.WARNING)
+logging.info(f"Nível de log definido para: {default_log_level}")
 
 # --- Configurações da Aplicação ---
-# Lidas das variáveis de ambiente (definidas no docker-compose.yml)
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
-FRAME_WIDTH_DISPLAY = 640
-FRAME_HEIGHT_DISPLAY = 480
-JPEG_QUALITY = 50
-TARGET_FPS = 15 # Quantas deteções por segundo tentamos executar
+FRAME_WIDTH_DISPLAY = 640   
+FRAME_HEIGHT_DISPLAY = 480  
+JPEG_QUALITY = 50 
 
-# Lê a variável de rotação
-# Converte a string (ex: "180") para um inteiro
-ROTATE_FRAME_DEGREES = int(os.environ.get('ROTATE_FRAME', "0"))
+# --- NOVO: Configuração de Rotação ---
+# Lê a variável de ambiente. Se não existir, define como 0 (sem rotação).
+# O Makefile passa o valor (ex: 180) para aqui.
+ROTATION_DEGREES = int(os.environ.get('ROTATE_FRAME', "0"))
+# ------------------------------------
+
+# --- NOVO: Alvo de Desempenho ---
+# O Raspberry Pi 4 consegue processar (Dlib) a cerca de 8 FPS.
+# Definir um alvo realista evita os avisos de "LOOP LENTO".
+TARGET_FPS = 8 # Alvo realista (anteriormente era 15)
+TARGET_FRAME_TIME = 1.0 / TARGET_FPS # (ex: 1/8 = 0.125 segundos)
+# ---------------------------------
 
 # --- Variáveis Globais ---
-output_frame_display = None
-lock = threading.Lock()
-app = Flask(__name__)
+output_frame_display = None # O frame (já processado) para o stream de vídeo
+lock = threading.Lock()     # Para proteger o output_frame_display
+app = Flask(__name__)       # A nossa aplicação web
 
-# Instâncias
-cam_thread = None
-dms_monitor = None
+# Instâncias das classes
+cam_thread = None           # A thread que lê a câmara
+dms_monitor = None          # O "cérebro" que processa o frame (Dlib)
+detection_thread = None     # A thread que corre o loop de deteção
 
-# --- Servidor Web Flask ---
 
-def generate_frames():
-    """Gera frames de vídeo para o stream HTTP."""
-    global output_frame_display, lock
-    
-    # Cria um frame 'placeholder' caso a câmara ainda não tenha iniciado
-    placeholder_frame = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
-    cv2.putText(placeholder_frame, "Aguardando camera...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    (flag, encodedImage) = cv2.imencode(".jpg", placeholder_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-    placeholder_bytes = bytearray(encodedImage) if flag else None
-    
-    while True:
-        frame_to_encode = None
-        
-        with lock:
-            if output_frame_display is not None:
-                # Pega uma cópia do último frame processado
-                frame_to_encode = output_frame_display.copy()
-
-        if frame_to_encode is None:
-            frame_bytes = placeholder_bytes
-            time.sleep(0.5) # Evita spam se a câmara estiver desligada
-        else:
-            # Codifica o frame para JPEG
-            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            if flag:
-                frame_bytes = bytearray(encodedImage)
-            else:
-                logging.warning("Falha ao codificar frame para JPEG.")
-                frame_bytes = placeholder_bytes 
-
-        if frame_bytes is not None:
-            # Envia o frame para o cliente (navegador)
-            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-
-        # Controla o FPS do stream
-        time.sleep(1/30) # Tenta enviar a 30 FPS, mesmo que a deteção seja a 15 FPS
+# --- Rota Principal da UI ---
 
 @app.route("/")
 def index():
-    """Rota principal que serve a página HTML."""
-    return render_template_string("""
+    """Rota principal que serve a página HTML (template string)."""
+    
+    # Este HTML é servido quando você acede a http://[IP]:5000
+    html_template = """
         <!DOCTYPE html>
         <html>
         <head>
             <title>SistemaDMS - Monitoramento</title>
             <style>
-                body { font-family: sans-serif; background-color: #222; color: #eee; margin: 0; padding: 20px; text-align: center;}
-                h1 { color: #eee; }
-                img { border: 1px solid #555; background-color: #000; max-width: 95%; height: auto; margin-top: 20px;}
+                body { 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    background-color: #121212; /* Fundo escuro */
+                    color: #e0e0e0; /* Texto claro */
+                    margin: 0; 
+                    padding: 0; 
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    min-height: 100vh;
+                }
+                h1 { 
+                    color: #ffffff; /* Título a branco */
+                    font-weight: 300;
+                    margin-bottom: 10px;
+                }
+                p {
+                    font-size: 0.9rem;
+                    color: #888; /* Subtítulo cinzento */
+                    margin-top: 0;
+                }
+                .stream-container {
+                    border: 1px solid #333; /* Borda subtil */
+                    background-color: #000;
+                    border-radius: 8px; /* Cantos arredondados */
+                    overflow: hidden; /* Garante que a imagem fica dentro dos cantos */
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.4); /* Sombra */
+                    min-width: {{ width }}px;
+                    min-height: {{ height }}px;
+                }
+                img { 
+                    display: block;
+                    width: 100%;
+                    height: auto;
+                }
             </style>
         </head>
         <body>
             <h1>SistemaDMS - Monitoramento ao Vivo</h1>
-            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
+            <p>Fonte: Câmara {{ source }} | Resolução: {{ width }}x{{ height }}</p>
+            <div class="stream-container">
+                <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
+            </div>
+            
             <script>
-                // Script para tentar recarregar o stream em caso de falha
+                // Script simples para tentar recarregar o stream se ele falhar
                 var stream = document.getElementById("stream");
                 stream.onerror = function() {
-                    console.log("Erro no stream, a tentar recarregar em 5s...");
+                    console.log("Erro no stream. A tentar recarregar em 5 segundos...");
                     setTimeout(function() {
+                        // Adiciona um timestamp para evitar o cache do navegador
                         stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
                     }, 5000);
                 };
             </script>
         </body>
         </html>
-    """, width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY)
+    """
+    
+    source_desc = "RTSP" if VIDEO_SOURCE.startswith("rtsp://") else f"USB ({VIDEO_SOURCE})"
+    
+    return render_template_string(
+        html_template, 
+        width=FRAME_WIDTH_DISPLAY, 
+        height=FRAME_HEIGHT_DISPLAY,
+        source=source_desc
+    )
+
+# --- Rota do Stream de Vídeo ---
 
 @app.route("/video_feed")
 def video_feed():
-    """Rota que serve o stream de vídeo."""
-    return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    """Rota que serve o stream de vídeo (multipart/x-mixed-replace)."""
+    return Response(generate_frames_for_web(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# --- Loop Principal de Deteção ---
+def generate_frames_for_web():
+    """Gera frames de vídeo para o stream HTTP."""
+    global output_frame_display, lock
+    
+    while True:
+        frame_to_encode = None
+        
+        # Espera até que um frame processado esteja disponível
+        time.sleep(TARGET_FRAME_TIME) 
+        
+        with lock:
+            if output_frame_display is not None:
+                frame_to_encode = output_frame_display.copy()
+
+        if frame_to_encode is None:
+            # Se ainda não houver frames, continua a tentar
+            continue
+            
+        # Codifica o frame para JPEG
+        (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+        
+        if not flag:
+            logging.warning("Falha ao codificar frame para JPEG.")
+            continue
+
+        # Envia o frame como bytes
+        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
+               bytearray(encodedImage) + b'\r\n')
+
+# --- Thread de Deteção (O Loop Principal) ---
 
 def detection_loop():
-    """Função principal executada em background para processar o vídeo."""
+    """
+    Função principal executada em background (numa thread).
+    Busca o frame mais recente da câmara e envia-o para o dms_monitor.
+    """
     global output_frame_display, lock, cam_thread, dms_monitor
     
     logging.info(f">>> Loop de deteção iniciado (Alvo: {TARGET_FPS} FPS).")
     
-    # Tempo de espera entre frames para atingir o TARGET_FPS
-    frame_time_seconds = 1.0 / TARGET_FPS 
-    
     while True:
+        start_time = time.time()
+        
+        # 1. Obter o frame mais recente da câmara
+        frame = cam_thread.get_frame() # Usa o método get_frame() corrigido
+        
+        if frame is None:
+            # Se a câmara ainda não estiver pronta
+            logging.warning("Frame não recebido da câmara. A aguardar...")
+            time.sleep(0.5)
+            continue
+            
+        # --- CORREÇÃO DO 'TypeError' ---
+        # O dms_core.py (process_frame) espera dois argumentos: o frame
+        # a cores (para desenhar) e o frame a preto e branco (para o Dlib).
+        
+        # 2. Converter para Preto e Branco (Gray)
         try:
-            start_time = time.time() # Marca o início do processamento
-
-            # Pega o frame mais recente da thread da câmara
-            frame = cam_thread.get_frame()
-
-            if frame is None:
-                logging.warning("Frame não recebido da câmara. A aguardar...")
-                time.sleep(1.0)
-                continue
-                
-            # --- NOVO: Converte para Grayscale ---
-            # O Dlib (no dms_core) precisa da imagem a preto e branco para detetar faces
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # ------------------------------------
+        except cv2.error as e:
+            logging.warning(f"Erro ao converter frame para gray: {e}")
+            continue
+            
+        # 3. Processar o frame (Dlib: EAR + Pose)
+        # Passa os dois argumentos
+        processed_frame, status_data = dms_monitor.process_frame(frame, gray)
+        # ---------------------------------
 
-            # Processa o frame (aqui acontece a magia da IA)
-            # Passa ambos os frames
-            processed_frame, status_data = dms_monitor.process_frame(frame, gray)
+        # 4. Atualizar o frame de saída para o servidor web
+        with lock:
+            output_frame_display = processed_frame.copy()
             
-            # --- Enviar Alertas (Lógica Futura) ---
-            # if status_data["alarm_drowsy"] or status_data["alarm_distraction"]:
-            #    logging.warning(f"ALERTA: Sonolência={status_data['alarm_drowsy']}, Distração={status_data['alarm_distraction']}")
-            #    # TODO: Enviar 'status_data' para a central via API/MQTT
-            
-            # Atualiza o frame de saída para o servidor web
-            with lock:
-                output_frame_display = processed_frame.copy()
-
-            # Calcula o tempo gasto e espera o restante para atingir o TARGET_FPS
-            elapsed_time = time.time() - start_time
-            sleep_time = max(0, frame_time_seconds - elapsed_time)
-            
-            if sleep_time == 0:
-                 logging.warning(f"!!! LOOP LENTO. Processamento demorou {elapsed_time:.2f}s (Alvo era {frame_time_seconds:.2f}s)")
-            
+        # 5. Controlo de FPS
+        end_time = time.time()
+        processing_time = end_time - start_time
+        
+        if processing_time > TARGET_FRAME_TIME:
+            # O processamento está a demorar mais do que o nosso alvo
+            # (Isto é esperado no Raspberry Pi)
+            logging.warning(f"!!! LOOP LENTO. Processamento demorou {processing_time:.2f}s (Alvo era {TARGET_FRAME_TIME:.2f}s)")
+        else:
+            # Se o processamento for rápido, esperamos o tempo restante
+            sleep_time = TARGET_FRAME_TIME - processing_time
+            logging.debug(f"Processamento: {processing_time:.3f}s, Espera: {sleep_time:.3f}s")
             time.sleep(sleep_time)
 
-        except Exception as e:
-            logging.error(f"!!! Erro no loop de deteção: {e}", exc_info=True)
-            time.sleep(5.0) # Evita spam de logs em caso de erro
 
 # --- Ponto de Entrada Principal ---
 
@@ -185,34 +241,50 @@ if __name__ == '__main__':
     try:
         logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
         
-        # 1. Inicializa o "Cérebro" (Dlib)
-        logging.info("A inicializar o DriverMonitor Core...")
+        # Define o tamanho do frame que queremos
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
-        dms_monitor = DriverMonitor(frame_size=frame_size)
         
-        # 2. Inicializa os "Olhos" (Câmara)
+        # 1. Inicializa o "Cérebro" (DMS Core)
+        # (Tem de ser inicializado antes da thread, pois demora a carregar os modelos)
+        dms_monitor = DriverMonitor(frame_size=frame_size)
+
+        # 2. Inicializa os "Olhos" (Camera Thread)
         logging.info(f">>> A iniciar thread da câmara (Fonte: {VIDEO_SOURCE})...")
         cam_thread = CameraThread(
             VIDEO_SOURCE, 
             FRAME_WIDTH_DISPLAY, 
             FRAME_HEIGHT_DISPLAY,
-            ROTATE_FRAME_DEGREES # Passa a rotação
+            ROTATION_DEGREES # Passa o valor da rotação
         )
         cam_thread.start()
         
-        # 3. Inicializa o "Processamento" (Loop de Deteção)
+        # Espera que a câmara se ligue e capture o primeiro frame
+        logging.info("A aguardar o primeiro frame da câmara...")
+        while cam_thread.get_frame() is None:
+            time.sleep(0.5)
+            if not cam_thread.is_alive():
+                logging.error("!!! ERRO FATAL: Thread da câmara falhou ao iniciar.")
+                sys.exit(1)
+        logging.info(">>> Primeiro frame recebido!")
+
+        # 3. Inicializa o "Processador" (Detection Thread)
         logging.info(">>> A iniciar thread de deteção...")
         detection_thread = threading.Thread(target=detection_loop)
         detection_thread.daemon = True
         detection_thread.start()
-        
-        # 4. Inicia o Servidor Web (na thread principal)
+
+        # 4. Inicia o Servidor Web (Flask)
         logging.info(f">>> A iniciar servidor Flask na porta 5000...")
+        # (use_reloader=False é crucial para não correr tudo duas vezes)
         app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
 
+    except (KeyboardInterrupt, SystemExit):
+        logging.info(">>> A terminar o serviço DMS...")
     except Exception as e:
-         logging.error(f"!!! ERRO FATAL ao inicializar o DriverMonitor: {e}", exc_info=True)
-         sys.exit(1)
-    
-    logging.info(">>> Servidor Flask terminado.")
+        logging.error(f"!!! ERRO FATAL no arranque: {e}", exc_info=True)
+    finally:
+        if cam_thread:
+            cam_thread.stop() # Sinaliza à thread da câmara para parar
+        logging.info(">>> Serviço DMS terminado.")
+        sys.exit(0)
 
