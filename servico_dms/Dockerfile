@@ -1,5 +1,5 @@
-# Documentação: Dockerfile para o Serviço DMS (Fase 3: Refatorado + YOLO)
-# Instala Python, OpenCV, Dlib e descarrega modelos YOLO
+# Documentação: Dockerfile para o Serviço DMS (Fase 3.2: MobileNet-SSD)
+# Instala Python, OpenCV, Dlib e descarrega os modelos MobileNet-SSD.
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -9,8 +9,6 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instala dependências de sistema
-# Essencial: cmake e g++ são necessários para COMPILAR o 'dlib' via pip
-# Essencial: bzip2 é necessário para descompactar o modelo de landmarks
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgl1-mesa-glx \
@@ -22,23 +20,22 @@ RUN apt-get update && \
         bzip2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala dependências Python (agora inclui o dlib)
+# Instala dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Estágio de Download do Modelo (Dlib) ---
-# Descarrega o modelo de 68 pontos de referência faciais
+# O Dlib ainda descarregamos porque é fiável
 RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o landmarks.dat.bz2 && \
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
-# --- Estágio de Download do Modelo (YOLOv3-tiny) ---
-# Descarrega o modelo de Deteção de Objetos (para telemóvel, etc.)
-# CORREÇÃO: A usar links diretos do repositório AlexeyAB/darknet (mais estáveis)
-RUN curl -L "https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names" -o coco.names && \
-curl -L "https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-tiny.cfg" -o yolov3-tiny.cfg && \
-curl -L "https://sourceforge.net/projects/yolov3.mirror/files/v8/yolov3-tiny.weights/download" -o yolov3-tiny.weights
+# --- Estágio de Download do Modelo (MobileNet-SSD) ---
+# Em vez de YOLO, descarregamos o MobileNet-SSD (mais leve)
+RUN curl -L "https://github.com/opencv/opencv/raw/3.4.0/samples/dnn/MobileNetSSD_deploy.prototxt" -o MobileNetSSD_deploy.prototxt && \
+    curl -L "https://github.com/opencv/opencv_extra/raw/3.4.0/testdata/dnn/MobileNetSSD_deploy.caffemodel" -o MobileNetSSD_deploy.caffemodel
+
 # --- Estágio Final ---
-# Copia os novos scripts da aplicação refatorada
+# Copia os scripts da aplicação
 COPY app.py .
 COPY dms_core.py .
 COPY camera_thread.py .
