@@ -37,7 +37,7 @@ FRAME_HEIGHT_DISPLAY = 480
 JPEG_QUALITY = 50
 TARGET_FPS = 15 # Quantas deteções por segundo tentamos executar
 
-# NOVO: Lê a variável de rotação
+# Lê a variável de rotação
 # Converte a string (ex: "180") para um inteiro
 ROTATE_FRAME_DEGREES = int(os.environ.get('ROTATE_FRAME', "0"))
 
@@ -141,15 +141,21 @@ def detection_loop():
             start_time = time.time() # Marca o início do processamento
 
             # Pega o frame mais recente da thread da câmara
-            frame = cam_thread.get_frame() # Correção: Usa get_frame()
+            frame = cam_thread.get_frame()
 
             if frame is None:
                 logging.warning("Frame não recebido da câmara. A aguardar...")
                 time.sleep(1.0)
                 continue
                 
+            # --- NOVO: Converte para Grayscale ---
+            # O Dlib (no dms_core) precisa da imagem a preto e branco para detetar faces
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # ------------------------------------
+
             # Processa o frame (aqui acontece a magia da IA)
-            processed_frame, status_data = dms_monitor.process_frame(frame)
+            # Passa ambos os frames
+            processed_frame, status_data = dms_monitor.process_frame(frame, gray)
             
             # --- Enviar Alertas (Lógica Futura) ---
             # if status_data["alarm_drowsy"] or status_data["alarm_distraction"]:
