@@ -1,0 +1,21 @@
+# Documentação: Ficheiro de orquestração para o Projeto SistemaDMS (Monolítico)
+
+services:
+  # --- Serviço de Monitoramento do Motorista ---
+  servico_dms:
+    # Constrói a imagem a partir da pasta ./servico_dms
+    build: ./servico_dms
+    image: jazonbatista/fluxoai-dms:latest # Novo nome de imagem
+    container_name: fluxoai-servico_dms
+    restart: unless-stopped
+    environment:
+      # O script main.py vai ler esta variável para saber qual câmara usar.
+      - VIDEO_SOURCE=0
+      # Passa a variável LOG_LEVEL (definida no Makefile) para o contentor.
+      - LOG_LEVEL=${LOG_LEVEL:-INFO} 
+    ports:
+      # Mapeamento de portas: Liga a porta 5000 do Pi à porta 5000 do contentor.
+      - "5000:5000"
+    devices:
+      # Mapeamento de dispositivos: Dá ao contentor acesso à câmara USB.
+      - "/dev/video0:/dev/video0"

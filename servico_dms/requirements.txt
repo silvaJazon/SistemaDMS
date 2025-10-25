@@ -1,0 +1,4 @@
+opencv-python-headless
+Flask
+numpy<2
+scipy
