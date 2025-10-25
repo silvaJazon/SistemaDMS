@@ -1,5 +1,5 @@
 # Documentação: Script principal para o Serviço de IA do Projeto FluxoAI (Monolítico)
-# Responsabilidade: Captura, Deteção (IA), Tracking (Atitude Suspeita) e Streaming Web.
+# Responsabilidade: Captura, Deteção (IA com YOLOv8), Tracking (Atitude Suspeita) e Streaming Web.
 
 import cv2
 import time
@@ -26,19 +26,19 @@ logging.basicConfig(level=default_log_level,
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
 
-# --- Configurações da Aplicação ---
+# --- Configurações da Aplicação (AJUSTADAS CONFORME RECOMENDAÇÃO) ---
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
 FRAME_WIDTH_DISPLAY = 640  # Largura para exibir no stream
 FRAME_HEIGHT_DISPLAY = 480 # Altura para exibir no stream
-MODEL_PATH = 'model.tflite'
+MODEL_PATH = 'model.tflite' # IMPORTANTE: Este deve ser um modelo YOLOv8s-TFLite
 LABELS_PATH = 'labels.txt'
-DETECTION_THRESHOLD = 0.55 # Limite de confiança para considerar uma deteção válida
+DETECTION_THRESHOLD = 0.70 # OTIMIZAÇÃO: Aumentado para maior precisão
 TARGET_LABEL = 'person'
-PROCESS_EVERY_N_FRAMES = 5 # Processa 1 em cada N frames
+PROCESS_EVERY_N_FRAMES = 3 # OTIMIZAÇÃO: Reduzido para melhor precisão temporal
 JPEG_QUALITY = 35 # OTIMIZAÇÃO: Qualidade do JPEG mais baixa (35) para reduzir o trabalho de encode no RPi
 LOITERING_THRESHOLD_SECONDS = 10 # Tempo (em segundos) parado para considerar atitude suspeita
-LOITERING_MAX_DISTANCE = 30 # Distância máxima (em pixels) que o centro pode mover-se para ainda ser considerado parado
-MIN_BOX_SIZE = 30 # OTIMIZAÇÃO: Tamanho mínimo (em pixels) para a caixa de deteção (para filtrar falsos positivos)
+LOITERING_MAX_DISTANCE = 50 # OTIMIZAÇÃO: Aumentado para tolerar pequenos movimentos
+MIN_BOX_SIZE = 40 # OTIMIZAÇÃO: Aumentado para filtrar falsos positivos
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -95,34 +95,71 @@ def initialize_model():
         logging.error(f"!!! ERRO FATAL ao carregar o modelo TFLite ({MODEL_PATH}): {e}", exc_info=True)
         sys.exit(1) # Termina se não conseguir carregar o modelo
 
+# ---
+# CORREÇÃO: Função detect_objects SUBSTITUÍDA pela recomendação do guia (YOLOv8)
+# ---
 def detect_objects(frame, interpreter, input_details, output_details, model_height, model_width, floating_model):
-    """Executa a deteção de objetos num frame."""
-    # Redimensiona e prepara a imagem de entrada para o modelo
+    """Executa a deteção de objetos num frame (Otimizado para YOLOv8 TFLite)."""
+    
+    # 1. Preparação da Imagem (Mesmo que antes)
     image_resized = cv2.resize(frame, (model_width, model_height))
     input_data = np.expand_dims(image_resized, axis=0)
-
+ 
     if floating_model:
         input_data = (np.float32(input_data) - 127.5) / 127.5
     else:
         input_data = np.uint8(input_data)
-
+ 
     interpreter.set_tensor(input_details[0]['index'], input_data)
+    
+    # 2. Execução da Inferência
     start_time = time.time()
     interpreter.invoke()
     inference_time = time.time() - start_time
-
-    # Ordem padrão esperada para SSD MobileNet TFLite
-    # 0: locations (boxes), 1: classes, 2: scores, 3: num_detections
+ 
+    # 3. Interpretação da Saída (YOLOv8 TFLite - 1 Tensor de Saída)
+    # Saída esperada: [1, N, 6] -> [xmin, ymin, xmax, ymax, score, class_id]
     try:
-        boxes = interpreter.get_tensor(output_details[0]['index'])[0]
-        classes = interpreter.get_tensor(output_details[1]['index'])[0]
-        scores = interpreter.get_tensor(output_details[2]['index'])[0]
-        logging.debug(f"Outputs obtidos na ordem padrão. Scores[0]: {scores[0]:.2f}, Classe[0]: {int(classes[0])}")
-    except IndexError as e:
-        logging.error(f"!!! ERRO ao obter outputs do modelo. Detalhes: {output_details}. Erro: {e}", exc_info=True)
+        output_data = interpreter.get_tensor(output_details[0]['index'])[0] # [N, 6]
+        
+        # Cria listas vazias para armazenar os resultados no formato esperado pelo código original
+        boxes = []
+        classes = []
+        scores = []
+        
+        # Itera sobre todas as deteções
+        for det in output_data:
+            score = det[4] # Score está na 5ª posição (índice 4)
+            class_id = int(det[5]) # Class ID está na 6ª posição (índice 5)
+            
+            # Aplica os filtros de precisão e classe (person_class_id é global)
+            if score >= DETECTION_THRESHOLD and class_id == person_class_id:
+                # YOLOv8 retorna [xmin, ymin, xmax, ymax]
+                # O código original (update_tracking) espera [ymin, xmin, ymax, xmax]
+                
+                # Coordenadas normalizadas
+                xmin, ymin, xmax, ymax = det[0:4]
+                
+                # Adiciona ao formato esperado
+                boxes.append([ymin, xmin, ymax, xmax])
+                classes.append(class_id)
+                scores.append(score)
+        
+        # Converte para arrays numpy, como o código original esperava
+        boxes = np.array(boxes, dtype=np.float32)
+        classes = np.array(classes, dtype=np.float32) 
+        scores = np.array(scores, dtype=np.float32)
+        
+        logging.debug(f"YOLOv8 TFLite - Deteções válidas: {len(scores)}. Score Máximo: {scores[0]:.2f}" if len(scores) > 0 else "Nenhuma deteção válida.")
+ 
+    except Exception as e:
+        logging.error(f"!!! ERRO ao interpretar outputs do modelo YOLOv8. Erro: {e}", exc_info=True)
         return [], [], [], 0 # Retorna vazio se não conseguir interpretar
-
+ 
     return boxes, classes, scores, inference_time
+# ---
+# FIM DA SUBSTITUIÇÃO
+# ---
 
 def calculate_center(xmin, ymin, xmax, ymax):
     """Calcula o ponto central de uma caixa."""
@@ -140,6 +177,7 @@ def update_tracking(boxes, classes, scores, frame_h, frame_w):
     # 1. Tenta associar deteções atuais a tracks existentes
     for i in range(len(scores)):
         # FILTRO: Ignora deteções que não são 'person' ou estão abaixo do limiar
+        # (Este filtro já foi aplicado na nova função detect_objects, mas mantemos por segurança)
         if scores[i] < DETECTION_THRESHOLD or int(classes[i]) != person_class_id:
             continue
             
@@ -198,7 +236,7 @@ def update_tracking(boxes, classes, scores, frame_h, frame_w):
                 time_stopped = current_time - tracked_persons[track_id]['start_time']
                 if time_stopped > LOITERING_THRESHOLD_SECONDS and not tracked_persons[track_id]['is_loitering']:
                     tracked_persons[track_id]['is_loitering'] = True
-                    logging.warning(f"Pessoa ID {best_match_id} DETECTADA com ATITUDE SUSPEITA (tempo: {time_stopped:.1f}s)")
+                    logging.warning(f"Pessoa ID {best_match_id} DETETADA com ATITUDE SUSPEITA (tempo: {time_stopped:.1f}s)")
             
             # Guarda para desenhar
             new_last_valid_detections.append({
