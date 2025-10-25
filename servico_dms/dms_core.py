@@ -13,7 +13,7 @@ import logging
 import sys
 import dlib # Biblioteca para deteção de face e landmarks
 from scipy.spatial import distance as dist # Para calcular a distância euclidiana
-import math # Para a matemática da Pose da Cabeça
+import math # Para a matemática da Pose da CabeA
 
 # --- Configurações de Alerta ---
 
@@ -141,7 +141,7 @@ class DriverMonitor:
     def _shape_to_np(self, shape, dtype="int"):
         """Converte o objeto de landmarks do Dlib para um array NumPy."""
         coords = np.zeros((shape.num_parts, 2), dtype=dtype)
-        for i in range(0, shape.num_parts):
+        for i in range(0, range(0, shape.num_parts)):
             coords[i] = (shape.part(i).x, shape.part(i).y)
         return coords
 
@@ -161,14 +161,25 @@ class DriverMonitor:
         alarm_drowsy = False
         alarm_distraction = False
         
-        # Deteção de Faces (usando o frame a preto e branco)
-        rects = self.dlib_detector(frame_gray, 0)
+        # --- NOVO: TENTATIVA DE MELHORIA PARA IR ---
+        # Aplica Equalização de Histograma para aumentar o contraste
+        # Isto pode ajudar o Dlib a "ver" as características em imagens IR
+        try:
+            frame_gray_processed = cv2.equalizeHist(frame_gray)
+        except Exception:
+            # Fallback caso a equalização falhe (ex: imagem totalmente preta)
+            frame_gray_processed = frame_gray
+        # -------------------------------------------
+        
+        # Deteção de Faces (usando o frame processado)
+        rects = self.dlib_detector(frame_gray_processed, 0)
         
         # Loop sobre as faces detetadas (deve ser apenas 1, o motorista)
         if len(rects) > 0:
             rect = rects[0] # Pega apenas a primeira face
             
-            shape = self.dlib_predictor(frame_gray, rect)
+            # Usa o frame processado para encontrar os landmarks
+            shape = self.dlib_predictor(frame_gray_processed, rect)
             shape = self._shape_to_np(shape)
 
             # --- 1. Verificação de Sonolência (EAR) ---
