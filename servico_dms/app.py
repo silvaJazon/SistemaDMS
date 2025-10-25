@@ -167,7 +167,7 @@ def video_feed():
 # --- Ponto de Entrada Principal ---
 
 if __name__ == '__main__':
-    logging.info(">>> Serviço DMS (Refatorado v1.0) a iniciar...")
+    logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
 
     # 1. Inicia o Núcleo de Deteção (carrega os modelos Dlib)
     try:

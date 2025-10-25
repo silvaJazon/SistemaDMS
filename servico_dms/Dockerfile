@@ -1,5 +1,5 @@
-# Documentação: Dockerfile para o Serviço DMS (Fase 2: Refatorado)
-# Instala Python, OpenCV e Dlib (compilando via pip)
+# Documentação: Dockerfile para o Serviço DMS (Fase 3: Refatorado + YOLO)
+# Instala Python, OpenCV, Dlib e descarrega modelos YOLO
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -31,6 +31,12 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
+# --- Estágio de Download do Modelo (YOLOv3-tiny) ---
+# Descarrega o modelo de Deteção de Objetos (para telemóvel, etc.)
+RUN curl -L "https://github.com/pjreddie/darknet/raw/master/data/coco.names" -o coco.names && \
+    curl -L "https://github.com/pjreddie/darknet/raw/master/cfg/yolov3-tiny.cfg" -o yolov3-tiny.cfg && \
+    curl -L "https://pjreddie.com/media/files/yolov3-tiny.weights" -o yolov3-tiny.weights
+
 # --- Estágio Final ---
 # Copia os novos scripts da aplicação refatorada
 COPY app.py .
@@ -42,3 +48,4 @@ EXPOSE 5000
 
 # Comando de execução (agora usa app.py)
 CMD ["python", "app.py"]
+
