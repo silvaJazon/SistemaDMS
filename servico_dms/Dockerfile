@@ -1,4 +1,4 @@
-# Documentação: Dockerfile para o Serviço DMS (Fase 1: Sonolência)
+# Documentação: Dockerfile para o Serviço DMS (Fase 2: Refatorado)
 # Instala Python, OpenCV e Dlib (compilando via pip)
 
 # --- Estágio Base ---
@@ -32,12 +32,13 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
 # --- Estágio Final ---
-# Copia apenas o script principal
-COPY main.py .
+# Copia os novos scripts da aplicação refatorada
+COPY app.py .
+COPY dms_core.py .
+COPY camera_thread.py .
 
 # Expõe a porta do Flask
 EXPOSE 5000
 
-# Comando de execução
-CMD ["python", "main.py"]
-
+# Comando de execução (agora usa app.py)
+CMD ["python", "app.py"]
