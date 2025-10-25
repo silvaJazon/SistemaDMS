@@ -1,4 +1,5 @@
-# Documentação: Ficheiro de orquestração para o Projeto SistemaDMS (Monolítico)
+# Documentação: Ficheiro de orquestração para o Projeto SistemaDMS
+# Permite a passagem de LOG_LEVEL e ROTATE_FRAME a partir do Makefile
 
 services:
   # --- Serviço de Monitoramento do Motorista ---
@@ -9,10 +10,13 @@ services:
     container_name: fluxoai-servico_dms
     restart: unless-stopped
     environment:
-      # O script main.py vai ler esta variável para saber qual câmara usar.
+      # O script vai ler esta variável para saber qual câmara usar.
       - VIDEO_SOURCE=0
       # Passa a variável LOG_LEVEL (definida no Makefile) para o contentor.
-      - LOG_LEVEL=${LOG_LEVEL:-INFO} 
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # NOVO: Passa a variável ROTATE_FRAME (definida no Makefile) para o contentor.
+      # O padrão é "0" (sem rotação).
+      - ROTATE_FRAME=${ROTATE_FRAME:-0}
     ports:
       # Mapeamento de portas: Liga a porta 5000 do Pi à porta 5000 do contentor.
       - "5000:5000"
