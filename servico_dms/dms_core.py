@@ -11,7 +11,7 @@ import dlib
 from scipy.spatial import distance as dist
 import math
 
-# --- Constantes de Caminho dos Modelos ---
+# --- Constantes de Caminho dos ModelOS ---
 DLIB_MODEL_PATH = 'shape_predictor_68_face_landmarks.dat'
 YOLO_CONFIG_PATH = 'yolov4-tiny.cfg'
 YOLO_WEIGHTS_PATH = 'yolov4-tiny.weights'
@@ -28,11 +28,14 @@ DISTRACTION_THRESHOLD_ANGLE = 30.0
 DISTRACTION_CONSEC_FRAMES = 25
 
 # 3. Celular (YOLOv4-tiny)
-# (OTIMIZAÇÃO) Baixamos a confiança para 0.3 para ser mais sensível
-CELLPHONE_MIN_CONFIDENCE = 0.3
+# (OTIMIZAÇÃO) Baixamos a confiança para 0.25 para ser mais sensível
+CELLPHONE_MIN_CONFIDENCE = 0.25
 CELLPHONE_NMS_THRESHOLD = 0.3
-CELLPHONE_CONSEC_FRAMES = 10
+CELLPHONE_CONSEC_FRAMES = 10 # Se o FPS for 10, isto é 1 segundo
 TARGET_CLASS_NAME = "cell phone"
+
+# (OTIMIZAÇÃO AVANÇADA) Só executamos o YOLO a cada N frames
+YOLO_FRAME_SKIP = 8 
 
 # Índices Dlib para os olhos
 (lStart, lEnd) = (42, 48)
@@ -63,6 +66,11 @@ class DriverMonitor:
         self.drowsiness_counter = 0
         self.distraction_counter = 0
         self.cellphone_counter = 0
+        
+        # (OTIMIZAÇÃO AVANÇADA) Contadores para decoupling
+        self.frame_counter = 0
+        self.cellphone_detected_in_last_check = False # "Memória" da deteção do telemóvel
+
         
         self.initialize_dlib_models()
         self.initialize_yolo_model()
@@ -226,16 +234,20 @@ class DriverMonitor:
         """
         
         # --- 1. Deteção de Rosto e Landmarks (Dlib) ---
+        # (OTIMIZAÇÃO) Dlib corre em todos os frames
         rects = self.dlib_detector(gray, 0)
         
         alarm_drowsy = False
         alarm_distraction = False
-        alarm_cellphone = False # (OTIMIZAÇÃO) Começa como Falso
+        alarm_cellphone = False # Começa como Falso
 
         if len(rects) > 0:
             rect = rects[0]
             shape = self.dlib_predictor(gray, rect)
             shape_np = self._shape_to_np(shape)
+
+            # (OTIMIZAÇÃO) Incrementa o contador de frames aqui
+            self.frame_counter += 1
 
             # --- 1a. Verificação de Sonolência (EAR) ---
             leftEye = shape_np[lStart:lEnd]
@@ -274,10 +286,13 @@ class DriverMonitor:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             # --- 3. Deteção de Celular (YOLOv4-tiny) ---
-            # (OTIMIZAÇÃO) Só executamos o YOLO SE um rosto for encontrado
-            found_cellphone = self._detect_cell_phone(frame)
+            # (OTIMIZAÇÃO AVANÇADA) Só executamos o YOLO (lento) a cada N frames
+            if self.frame_counter % YOLO_FRAME_SKIP == 0:
+                # Corre a deteção pesada e atualiza a "memória"
+                self.cellphone_detected_in_last_check = self._detect_cell_phone(frame)
             
-            if found_cellphone:
+            # A lógica do alarme usa o resultado da última verificação ("memória")
+            if self.cellphone_detected_in_last_check:
                 self.cellphone_counter += 1
                 if self.cellphone_counter >= CELLPHONE_CONSEC_FRAMES:
                     alarm_cellphone = True
@@ -290,6 +305,8 @@ class DriverMonitor:
             self.drowsiness_counter = 0
             self.distraction_counter = 0
             self.cellphone_counter = 0
+            self.frame_counter = 0 # Reinicia o contador de frames
+            self.cellphone_detected_in_last_check = False # Limpa a "memória"
 
 
         # --- 4. Desenha os Alertas Visuais Finais ---
