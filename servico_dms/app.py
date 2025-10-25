@@ -42,10 +42,10 @@ ROTATION_DEGREES = int(os.environ.get('ROTATE_FRAME', "0"))
 # ------------------------------------
 
 # --- NOVO: Alvo de Desempenho ---
-# O Raspberry Pi 4 consegue processar (Dlib) a cerca de 7 FPS (0.14s).
+# O Raspberry Pi 4 consegue processar (Dlib) a cerca de 5-6 FPS (0.17s).
 # Definir um alvo realista evita os avisos de "LOOP LENTO".
-TARGET_FPS = 7 # Alvo realista (anteriormente era 8)
-TARGET_FRAME_TIME = 1.0 / TARGET_FPS # (ex: 1/7 = ~0.142 segundos)
+TARGET_FPS = 5 # Alvo realista (anteriormente era 7)
+TARGET_FRAME_TIME = 1.0 / TARGET_FPS # (ex: 1/5 = 0.2 segundos)
 # ---------------------------------
 
 # --- Variáveis Globais ---
@@ -112,8 +112,11 @@ def index():
         </head>
         <body>
             <h1>SistemaDMS - Monitoramento ao Vivo</h1>
-            <p>Fonte: Câmara {{ source }} | Resolução: {{ width }}x{{ height }}</p>
-            <div class.stream-container">
+            <!-- CORREÇÃO: Alterado de {{ source }} para {{ source_text }} -->
+            <p>Fonte: Câmara {{ source_text }} | Resolução: {{ width }}x{{ height }}</p>
+            
+            <!-- CORREÇÃO: Corrigido 'class.' para 'class=' -->
+            <div class="stream-container">
                 <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
             </div>
             
@@ -132,13 +135,14 @@ def index():
         </html>
     """
     
-    source_desc = "RTSP" if VIDEO_SOURCE.startswith("rtsp://") else f"USB ({VIDEO_SOURCE})"
+    # CORREÇÃO: Alterado de 'source_desc' para 'source_text'
+    source_text = "RTSP" if VIDEO_SOURCE.startswith("rtsp://") else f"USB ({VIDEO_SOURCE})"
     
     return render_template_string(
         html_template, 
         width=FRAME_WIDTH_DISPLAY, 
         height=FRAME_HEIGHT_DISPLAY,
-        source=source_desc
+        source_text=source_text # CORREÇÃO: Alterado de 'source=' para 'source_text='
     )
 
 # --- Rota do Stream de Vídeo ---
@@ -206,7 +210,7 @@ def detection_loop():
         
         # 2. Converter para Preto e Branco (Gray)
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR_GRAY)
         except cv2.error as e:
             logging.warning(f"Erro ao converter frame para gray: {e}")
             continue
