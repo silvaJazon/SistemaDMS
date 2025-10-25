@@ -26,7 +26,7 @@ logging.basicConfig(level=default_log_level,
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
 
-# --- Configurações da Aplicação (AJUSTADAS CONFORME RECOMENDAÇÃO) ---
+# --- Configurações da Aplicação (AJUSTADAS CONFORME RECOMENDAÇÃO) --- #
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
 FRAME_WIDTH_DISPLAY = 640  # Largura para exibir no stream
 FRAME_HEIGHT_DISPLAY = 480 # Altura para exibir no stream
