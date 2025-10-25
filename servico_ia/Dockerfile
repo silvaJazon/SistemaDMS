@@ -30,3 +30,6 @@ EXPOSE 5000
 
 # Comando de execução
 CMD ["python", "main.py"]
+
+# realize o download manual dos modelos e ficheiros necessários na pasta /fluxoai/servico_ia antes de construir o contentor Docker:
+#curl -L "https://huggingface.co/qualcomm/YOLOv8-Detection/resolve/d9cfb77008a49ceae5ea6c023afd6786c2d1b155/Yolo-v8-Detection.tflite" -o model.tflite
