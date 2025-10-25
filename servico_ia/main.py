@@ -40,7 +40,7 @@ LOITERING_THRESHOLD_SECONDS = 10 # Tempo (em segundos) parado para considerar at
 LOITERING_MAX_DISTANCE = int(os.environ.get('LOITERING_MAX_DISTANCE', 50)) # OTIMIZAÇÃO: Aumentado para tolerar pequenos movimentos
 MIN_BOX_SIZE = int(os.environ.get('MIN_BOX_SIZE', 40)) # OTIMIZAÇÃO: Aumentado para filtrar falsos positivos
 
-# --- Variáveis Globais ---
+# --- Variáveis Globais --- #
 output_frame_display = None
 lock = threading.Lock() # Para acesso seguro ao output_frame por múltiplas threads
 app = Flask(__name__)
