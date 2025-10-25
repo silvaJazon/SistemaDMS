@@ -137,8 +137,8 @@ def detection_loop():
             
             # 1. Obter o frame mais recente da thread da câmara
             # --- CORREÇÃO AQUI ---
-            # A classe CameraThread armazena o frame na variável .frame
-            frame = cam_thread.frame
+            # O seu camera_thread.py usa o método .get_frame()
+            frame = cam_thread.get_frame()
             
             if frame is None:
                 logging.warning("Frame não recebido da câmara. A aguardar...")
