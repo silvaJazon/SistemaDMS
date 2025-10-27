@@ -1,124 +1,77 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Histórico de Alertas</title>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-            background-color: #1a1a1a; 
-            color: #eee; 
-            margin: 0; 
-            padding: 20px; 
+        body {
+            font-family: sans-serif;
+            background-color: #222;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
         }
-        h1 { 
-            color: #eee; 
-            border-bottom: 2px solid #444; 
-            padding-bottom: 10px;
-            margin-bottom: 30px; 
+        h1 {
+            color: #eee;
             text-align: center;
-        }
-        #container { 
-            max-width: 1200px; 
-            margin: auto;
+            margin-bottom: 20px;
         }
         nav {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
         nav a {
-            color: #4CAF50;
+            color: #7fadf7;
             text-decoration: none;
-            padding: 10px 15px;
-            border-radius: 5px;
-            background-color: #2a2a2a;
-            margin: 0 10px;
-            transition: background-color 0.3s;
+            margin: 0 15px;
+            font-size: 1.1em;
         }
         nav a:hover {
-            background-color: #3a3a3a;
+            text-decoration: underline;
         }
-        #alerts-list {
-            list-style: none;
-            padding: 0;
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
         }
-        .alert-item {
-            background-color: #2a2a2a;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            display: flex;
-            flex-wrap: wrap; /* Para telas menores */
-            gap: 20px;
-            align-items: center;
-        }
-        .alert-info {
-            flex: 1 1 300px; /* Ocupa espaço, base 300px */
-        }
-        .alert-image-container {
-            flex: 0 0 150px; /* Não cresce, não encolhe, base 150px */
-            text-align: center;
-        }
-        .alert-image-container img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 4px;
+        th, td {
             border: 1px solid #444;
-            cursor: pointer;
-            transition: transform 0.2s;
+            padding: 10px;
+            text-align: left;
         }
-        .alert-image-container img:hover {
-            transform: scale(1.05);
-        }
-        .alert-type {
-            font-weight: bold;
-            font-size: 1.2em;
-            margin-bottom: 10px;
-        }
-        .alert-type.SONOLENCIA { color: #FFC107; } /* Amarelo */
-        .alert-type.DISTRACAO { color: #FF9800; } /* Laranja */
-        .alert-timestamp {
-            font-size: 0.9em;
-            color: #aaa;
-            margin-bottom: 15px;
-        }
-        .alert-details span {
-            display: inline-block;
+        th {
             background-color: #333;
-            padding: 5px 10px;
+        }
+        td img {
+            max-width: 100px;
+            height: auto;
+            cursor: pointer;
             border-radius: 4px;
-            margin-right: 8px;
-            margin-bottom: 8px;
-            font-size: 0.85em;
         }
-        .loading, .error {
-            text-align: center;
-            font-size: 1.2em;
-            padding: 30px;
+        td img:hover {
+            opacity: 0.8;
         }
-        /* Estilos para o Modal (popup da imagem) */
+
+        /* Estilos para o Modal */
         .modal {
-            display: none; 
-            position: fixed; 
-            z-index: 1000; 
+            display: none; /* Escondido por padrão */
+            position: fixed; /* Fica fixo na tela */
+            z-index: 1; /* Fica à frente de outros elementos */
             left: 0;
             top: 0;
-            width: 100%; 
-            height: 100%; 
-            overflow: auto; 
-            background-color: rgba(0,0,0,0.9); 
+            width: 100%;
+            height: 100%;
+            overflow: auto; /* Permite scroll se a imagem for grande */
+            background-color: rgba(0,0,0,0.9); /* Fundo preto semi-transparente */
+            justify-content: center;
+            align-items: center;
         }
         .modal-content {
             margin: auto;
             display: block;
-            width: 80%;
-            max-width: 700px;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            max-width: 90%;
+            max-height: 90vh;
         }
         .close {
             position: absolute;
@@ -138,115 +91,110 @@
     </style>
 </head>
 <body>
-    <div id="container">
-        <h1>SistemaDMS - Histórico de Alertas</h1>
+    <h1>SistemaDMS - Histórico de Alertas</h1>
+    <nav>
+        <a href="/">Calibração</a> |
+        <a href="/alerts">Histórico de Alertas</a>
+    </nav>
 
-        <nav>
-            <a href="{{ url_for('index') }}">Calibração</a>
-            <a href="{{ url_for('alerts_page') }}">Histórico de Alertas</a>
-        </nav>
+    <table id="alerts-table">
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Tipo de Evento</th>
+                <th>Detalhes</th>
+                <th>Imagem</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Linhas serão adicionadas pelo JavaScript -->
+        </tbody>
+    </table>
 
-        <ul id="alerts-list">
-            <li class="loading">A carregar alertas...</li>
-            <!-- Alertas serão inseridos aqui pelo JavaScript -->
-        </ul>
-    </div>
-
-    <!-- Modal para Imagem Ampliada -->
+    <!-- O Modal para exibir a imagem ampliada -->
     <div id="imageModal" class="modal">
-        <span class="close" onclick="closeModal()">&times;</span>
+        <span class="close" id="closeModal">&times;</span>
         <img class="modal-content" id="modalImage">
     </div>
 
     <script>
-        const alertsList = document.getElementById('alerts-list');
-        const modal = document.getElementById('imageModal');
-        const modalImg = document.getElementById('modalImage');
+        const tableBody = document.querySelector("#alerts-table tbody");
+        const modal = document.getElementById("imageModal");
+        const modalImg = document.getElementById("modalImage");
+        const closeModal = document.getElementById("closeModal");
 
-        function formatTimestamp(isoString) {
-            try {
-                const date = new Date(isoString);
-                 // Formato: DD/MM/YYYY HH:MM:SS
-                return date.toLocaleString('pt-BR', { 
-                    day: '2-digit', 
-                    month: '2-digit', 
-                    year: 'numeric', 
-                    hour: '2-digit', 
-                    minute: '2-digit', 
-                    second: '2-digit' 
-                });
-            } catch (e) {
-                return isoString; // Retorna original se falhar
-            }
-        }
-
-        function openModal(imageUrl) {
-            modal.style.display = "block";
-            modalImg.src = imageUrl;
-        }
-
-        function closeModal() {
-            modal.style.display = "none";
-        }
-
-        // Fecha o modal se clicar fora da imagem
-        window.onclick = function(event) {
-            if (event.target == modal) {
-                closeModal();
-            }
-        }
-
-        async function fetchAlerts() {
+        async function fetchAndDisplayAlerts() {
             try {
                 const response = await fetch('/api/alerts');
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`Erro HTTP: ${response.status}`);
+                }
                 const alerts = await response.json();
-
-                alertsList.innerHTML = ''; // Limpa a mensagem "A carregar"
+                
+                // Limpa a tabela antes de adicionar novos dados
+                tableBody.innerHTML = ''; 
 
                 if (alerts.length === 0) {
-                    alertsList.innerHTML = '<li class="loading">Nenhum alerta registado ainda.</li>';
-                    return;
+                     tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Nenhum alerta registado ainda.</td></tr>';
+                     return;
                 }
 
-                // Ordena do mais recente para o mais antigo
-                alerts.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
                 alerts.forEach(alert => {
-                    const listItem = document.createElement('li');
-                    listItem.className = 'alert-item';
-
-                    const imageUrl = `/alerts/images/${alert.image_file}`;
+                    const row = tableBody.insertRow();
                     
-                    let detailsHtml = '';
-                    if (alert.details) {
-                        for (const [key, value] of Object.entries(alert.details)) {
-                            detailsHtml += `<span><strong>${key}:</strong> ${value}</span>`;
-                        }
-                    }
+                    // Formata o timestamp para melhor leitura
+                    const timestamp = new Date(alert.timestamp.replace('Z', '+00:00'));
+                    const formattedTimestamp = timestamp.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
 
-                    listItem.innerHTML = `
-                        <div class="alert-info">
-                            <div class="alert-type ${alert.event_type}">${alert.event_type}</div>
-                            <div class="alert-timestamp">${formatTimestamp(alert.timestamp)}</div>
-                            <div class="alert-details">
-                                ${detailsHtml}
-                            </div>
-                        </div>
-                        <div class="alert-image-container">
-                            <img src="${imageUrl}" alt="Imagem do Alerta" onclick="openModal('${imageUrl}')">
-                        </div>
-                    `;
-                    alertsList.appendChild(listItem);
+                    row.insertCell(0).textContent = formattedTimestamp;
+                    // (CORRIGIDO) Usa alert.type (lowercase) que vem do dms_core.py
+                    row.insertCell(1).textContent = alert.type || 'Indefinido'; 
+                    row.insertCell(2).textContent = alert.value || '-';
+                    
+                    // Adiciona a miniatura da imagem
+                    const imgCell = row.insertCell(3);
+                    if (alert.image_file) {
+                        const img = document.createElement('img');
+                        const imageUrl = `/alerts/images/${alert.image_file}`;
+                        img.src = imageUrl;
+                        img.alt = `Alerta ${alert.type || 'Indefinido'} em ${formattedTimestamp}`;
+                        img.width = 100; // Define largura para consistência
+
+                        // Adiciona evento de clique para abrir o modal
+                        img.onclick = () => {
+                            modal.style.display = "flex"; // Usa flex para centralizar
+                            modalImg.src = imageUrl;
+                        }
+                        imgCell.appendChild(img);
+                    } else {
+                        imgCell.textContent = '-';
+                    }
                 });
 
             } catch (error) {
-                console.error("Erro ao carregar alertas:", error);
-                alertsList.innerHTML = '<li class="error">Erro ao carregar alertas. Verifique os logs do servidor.</li>';
+                console.error("Erro ao buscar alertas:", error);
+                 tableBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: red;">Erro ao carregar alertas: ${error.message}</td></tr>`;
             }
         }
 
-        fetchAlerts();
+        // Fecha o modal quando o utilizador clica no 'x'
+        closeModal.onclick = () => {
+            modal.style.display = "none";
+        }
+
+        // Fecha o modal quando o utilizador clica fora da imagem
+        window.onclick = (event) => {
+            if (event.target == modal) {
+                modal.style.display = "none";
+            }
+        }
+
+        // Busca os alertas quando a página carrega
+        fetchAndDisplayAlerts();
+
+        // (Opcional) Atualiza a lista de alertas periodicamente
+        // setInterval(fetchAndDisplayAlerts, 30000); // Atualiza a cada 30 segundos
     </script>
 </body>
 </html>
+

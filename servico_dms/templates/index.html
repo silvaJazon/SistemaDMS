@@ -1,352 +1,350 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Calibração</title>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-            background-color: #1a1a1a; 
-            color: #eee; 
-            margin: 0; 
-            padding: 20px; 
-            /* text-align: center; */ /* Remove text-align global */
-        }
-        h1 { 
-            color: #eee; 
-            border-bottom: 2px solid #444; 
-            padding-bottom: 10px;
-            margin-bottom: 30px; 
-            text-align: center; /* Mantém título centralizado */
-        }
-        #container { 
-            max-width: 95%; 
-            margin: auto;
-        }
-        
-        /* (NOVO) Navegação */
-        nav {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        nav a {
-            color: #4CAF50;
-            text-decoration: none;
-            padding: 10px 15px;
-            border-radius: 5px;
-            background-color: #2a2a2a;
-            margin: 0 10px;
-            transition: background-color 0.3s;
-        }
-        nav a:hover {
-            background-color: #3a3a3a;
-        }
-
-        #main-content {
+        body {
+            font-family: sans-serif;
+            background-color: #222;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
             display: flex;
-            flex-wrap: wrap; 
-            justify-content: center; 
-            gap: 30px; 
-            align-items: flex-start; 
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap; /* Permite quebrar linha em ecrãs pequenos */
+            gap: 20px;
+            flex-grow: 1;
+        }
+        .video-container {
+            flex: 2; /* Ocupa mais espaço */
+            min-width: 320px; /* Largura mínima */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .controls-container {
+            flex: 1; /* Ocupa menos espaço */
+            min-width: 280px; /* Largura mínima */
+            background-color: #333;
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        h1, h2 {
+            color: #eee;
+            text-align: center;
             margin-bottom: 20px;
         }
-        #video-container {
-            flex: 1 1 60%; 
-            min-width: 640px; 
+        nav {
+            text-align: center;
+            margin-bottom: 20px;
         }
-        img#stream { 
-            border: 1px solid #555; 
-            background-color: #000; 
-            max-width: 100%; 
+        nav a {
+            color: #7fadf7;
+            text-decoration: none;
+            margin: 0 15px;
+            font-size: 1.1em;
+        }
+        nav a:hover {
+            text-decoration: underline;
+        }
+        img#stream {
+            border: 1px solid #555;
+            background-color: #000;
+            max-width: 100%;
             height: auto;
-            display: block; 
-        }
-        #controls-grid {
-            flex: 1 1 35%; 
-            min-width: 320px; 
-            display: grid; 
-            grid-template-columns: 1fr; 
-            gap: 20px;
-            text-align: left; /* Alinha texto dos controlos à esquerda */
-        }
-        .control-group {
-            background-color: #2a2a2a;
             border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         }
-        .control-group h2 {
-            font-size: 1.2em;
-            margin-top: 0;
-            margin-bottom: 15px;
-            color: #4CAF50; 
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #ccc;
         }
-        .slider-container, .select-container {
-            margin-bottom: 15px;
-        }
-        label { 
-            display: block; 
-            margin-bottom: 5px; 
-            font-weight: bold;
-            font-size: 0.9em;
-        }
-        input[type="range"] { 
-            width: 100%; 
+        input[type="range"] {
+            width: 100%;
             cursor: pointer;
         }
         select {
             width: 100%;
             padding: 8px;
             border-radius: 4px;
-            border: 1px solid #555;
-            background-color: #333;
+            background-color: #444;
             color: #eee;
-            font-size: 1em;
-            cursor: pointer;
+            border: 1px solid #555;
         }
-        .value-display { 
-            float: right; 
-            font-weight: bold; 
-            color: #4CAF50;
+        .slider-value {
+            font-weight: bold;
+            color: #fff;
+            margin-left: 10px;
         }
-        #button-container { /* (NOVO) Container para centralizar o botão */
-             text-align: center;
-             width: 100%; /* Ocupa a largura da grid */
-        }
-        button#restoreDefaults {
-            background-color: #4CAF50;
-            color: white;
+        button {
             padding: 10px 15px;
+            background-color: #555;
+            color: #eee;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 1em;
-            margin-top: 10px; /* Espaço acima do botão */
-            display: inline-block; /* Permite centralizar com text-align */
+            transition: background-color 0.2s;
+            margin-top: 10px;
         }
         button:hover {
-            background-color: #45a049;
+            background-color: #666;
         }
-        #status-bar {
-            clear: both; 
-            margin-top: 20px;
+        .status-info {
+            margin-top: 15px;
             font-size: 0.9em;
-            color: #aaa;
-            text-align: center; /* Centraliza status bar */
+            color: #bbb;
         }
-        #save-status {
-            color: #FFC107; 
-            margin-left: 10px;
+        .status-info span {
             font-weight: bold;
+            color: #ddd;
         }
-        
-        @media (max-width: 1000px) {
-            #main-content {
-                flex-direction: column; 
-                align-items: center; 
+
+        /* Responsividade: Empilha em ecrãs pequenos */
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
             }
-            #video-container {
-                min-width: 90%; 
-                margin-bottom: 20px;
-            }
-            #controls-grid {
-                 min-width: 90%; 
+            .video-container, .controls-container {
+                min-width: 100%;
             }
         }
     </style>
 </head>
 <body>
+    <h1>SistemaDMS - Calibração ao Vivo</h1>
+    <nav>
+        <a href="/">Calibração</a> |
+        <a href="/alerts">Histórico de Alertas</a>
+    </nav>
 
-    <div id="container">
-        <h1>SistemaDMS - Calibração em Tempo Real</h1>
-        
-        <!-- (NOVO) Navegação -->
-        <nav>
-            <a href="{{ url_for('index') }}">Calibração</a>
-            <a href="{{ url_for('alerts_page') }}">Histórico de Alertas</a>
-        </nav>
-        
-        <div id="main-content"> 
-            
-            <div id="video-container">
-                <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
+    <div class="container">
+        <div class="video-container">
+            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
+            <p>Fonte: {{ source_desc }}</p>
+             <!-- (NOVO) Área para mostrar status EAR/Yaw/etc -->
+            <div class="status-info">
+                EAR: <span id="status-ear">-</span> |
+                Yaw: <span id="status-yaw">-</span> |
+                Pitch: <span id="status-pitch">-</span> |
+                Roll: <span id="status-roll">-</span>
+            </div>
+        </div>
+
+        <div class="controls-container">
+            <h2>Parâmetros de Deteção</h2>
+
+            <div>
+                <label for="ear_threshold">Limite EAR Sonolência:</label>
+                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01">
+                <span class="slider-value" id="ear_threshold_value">0.25</span>
+            </div>
+            <div>
+                <label for="ear_frames">Frames Sonolência:</label>
+                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1">
+                <span class="slider-value" id="ear_frames_value">15</span>
+            </div>
+            <div>
+                <label for="distraction_angle">Ângulo Distração (°):</label>
+                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
+                <span class="slider-value" id="distraction_angle_value">30</span>
+            </div>
+            <div>
+                <label for="distraction_frames">Frames Distração:</label>
+                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
+                <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
 
-            <div id="controls-grid">
-                <div class="control-group">
-                    <h2>Parâmetros de Deteção (Dlib)</h2>
-                    
-                    <div class="slider-container">
-                        <label for="ear_threshold">Sensibilidade Sonolência (EAR) <span class="value-display" id="ear_threshold_val">0.25</span></label>
-                        <input type="range" id="ear_threshold" min="0.1" max="0.4" step="0.01">
-                    </div>
-                    
-                    <div class="slider-container">
-                        <label for="ear_consec_frames">Frames Sonolência <span class="value-display" id="ear_consec_frames_val">15</span></label>
-                        <input type="range" id="ear_consec_frames" min="5" max="50" step="1">
-                    </div>
-
-                    <div class="slider-container">
-                        <label for="distraction_threshold_angle">Sensibilidade Distração (Ângulo) <span class="value-display" id="distraction_threshold_angle_val">30</span></label>
-                        <input type="range" id="distraction_threshold_angle" min="15" max="60" step="1">
-                    </div>
-
-                    <div class="slider-container">
-                        <label for="distraction_consec_frames">Frames Distração <span class="value-display" id="distraction_consec_frames_val">25</span></label>
-                        <input type="range" id="distraction_consec_frames" min="5" max="50" step="1">
-                    </div>
-                </div>
-
-                <div class="control-group">
-                    <h2>Configurações da Câmara</h2>
-
-                    <div class="slider-container">
-                        <label for="brightness">Brilho da Câmara (IR) <span class="value-display" id="brightness_val">50</span></label>
-                        <input type="range" id="brightness" min="0" max="100" step="1">
-                    </div>
-
-                    <div class="select-container">
-                        <label for="rotation">Rotação da Imagem</label>
-                        <select id="rotation">
-                            <option value="0">0° (Padrão)</option>
-                            <option value="90">90° (Horário)</option>
-                            <option value="180">180° (Invertido)</option>
-                            <option value="270">270° (Anti-horário)</option>
-                        </select>
-                    </div>
-                </div>
-                 <!-- (NOVO) Botão dentro da grid -->
-                <div id="button-container">
-                     <button id="restoreDefaults">Restaurar Padrões</button>
-                 </div>
+            <h2>Configurações da Câmara</h2>
+             <div>
+                <label for="brightness">Brilho:</label>
+                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1">
+                <span class="slider-value" id="brightness_value">0</span>
             </div>
-        
-        </div> <!-- Fim do #main-content -->
-        
-        <div id="status-bar">
-            <strong>Fonte:</strong> {{ cam_source_desc }} 
-            <span id="save-status"></span>
+            <div>
+                <label for="rotation">Rotação:</label>
+                <select id="rotation" name="rotation">
+                    <option value="0">0°</option>
+                    <option value="90">90°</option>
+                    <option value="180">180°</option>
+                    <option value="270">270°</option>
+                </select>
+            </div>
+
+            <button id="reset_button">Restaurar Padrões</button>
+            <p id="save_status" style="color: #4CAF50; text-align: center;"></p>
         </div>
     </div>
 
     <script>
-        // O JavaScript continua igual...
-        document.addEventListener('DOMContentLoaded', () => {
-            const controls = {
-                ear_threshold: document.getElementById('ear_threshold'),
-                ear_consec_frames: document.getElementById('ear_consec_frames'),
-                distraction_threshold_angle: document.getElementById('distraction_threshold_angle'),
-                distraction_consec_frames: document.getElementById('distraction_consec_frames'),
-                brightness: document.getElementById('brightness'),
-                rotation: document.getElementById('rotation')
-            };
+        const sliders = document.querySelectorAll('input[type="range"]');
+        const rotationSelect = document.getElementById('rotation');
+        const saveStatus = document.getElementById('save_status');
+        const resetButton = document.getElementById('reset_button');
+        let defaultSettings = {}; // Para guardar os valores padrão
 
-            const valueDisplays = {
-                ear_threshold: document.getElementById('ear_threshold_val'),
-                ear_consec_frames: document.getElementById('ear_consec_frames_val'),
-                distraction_threshold_angle: document.getElementById('distraction_threshold_angle_val'),
-                distraction_consec_frames: document.getElementById('distraction_consec_frames_val'),
-                brightness: document.getElementById('brightness_val')
-            };
+        // Elementos de status (EAR, Yaw, etc.)
+        const statusEar = document.getElementById('status-ear');
+        const statusYaw = document.getElementById('status-yaw');
+        const statusPitch = document.getElementById('status-pitch');
+        const statusRoll = document.getElementById('status-roll');
 
-            const saveStatus = document.getElementById('save-status');
-            const restoreButton = document.getElementById('restoreDefaults');
-            
-            let defaultSettings = {};
-            let updateTimeout;
-
-            async function fetchInitialConfig() {
-                try {
-                    const response = await fetch('/api/config');
-                    if (!response.ok) throw new Error('Falha ao carregar API');
-                    
-                    const data = await response.json();
-                    defaultSettings = { ...data }; 
-                    updateControls(data);
-                    
-                } catch (error) {
-                    console.error('Erro ao carregar configurações:', error);
-                    saveStatus.textContent = "Erro ao carregar API!";
+        // Função para buscar e atualizar as configurações e status da API
+        async function fetchAndUpdateSettings() {
+            try {
+                const response = await fetch('/api/config');
+                if (!response.ok) {
+                    throw new Error(`Erro HTTP: ${response.status}`);
                 }
-            }
-            
-            function updateControls(settings) {
-                for (const key in controls) {
-                    if (settings.hasOwnProperty(key)) {
-                        controls[key].value = settings[key];
-                        if (valueDisplays[key]) {
-                            valueDisplays[key].textContent = settings[key];
-                        }
-                    }
-                }
-            }
-
-            async function postConfig() {
-                const newConfig = {
-                    ear_threshold: parseFloat(controls.ear_threshold.value),
-                    ear_consec_frames: parseInt(controls.ear_consec_frames.value, 10),
-                    distraction_threshold_angle: parseInt(controls.distraction_threshold_angle.value, 10),
-                    distraction_consec_frames: parseInt(controls.distraction_consec_frames.value, 10),
-                    brightness: parseFloat(controls.brightness.value),
-                    rotation: parseInt(controls.rotation.value, 10)
-                };
-
-                saveStatus.textContent = "A guardar...";
+                const data = await response.json();
+                console.log("Configurações recebidas:", data); // Debug
                 
-                try {
-                    const response = await fetch('/api/config', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(newConfig)
-                    });
-                    
-                    if (!response.ok) throw new Error('Falha ao guardar');
-                    
-                    const result = await response.json();
-                    if (result.status === 'success') {
-                        saveStatus.textContent = "Guardado!";
+                // Guarda como padrão na primeira vez
+                if (Object.keys(defaultSettings).length === 0) {
+                    defaultSettings = { ...data }; // Clona os dados
+                    // Remove 'status' dos padrões, se existir
+                    delete defaultSettings.status; 
+                }
+
+                // Atualiza sliders e dropdown
+                sliders.forEach(slider => {
+                    const valueSpan = document.getElementById(`${slider.id}_value`);
+                    if (data.hasOwnProperty(slider.name)) {
+                        slider.value = data[slider.name]; // Define o valor do input
+                        if (valueSpan) {
+                            valueSpan.textContent = data[slider.name]; // Define o texto do span
+                        }
                     } else {
-                        throw new Error(result.message || 'Erro desconhecido');
+                        console.warn(`Configuração '${slider.name}' não encontrada na resposta da API.`);
                     }
-                } catch (error) {
-                    console.error('Erro ao guardar configurações:', error);
-                    saveStatus.textContent = "Erro ao guardar!";
+                });
+                if (data.hasOwnProperty('rotation')) {
+                     rotationSelect.value = data.rotation;
+                } else {
+                     console.warn("Configuração 'rotation' não encontrada.");
                 }
+
+                // (NOVO) Atualiza os dados de status
+                if (data.status) {
+                    statusEar.textContent = data.status.ear || '-';
+                    statusYaw.textContent = data.status.yaw || '-';
+                    statusPitch.textContent = data.status.pitch || '-';
+                    statusRoll.textContent = data.status.roll || '-';
+                } else {
+                    statusEar.textContent = '-';
+                    statusYaw.textContent = '-';
+                    statusPitch.textContent = '-';
+                    statusRoll.textContent = '-';
+                }
+
+
+            } catch (error) {
+                console.error("Erro ao buscar configurações:", error);
+                saveStatus.textContent = "Erro ao carregar conf.";
+                saveStatus.style.color = "#f44336"; // Vermelho
+                 // Limpa os dados de status em caso de erro
+                statusEar.textContent = 'Erro';
+                statusYaw.textContent = 'Erro';
+                statusPitch.textContent = 'Erro';
+                statusRoll.textContent = 'Erro';
             }
+        }
 
-            Object.keys(valueDisplays).forEach(key => {
-                controls[key].addEventListener('input', () => {
-                    valueDisplays[key].textContent = controls[key].value;
-                });
-            });
-
-            Object.values(controls).forEach(control => {
-                control.addEventListener('change', () => {
-                    clearTimeout(updateTimeout);
-                    updateTimeout = setTimeout(postConfig, 250); // Delay de 250ms antes de guardar
-                });
-            });
-
-            restoreButton.addEventListener('click', () => {
-                if (defaultSettings) {
-                    updateControls(defaultSettings);
-                    // Dispara 'change' em um dos controlos para acionar o postConfig
-                    controls.ear_threshold.dispatchEvent(new Event('change')); 
+        // Função para enviar as configurações atualizadas
+        async function postSettings() {
+            const currentSettings = {};
+            sliders.forEach(slider => {
+                currentSettings[slider.name] = parseFloat(slider.value); // Usa parseFloat para EAR
+                // Garante que valores inteiros sejam enviados como inteiros
+                if (slider.step === '1') {
+                    currentSettings[slider.name] = parseInt(slider.value);
                 }
             });
+            currentSettings.rotation = parseInt(rotationSelect.value);
 
-            const stream = document.getElementById("stream");
-            stream.onerror = function() {
-                console.log("Erro no stream, a tentar recarregar em 5s...");
-                saveStatus.textContent = "Stream de vídeo perdido! A tentar reconectar...";
-                setTimeout(function() {
-                    stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
-                }, 5000);
-            };
+            try {
+                saveStatus.textContent = "A guardar...";
+                saveStatus.style.color = "#ffeb3b"; // Amarelo
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentSettings)
+                });
+                const result = await response.json();
+                if (result.success) {
+                    saveStatus.textContent = "Guardado!";
+                    saveStatus.style.color = "#4CAF50"; // Verde
+                } else {
+                    throw new Error(result.error || "Falha ao guardar.");
+                }
+            } catch (error) {
+                console.error("Erro ao guardar configurações:", error);
+                saveStatus.textContent = `Erro ao guardar: ${error.message}`;
+                saveStatus.style.color = "#f44336"; // Vermelho
+            }
+            // Limpa a mensagem após alguns segundos
+            setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+        }
 
-            fetchInitialConfig();
+        // Adiciona listeners aos sliders e select
+        sliders.forEach(slider => {
+            const valueSpan = document.getElementById(`${slider.id}_value`);
+            if (valueSpan) {
+                // Atualiza o span quando o slider muda
+                slider.addEventListener('input', () => {
+                    valueSpan.textContent = slider.value;
+                });
+                // Envia para a API quando o utilizador solta o slider
+                slider.addEventListener('change', postSettings);
+            }
         });
+        rotationSelect.addEventListener('change', postSettings);
+
+         // Listener para o botão Restaurar Padrões
+        resetButton.addEventListener('click', () => {
+            if (Object.keys(defaultSettings).length > 0) {
+                sliders.forEach(slider => {
+                    const valueSpan = document.getElementById(`${slider.id}_value`);
+                    if (defaultSettings.hasOwnProperty(slider.name)) {
+                        slider.value = defaultSettings[slider.name];
+                         if (valueSpan) {
+                            valueSpan.textContent = defaultSettings[slider.name];
+                         }
+                    }
+                });
+                 if (defaultSettings.hasOwnProperty('rotation')) {
+                    rotationSelect.value = defaultSettings.rotation;
+                 }
+                // Envia os valores restaurados para a API
+                postSettings();
+            } else {
+                alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
+            }
+        });
+        
+        // --- (NOVO) Atualização periódica do status ---
+        // Busca as configurações (e status) a cada 2 segundos
+        setInterval(fetchAndUpdateSettings, 2000); 
+
+        // Busca as configurações iniciais quando a página carrega
+        fetchAndUpdateSettings();
+
+        // Tratamento de erro do stream de vídeo
+        var stream = document.getElementById("stream");
+        stream.onerror = function() {
+            console.log("Erro no stream, a tentar recarregar em 5s...");
+            setTimeout(function() {
+                stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
+            }, 5000);
+        };
     </script>
 </body>
 </html>
