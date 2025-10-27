@@ -1,5 +1,6 @@
 # Documentação: Dockerfile para o Serviço DMS
-# Foca-se apenas no Dlib (Sonolência e Distração) para otimizar o desempenho no RPi
+# Versão focada apenas em Dlib (Sonolência/Distração)
+# NOVO: Adiciona a pasta de templates e a pasta de alertas
 
 # --- Estágio Base ---
 FROM python:3.9-slim-bullseye AS base
@@ -22,7 +23,7 @@ RUN apt-get update && \
         bzip2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala dependências Python (dlib, opencv-python-headless, flask, numpy, scipy)
+# Instala dependências Python (agora inclui o dlib)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Estágio de Download do Modelo (Dlib) ---
@@ -32,11 +33,18 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
 # --- Estágio Final ---
-# Copia os 3 ficheiros principais da nossa aplicação refatorada
+
+# NOVO: Cria a pasta para guardar os alertas
+RUN mkdir /app/alerts
+
+# NOVO: Copia a pasta de templates HTML
+COPY templates/ ./templates/
+
+# Copia os scripts Python da aplicação
 COPY app.py .
 COPY dms_core.py .
 COPY camera_thread.py .
-
+COPY event_handler.py .
 # Expõe a porta do Flask
 EXPOSE 5000
 

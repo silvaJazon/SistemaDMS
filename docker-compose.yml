@@ -23,3 +23,6 @@ services:
     devices:
       # Mapeamento de dispositivos: Dá ao contentor acesso à câmara USB.
       - "/dev/video0:/dev/video0"
+    volumes:
+      # Mapeia a pasta local './alertas_dms' para a pasta '/app/alerts' dentro do contentor
+      - ./alertas_dms:/app/alerts

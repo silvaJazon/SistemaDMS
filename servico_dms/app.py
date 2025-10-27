@@ -1,434 +1,274 @@
-# Documentação: Aplicação Principal Flask (Servidor Web)
+# Documentação: Aplicação Principal (Servidor Flask)
 # Responsável por:
-# 1. Orquestrar as threads (Câmara, Deteção).
-# 2. Servir o stream de vídeo (MJPEG).
-# 3. Servir a interface web de calibração.
-# 4. Fornecer uma API REST (/api/config) para atualizar os parâmetros.
+# 1. Orquestrar as threads (Câmara, Deteção, Eventos).
+# 2. Servir a interface web (HTML/JS) para calibração.
+# 3. Fornecer uma API REST (/api/config) para ler/atualizar settings.
+# 4. Servir o stream de vídeo MJPEG.
 
 import cv2
 import time
 import os
 import numpy as np
-import threading 
-import logging 
+import threading
+import logging
 import sys
-from flask import Flask, Response, render_template_string, jsonify, request
-import dlib 
-from scipy.spatial import distance as dist 
-import math 
+from flask import Flask, Response, render_template, request, jsonify # NOVO: render_template, request, jsonify
+import json # NOVO
 
-# --- Importações Locais ---
+# --- Importar Módulos Locais ---
 from camera_thread import CameraThread
-from dms_core import DriverMonitor # NOVO: Classe principal do DMS Core
+from dms_core import DriverMonitor
+from event_handler import EventHandler # NOVO: Para guardar alertas
 
 # Habilita otimizações do OpenCV
 cv2.setUseOptimized(True)
 
 # --- Configuração do Logging ---
+# Define o nível de log a partir da variável de ambiente (padrão: INFO)
 default_log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(level=default_log_level,
                     format='%(asctime)s - DMS - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
 
-# Reduz o ruído do servidor web nos logs
-log = logging.getLogger('werkzeug')
+# Reduz o log "chato" do servidor web (werkzeug)
+log_werkzeug = logging.getLogger('werkzeug')
 if default_log_level != 'DEBUG':
-    log.setLevel(logging.WARNING)
+    log_werkzeug.setLevel(logging.WARNING)
+
+logging.info(f"Nível de log definido para: {default_log_level}")
 
 # --- Configurações da Aplicação ---
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
-# NOVO: Lê o ângulo de rotação da variável de ambiente
-ROTATE_FRAME = int(os.environ.get('ROTATE_FRAME', 0))
+ROTATE_FRAME_DEGREES = int(os.environ.get('ROTATE_FRAME', "0")) # Lê a rotação do ambiente
 
-FRAME_WIDTH_DISPLAY = 640   
-FRAME_HEIGHT_DISPLAY = 480 
-JPEG_QUALITY = 50 
+FRAME_WIDTH_DISPLAY = 640
+FRAME_HEIGHT_DISPLAY = 480
+TARGET_FPS = 5 # NOVO: Alvo de 5 FPS (1 / 5 = 0.20s), mais realista para o Pi
+TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 
-# --- NOVO: Configuração de Desempenho (FPS) ---
-# Ajustado para 5 FPS, um alvo realista para o RPi
-TARGET_FPS = 5
-TARGET_FRAME_TIME = 1.0 / TARGET_FPS # Tempo-alvo por frame em segundos
+JPEG_QUALITY = 60 # Qualidade do stream (50-70 é bom)
 
 # --- Variáveis Globais ---
 output_frame_display = None # O frame final a ser enviado para o stream
-lock = threading.Lock() # Protege o acesso ao output_frame_display
-app = Flask(__name__)
+lock = threading.Lock() # Protege o output_frame_display
 
-# --- NOVO: Variáveis Globais de Deteção ---
-dms_monitor = None # Objeto que contém a lógica do Dlib
-cam_thread = None # Objeto que contém a thread da câmara
-detection_thread = None # Objeto que contém a thread de deteção
-app_running = True # Flag para parar as threads
+# --- Inicialização ---
+app = Flask(__name__) # NOVO: O Flask agora procura a pasta 'templates'
+cam_thread = None
+dms_monitor = None
+event_manager = None # NOVO: Gestor de Eventos
 
-# --- NOVO: Página HTML com UI de Calibração ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>SistemaDMS - Monitoramento e Calibração</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
-               background-color: #1a1a1a; color: #eee; margin: 0; padding: 20px; 
-               display: flex; flex-direction: column; align-items: center;
-        }
-        h1 { color: #eee; border-bottom: 2px solid #444; padding-bottom: 10px; }
-        #container { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; width: 100%; max-width: 1200px; }
-        #stream-container { flex-basis: 640px; flex-grow: 1; min-width: 320px; }
-        #controls-container { flex-basis: 300px; flex-grow: 1; background-color: #2a2a2a; border-radius: 8px; padding: 20px; }
-        img { border: 1px solid #555; background-color: #000; width: 100%; height: auto; border-radius: 8px; }
-        h2 { margin-top: 0; }
-        .control-group { margin-bottom: 20px; }
-        .control-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .control-group input[type="range"] { width: 100%; }
-        .control-group span { float: right; font-weight: bold; color: #3498db; }
-        button { background-color: #3498db; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
-        button:hover { background-color: #2980b9; }
-        #status-box { background-color: #2a2a2a; border-radius: 8px; padding: 15px; margin-top: 20px; width: 100%; max-width: 640px; text-align: left; }
-        #status-box div { font-size: 1.1em; }
-        #status-box span { float: right; font-weight: bold; }
-        #face-status.detected { color: #2ecc71; }
-        #face-status.not-detected { color: #e74c3c; }
-    </style>
-</head>
-<body>
-    <h1>SistemaDMS - Monitoramento e Calibração</h1>
-    <div id="status-box">
-        <div>Fonte: <span id="source-name">{{ source_name }}</span></div>
-        <div>Resolução: <span>{{ width }}x{{ height }}</span></div>
-        <div>Status: <span id="face-status">Aguardando...</span></div>
-    </div>
+# --- Funções do Servidor Web (Flask) ---
 
-    <div id="container">
-        <div id="stream-container">
-            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
-        </div>
-
-        <div id="controls-container">
-            <h2>Calibração em Tempo Real</h2>
-            
-            <div class="control-group">
-                <label for="ear_threshold">Limite EAR (Sonolência)</label>
-                <input type="range" id="ear_threshold" min="0.10" max="0.40" step="0.01">
-                <span id="ear_threshold_val">0.25</span>
-            </div>
-            
-            <div class="control-group">
-                <label for="ear_consec_frames">Frames (Sonolência)</label>
-                <input type="range" id="ear_consec_frames" min="5" max="50" step="1">
-                <span id="ear_consec_frames_val">15</span>
-            </div>
-            
-            <div class="control-group">
-                <label for="distraction_threshold_angle">Ângulo (Distração)</label>
-                <input type="range" id="distraction_threshold_angle" min="15" max="60" step="1">
-                <span id="distraction_threshold_angle_val">30</span>
-            </div>
-            
-            <div class="control-group">
-                <label for="distraction_consec_frames">Frames (Distração)</label>
-                <input type="range" id="distraction_consec_frames" min="10" max="60" step="1">
-                <span id="distraction_consec_frames_val">25</span>
-            </div>
-
-            <!-- NOVO: Slider de Brilho -->
-            <div class="control-group">
-                <label for="brightness">Brilho da Câmara</label>
-                <input type="range" id="brightness" min="0" max="255" step="1">
-                <span id="brightness_val">128</span>
-            </div>
-            
-            <button id="saveButton">Guardar Configuração</button>
-        </div>
-    </div>
-
-    <script>
-        // --- Atualiza os valores dos sliders ---
-        const sliders = document.querySelectorAll('input[type="range"]');
-        sliders.forEach(slider => {
-            const valEl = document.getElementById(slider.id + '_val');
-            slider.addEventListener('input', () => {
-                valEl.textContent = slider.value;
-            });
-        });
-
-        // --- Carrega os valores atuais da API ---
-        async function loadConfig() {
-            try {
-                const response = await fetch('/api/config');
-                const config = await response.json();
-                
-                Object.keys(config).forEach(key => {
-                    const slider = document.getElementById(key);
-                    const valEl = document.getElementById(key + '_val');
-                    if (slider) {
-                        slider.value = config[key];
-                        valEl.textContent = config[key];
-                    }
-                });
-                console.log('Configuração carregada:', config);
-            } catch (error) {
-                console.error('Erro ao carregar configuração:', error);
-            }
-        }
-
-        // --- Guarda os novos valores (POST para a API) ---
-        async function saveConfig() {
-            const config = {
-                ear_threshold: document.getElementById('ear_threshold').value,
-                ear_consec_frames: document.getElementById('ear_consec_frames').value,
-                distraction_threshold_angle: document.getElementById('distraction_threshold_angle').value,
-                distraction_consec_frames: document.getElementById('distraction_consec_frames').value,
-                brightness: document.getElementById('brightness').value // NOVO: Envia o brilho
-            };
-            
-            try {
-                const response = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                });
-                if (response.ok) {
-                    console.log('Configuração guardada:', config);
-                    alert('Configuração atualizada com sucesso!');
-                } else {
-                    alert('Erro ao guardar configuração.');
-                }
-            } catch (error) {
-                console.error('Erro ao guardar configuração:', error);
-            }
-        }
+def generate_frames():
+    """Gera frames de vídeo para o stream HTTP."""
+    global output_frame_display, lock
+    
+    # Cria um frame "placeholder" caso a câmara falhe
+    placeholder_frame = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
+    cv2.putText(placeholder_frame, "Aguardando camera...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    (flag, encodedImage) = cv2.imencode(".jpg", placeholder_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+    placeholder_bytes = bytearray(encodedImage) if flag else None
+    
+    while True:
+        frame_to_encode = None
         
-        document.getElementById('saveButton').addEventListener('click', saveConfig);
-        window.addEventListener('load', loadConfig);
+        with lock:
+            if output_frame_display is not None:
+                # Copia o frame mais recente para evitar 'race conditions'
+                frame_to_encode = output_frame_display.copy()
 
-        // --- Lógica de Reconexão do Stream ---
-        var stream = document.getElementById("stream");
-        stream.onerror = function() {
-            console.log("Erro no stream, a tentar recarregar em 5s...");
-            setTimeout(function() {
-                stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
-            }, 5000);
-        };
-    </script>
-</body>
-</html>
-"""
+        if frame_to_encode is None:
+            frame_bytes = placeholder_bytes
+            time.sleep(0.5) # Evita spam se a câmara falhar
+        else:
+            # Codifica o frame para JPEG
+            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+            if flag:
+                frame_bytes = bytearray(encodedImage)
+            else:
+                logging.warning("Falha ao codificar frame para JPEG.")
+                frame_bytes = placeholder_bytes 
 
-# --- Rota Principal ---
+        # Envia o frame no formato MJPEG
+        if frame_bytes is not None:
+             yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+        # Controla o FPS do *stream* (não da deteção)
+        time.sleep(1 / 20) # Stream a 20 FPS (pode ser mais rápido que a deteção)
+
 @app.route("/")
 def index():
-    """Rota principal que serve a página HTML."""
-    source_desc = "Câmara USB (Índice 0)" if VIDEO_SOURCE == "0" else f"Fonte: {VIDEO_SOURCE}"
+    """Rota principal que serve a página HTML a partir do template."""
+    global cam_thread
+    # Passa as variáveis para o template HTML
+    cam_source_desc = cam_thread.source_description if cam_thread else "N/A"
     
-    # NOVO: Corrigido o bug do 'source'
-    return render_template_string(
-        HTML_TEMPLATE, 
+    # NOVO: Renomeado 'source' para 'cam_source_desc' para corrigir bug
+    return render_template(
+        "index.html", 
         width=FRAME_WIDTH_DISPLAY, 
         height=FRAME_HEIGHT_DISPLAY,
-        source_name=source_desc # Nome da variável alterado
+        cam_source_desc=cam_source_desc
     )
 
-# --- Rota do Stream de Vídeo ---
 @app.route("/video_feed")
 def video_feed():
-    """Rota que serve o stream de vídeo (MJPEG)."""
-    
-    def generate_frames():
-        """Gera frames de vídeo para o stream HTTP."""
-        global output_frame_display, lock
-        
-        # Cria um placeholder se a câmara estiver a demorar
-        placeholder_frame = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
-        cv2.putText(placeholder_frame, "Aguardando camera...", (30, FRAME_HEIGHT_DISPLAY // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        (flag, encodedImage) = cv2.imencode(".jpg", placeholder_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-        placeholder_bytes = bytearray(encodedImage)
-        
-        while app_running:
-            frame_to_encode = None
-            
-            with lock:
-                if output_frame_display is not None:
-                    frame_to_encode = output_frame_display.copy()
-
-            if frame_to_encode is None:
-                # Envia o placeholder se o frame não estiver pronto
-                frame_bytes = placeholder_bytes
-                time.sleep(0.5) 
-            else:
-                (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-                if flag:
-                    frame_bytes = bytearray(encodedImage)
-                else:
-                    logging.warning("Falha ao codificar frame para JPEG.")
-                    frame_bytes = placeholder_bytes # Envia placeholder em caso de falha
-
-            # Envia o frame no formato MJPEG
-            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-                   frame_bytes + b'\r\n')
-            
-            # Controla o FPS do stream
-            time.sleep(TARGET_FRAME_TIME) 
-
-    # Retorna a resposta do stream
+    """Rota que serve o stream de vídeo."""
     return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# --- NOVO: Rotas da API de Configuração ---
+# --- NOVO: Rotas de API para Calibração ---
 
-@app.route("/api/config", methods=['GET'])
+@app.route("/api/config", methods=["GET"])
 def get_config():
-    """API (GET): Retorna os valores de configuração atuais do dms_monitor."""
-    # NOVO: Obtém configurações de AMBOS os módulos
-    if dms_monitor and cam_thread:
-        settings = dms_monitor.get_settings()
-        # Adiciona o brilho ao dicionário de configurações
-        settings['brightness'] = cam_thread.get_brightness()
-        return jsonify(settings)
-    return jsonify({"error": "Monitor ou Câmara não inicializado"}), 500
-
-@app.route("/api/config", methods=['POST'])
-def set_config():
-    """API (POST): Atualiza os valores de configuração no dms_monitor."""
-    data = request.json
-    if not data:
-        return jsonify({"error": "Dados inválidos"}), 400
+    """API (GET): Retorna as configurações atuais (DMS + Câmara)."""
+    global dms_monitor, cam_thread
+    if not dms_monitor or not cam_thread:
+        return jsonify({"error": "Sistema não inicializado"}), 500
         
-    # NOVO: Atualiza AMBOS os módulos
-    if dms_monitor and cam_thread:
-        try:
-            # 1. Atualiza as configurações do DMS (Sonolência, etc.)
-            dms_monitor.update_settings(
-                ear_thresh=data.get('ear_threshold'),
-                ear_frames=data.get('ear_consec_frames'),
-                distraction_angle=data.get('distraction_threshold_angle'),
-                distraction_frames=data.get('distraction_consec_frames')
-            )
-            
-            # 2. Atualiza o brilho da câmara
-            if 'brightness' in data:
-                cam_thread.update_brightness(data.get('brightness'))
-            
-            return jsonify({"success": True, "message": "Configuração atualizada."})
-        except Exception as e:
-            logging.error(f"Erro ao atualizar configuração: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
-            
-    return jsonify({"error": "Monitor ou Câmara não inicializado"}), 500
+    try:
+        # Pede as configurações aos módulos
+        dms_settings = dms_monitor.get_settings()
+        cam_settings = cam_thread.get_settings()
+        
+        # Combina os dois dicionários
+        full_settings = {**dms_settings, **cam_settings}
+        
+        return jsonify(full_settings)
+    except Exception as e:
+        logging.error(f"Erro ao obter configurações: {e}")
+        return jsonify({"error": str(e)}), 500
 
-# --- NOVO: Thread de Deteção ---
+@app.route("/api/config", methods=["POST"])
+def set_config():
+    """API (POST): Atualiza as configurações (DMS + Câmara)."""
+    global dms_monitor, cam_thread
+    if not dms_monitor or not cam_thread:
+        return jsonify({"error": "Sistema não inicializado"}), 500
+        
+    try:
+        data = request.json
+        logging.info(f"Recebida atualização de configuração via API: {data}")
+        
+        # 1. Envia as configurações para o DMS Core
+        dms_monitor.update_settings(
+            ear_thresh=data.get('ear_threshold'),
+            ear_frames=data.get('ear_consec_frames'),
+            distraction_angle=data.get('distraction_threshold_angle'),
+            distraction_frames=data.get('distraction_consec_frames')
+        )
+        
+        # 2. Envia as configurações para a Câmara
+        if 'brightness' in data:
+            cam_thread.update_brightness(data.get('brightness'))
+            
+        return jsonify({"success": True, "message": "Configurações atualizadas."})
+        
+    except Exception as e:
+        logging.error(f"Erro ao atualizar configurações: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# --- Thread de Deteção ---
 
 def detection_loop():
     """
     Função principal executada em background para processar vídeo.
-    Lê da CameraThread e processa no DriverMonitor.
     """
-    global output_frame_display, dms_monitor, cam_thread
+    global output_frame_display, lock, dms_monitor, cam_thread, event_manager
     
     logging.info(f">>> Loop de deteção iniciado (Alvo: {TARGET_FPS} FPS).")
     
-    frame_count = 0
-    start_time = time.time()
-    
-    while app_running:
-        frame_time_start = time.time()
+    while True:
+        start_time = time.time() # Para controlo de FPS
         
-        if not cam_thread or not cam_thread.connected:
-            logging.warning("A aguardar ligação da câmara...")
-            time.sleep(1.0)
-            continue
-            
-        # 1. Obtém o frame da thread da câmara
-        frame = cam_thread.get_frame() 
+        # 1. Obter o frame da câmara
+        frame = cam_thread.get_frame() # Método corrigido
         
         if frame is None:
             logging.warning("Frame não recebido da câmara. A aguardar...")
             time.sleep(0.5)
             continue
             
-        # 2. Converte para Preto e Branco (Gray)
-        try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        except cv2.error as e:
-            logging.warning(f"Erro ao converter frame para 'gray' (frame pode estar corrompido): {e}")
-            continue
-            
-        # 3. Processa o frame no DMS Core
-        if dms_monitor:
-            processed_frame, status_data = dms_monitor.process_frame(frame, gray)
-            
-            # 4. Atualiza o frame de saída para o servidor web
-            with lock:
-                output_frame_display = processed_frame.copy()
-        else:
-            # Se o monitor não estiver pronto, apenas mostra o frame original
-            with lock:
-                output_frame_display = frame.copy()
+        # 2. Preparar Frames
+        # Converte para preto e branco (para Dlib)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) # Correção do bug (BGR2GRAY)
         
-        # 5. Lógica de controlo de FPS
-        frame_time_end = time.time()
-        processing_time = frame_time_end - frame_time_start
+        # 3. Processar (IA)
+        # Passa ambos os frames (cor para desenhar, p&b para analisar)
+        processed_frame, status_data, events = dms_monitor.process_frame(frame, gray)
         
-        sleep_time = TARGET_FRAME_TIME - processing_time
+        # 4. NOVO: Gerir Eventos
+        if events and event_manager:
+            for event in events:
+                # Envia o evento (com a imagem original) para o 'worker'
+                event_manager.log_event(event['type'], event['value'], frame)
+        
+        # 5. Atualizar o Stream (com 'lock')
+        with lock:
+            output_frame_display = processed_frame.copy()
+
+        # 6. Controlo de FPS
+        elapsed_time = time.time() - start_time
+        sleep_time = TARGET_FRAME_TIME - elapsed_time
+        
         if sleep_time > 0:
             time.sleep(sleep_time)
         else:
-            # Loga apenas se estivermos significativamente lentos
-            if abs(sleep_time) > (TARGET_FRAME_TIME * 0.1): 
-                logging.warning(f"!!! LOOP LENTO. Processamento demorou {processing_time:.2f}s (Alvo era {TARGET_FRAME_TIME:.2f}s)")
-        
-        frame_count += 1
-        if (frame_count % (TARGET_FPS * 10)) == 0: # Loga o FPS a cada 10 segundos
-            avg_fps = frame_count / (time.time() - start_time)
-            logging.info(f"FPS Médio (Deteção): {avg_fps:.2f} FPS")
-
-    logging.info(">>> Loop de deteção terminado.")
+            # Avisa se o processamento for mais lento que o alvo
+            logging.warning(f"!!! LOOP LENTO. Processamento demorou {elapsed_time:.2f}s (Alvo era {TARGET_FRAME_TIME:.2f}s)")
 
 # --- Ponto de Entrada Principal ---
 
 if __name__ == '__main__':
-    logging.info(f">>> Serviço DMS (Refatorado) a iniciar...")
-    
-    frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
-
     try:
-        # 1. Inicializa o "Cérebro" (DMS Core)
-        dms_monitor = DriverMonitor(frame_size=frame_size)
+        logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
         
-        # 2. Inicializa os "Olhos" (Thread da Câmara)
+        # 1. Inicializar o Gestor de Eventos (Central)
+        event_manager = EventHandler()
+        event_manager.start()
+
+        # 2. Inicializar o "Cérebro" (DMS Core)
+        frame_size_tuple = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
+        dms_monitor = DriverMonitor(frame_size=frame_size_tuple)
+        
+        # 3. Inicializar os "Olhos" (Câmara)
         logging.info(f">>> A iniciar thread da câmara (Fonte: {VIDEO_SOURCE})...")
-        cam_thread = CameraThread(VIDEO_SOURCE, FRAME_WIDTH_DISPLAY, FRAME_HEIGHT_DISPLAY, ROTATE_FRAME)
+        cam_thread = CameraThread(
+            VIDEO_SOURCE, 
+            FRAME_WIDTH_DISPLAY, 
+            FRAME_HEIGHT_DISPLAY,
+            ROTATE_FRAME_DEGREES # Passa o valor da rotação
+        )
         cam_thread.start()
-
-        # Espera pelo primeiro frame antes de continuar
+        
+        # 4. Aguardar pelo primeiro frame
         logging.info("A aguardar o primeiro frame da câmara...")
-        time.sleep(2.0) # Dá tempo à câmara para arrancar
-        first_frame = cam_thread.get_frame()
-        
-        if first_frame is None:
-            logging.error("!!! ERRO FATAL: Não foi possível obter o primeiro frame da câmara.")
-            logging.error("Verifique se a câmara está ligada em /dev/video0 e se o contentor tem permissão.")
-            cam_thread.stop()
-            sys.exit(1)
-            
+        while cam_thread.get_frame() is None:
+            time.sleep(0.5)
+            if not cam_thread.is_alive():
+                raise RuntimeError("Falha ao iniciar a thread da câmara.")
         logging.info(">>> Primeiro frame recebido!")
-        
-        # 3. Inicializa o "Processamento" (Thread de Deteção)
-        logging.info(">>> A iniciar thread de deteção...")
-        detection_thread = threading.Thread(target=detection_loop, daemon=True)
-        detection_thread.start()
 
-        # 4. Inicia o Servidor Web
+        # 5. Iniciar a thread de Deteção
+        logging.info(">>> A iniciar thread de deteção...")
+        detect_thread = threading.Thread(target=detection_loop, daemon=True)
+        detect_thread.start()
+
+        # 6. Iniciar o Servidor Web (Flask)
         logging.info(f">>> A iniciar servidor Flask na porta 5000...")
+        # 'use_reloader=False' é crucial para evitar que a app corra duas vezes
         app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
 
+    except (KeyboardInterrupt, SystemExit):
+        logging.info(">>> Recebido sinal de paragem. A desligar...")
     except Exception as e:
-         logging.error(f"Erro fatal no arranque: {e}", exc_info=True)
-         
+        logging.error(f"!!! ERRO FATAL no arranque: {e}", exc_info=True)
+        sys.exit(1)
     finally:
-        # Limpa os recursos ao fechar
-        app_running = False
+        # Limpa os recursos
         if cam_thread:
             cam_thread.stop()
-        logging.info(">>> Servidor Flask terminado. A limpar recursos...")
-        time.sleep(1.0)
-        logging.info(">>> Aplicação terminada.")
+        if event_manager:
+            event_manager.stop()
+        logging.info(">>> Serviço DMS terminado.")
 
