@@ -1,7 +1,6 @@
 # Documentação: Thread de Captura de Vídeo
-# Esta classe é responsável por ler frames da fonte de vídeo (USB ou RTSP)
-# numa thread separada, para não bloquear a aplicação principal.
-# NOVO: Agora inclui controlo de rotação e brilho.
+# Responsável por ler frames da fonte de vídeo numa thread separada.
+# AGORA INCLUI: Controlo de Brilho e Rotação em tempo real.
 
 import cv2
 import threading
@@ -17,9 +16,9 @@ class CameraThread(threading.Thread):
     """
     Classe que gere a conexão da câmara numa thread dedicada.
     """
-    def __init__(self, video_source_str, frame_width, frame_height, rotation_degrees=0):
+    def __init__(self, video_source_str, frame_width, frame_height, initial_rotation=0):
         threading.Thread.__init__(self)
-        self.daemon = True # Permite que a thread termine quando a app principal fechar
+        self.daemon = True
         
         self.is_rtsp = video_source_str.startswith("rtsp://")
         self.source_description = f"stream de rede: {video_source_str}" if self.is_rtsp else f"câmara local no índice: {video_source_str}"
@@ -34,21 +33,21 @@ class CameraThread(threading.Thread):
         self.running = False
         self.connected = False
         
-        # --- NOVO: Parâmetros de Controlo ---
-        self.rotation_code = None # Código cv2.ROTATE_...
-        if rotation_degrees == 90:
-            self.rotation_code = cv2.ROTATE_90_CLOCKWISE
-            logging.info(">>> ROTAÇÃO DE 90 GRAUS APLICADA.")
-        elif rotation_degrees == 180:
-            self.rotation_code = cv2.ROTATE_180
-            logging.info(">>> ROTAÇÃO DE 180 GRAUS APLICADA.")
-        elif rotation_degrees == 270:
-            self.rotation_code = cv2.ROTATE_90_COUNTERCLOCKWISE
-            logging.info(">>> ROTAÇÃO DE 270 GRAUS APLICADA.")
-            
-        # O brilho da câmara é tipicamente 0-255, com 128 como padrão.
-        self.brightness = 128 
+        # --- Controlo da Câmara ---
+        # Define o brilho inicial (1-100). 50 é o padrão.
+        # câmaras IR podem precisar de valores mais baixos.
+        self.brightness = 17.0 
         
+        # Mapeamento de rotação (NOVO)
+        self.rotation_degrees = initial_rotation
+        self.rotation_map = {
+            90: cv2.ROTATE_90_CLOCKWISE,
+            180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE
+        }
+        if self.rotation_degrees != 0:
+            logging.info(f">>> ROTAÇÃO DE {self.rotation_degrees} GRAUS APLICADA.")
+            
         self.connect_camera()
 
     def connect_camera(self):
@@ -60,22 +59,19 @@ class CameraThread(threading.Thread):
                 
             self.cap = cv2.VideoCapture(self.video_source_arg)
             
-            # Para câmaras USB, tentamos definir os parâmetros
             if not self.is_rtsp:
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
                 logging.info(f"Definida resolução da câmara para {self.frame_width}x{self.frame_height}")
                 
-                # NOVO: Define o brilho inicial
-                # Tenta ler o brilho atual, se falhar, usa o padrão 128
-                initial_brightness = self.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                if initial_brightness == -1: # Algumas câmaras não suportam ler
-                    initial_brightness = 128
-                self.brightness = initial_brightness
+                # Aplica o brilho (convertido de 0-100 para 0.0-1.0 se necessário, mas OpenCV usa 0-255)
+                # Vamos assumir que a API envia 0-100, mapeamos para 0-255.
+                # Atualização: a propriedade V4L2 varia (ex: 0-100, 0-255). Vamos usar o valor direto.
                 self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.brightness)
                 logging.info(f"Definido brilho da câmara para {self.brightness}")
 
-            time.sleep(2.0) # Dá tempo à câmara para inicializar
+
+            time.sleep(2.0) 
 
             if not self.cap.isOpened():
                 logging.error(f"!!! ERRO: Não foi possível abrir a fonte de vídeo: {self.video_source_arg}")
@@ -111,18 +107,19 @@ class CameraThread(threading.Thread):
                         self.running = False
                     continue
                 
-                # 1. Redimensiona o frame para o tamanho de exibição padrão
-                frame_resized = cv2.resize(frame, (self.frame_width, self.frame_height))
+                # Redimensiona o frame para o tamanho de exibição padrão
+                frame_display = cv2.resize(frame, (self.frame_width, self.frame_height))
 
-                # 2. Aplica a rotação (se definida)
-                if self.rotation_code is not None:
-                    frame_processed = cv2.rotate(frame_resized, self.rotation_code)
-                else:
-                    frame_processed = frame_resized
+                # --- (NOVO) Aplica Rotação ---
+                # Obtém o código de rotação (ex: cv2.ROTATE_180)
+                rotation_code = self.rotation_map.get(self.rotation_degrees)
+                if rotation_code is not None:
+                    frame_display = cv2.rotate(frame_display, rotation_code)
+                # ------------------------------
 
-                # 3. Atualiza o último frame de forma segura
+                # Atualiza o último frame de forma segura
                 with self.lock:
-                    self.latest_frame = frame_processed.copy()
+                    self.latest_frame = frame_display.copy()
             
             except Exception as e:
                 logging.error(f"Erro no loop da câmara: {e}", exc_info=True)
@@ -144,39 +141,31 @@ class CameraThread(threading.Thread):
         """Sinaliza à thread para parar."""
         self.running = False
 
-    # --- NOVO: Métodos de Controlo da Câmara ---
-    
-    def update_brightness(self, brightness_val):
-        """
-        Atualiza o brilho da câmara em tempo real.
-        Chamado pela API do Flask.
-        """
+    # --- Métodos de Controlo (Chamados pela API) ---
+
+    def update_brightness(self, brightness_level):
+        """Atualiza o brilho da câmara em tempo real."""
         try:
-            # Garante que o valor está no intervalo correto (0-255)
-            brightness_val = int(brightness_val)
-            if brightness_val < 0: brightness_val = 0
-            if brightness_val > 255: brightness_val = 255
-            
-            with self.lock:
-                self.brightness = brightness_val
-                # Aplica apenas se a câmara estiver ligada e não for RTSP
-                if self.cap and self.cap.isOpened() and not self.is_rtsp:
-                    self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.brightness)
-                    logging.info(f"Brilho da câmara atualizado para {self.brightness}")
-                    
+            self.brightness = float(brightness_level)
+            if self.cap and not self.is_rtsp:
+                self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.brightness)
+                logging.info(f"Brilho da câmara atualizado para: {self.brightness}")
         except Exception as e:
-            logging.error(f"Falha ao definir brilho: {e}", exc_info=True)
+            logging.error(f"Falha ao definir brilho: {e}")
 
     def get_brightness(self):
-        """
-        Retorna o valor de brilho atual.
-        Chamado pela API do Flask.
-        """
-        with self.lock:
-            # Tenta ler o valor real da câmara, se possível
-            if self.cap and self.cap.isOpened() and not self.is_rtsp:
-                val = self.cap.get(cv2.CAP_PROP_BRIGHTNESS)
-                if val != -1: # Se a leitura for suportada
-                    self.brightness = int(val)
-            return self.brightness
+        """Obtém o valor de brilho atual (da nossa variável)."""
+        return self.brightness
+
+    def update_rotation(self, degrees):
+        """Atualiza a rotação em tempo real."""
+        try:
+            self.rotation_degrees = int(degrees)
+            logging.info(f"Rotação da câmara atualizada para: {self.rotation_degrees} graus")
+        except Exception as e:
+            logging.error(f"Falha ao definir rotação: {e}")
+
+    def get_rotation(self):
+        """Obtém o valor de rotação atual."""
+        return self.rotation_degrees
 

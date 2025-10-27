@@ -1,396 +1,306 @@
 <!DOCTYPE html>
-<!--
-Documentação: Interface Web (Frontend) do SistemaDMS
-Responsável por:
-1. Exibir o stream de vídeo.
-2. Apresentar 'sliders' (barras deslizantes) para calibração.
-3. Comunicar com a API (Flask) para ler e enviar as configurações.
--->
-<html lang="pt">
+<html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Calibração</title>
     <style>
-        /* --- Estilos Gerais --- */
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #1a1a1a; /* Fundo escuro */
-            color: #e0e0e0; /* Texto claro */
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #1a1a1a; 
+            color: #eee; 
+            margin: 0; 
+            padding: 20px; 
+            text-align: center;
         }
-        h1, h2 {
-            color: #ffffff;
-            font-weight: 500;
-            border-bottom: 2px solid #444;
-            padding-bottom: 5px;
+        h1, h2 { 
+            color: #eee; 
+            border-bottom: 2px solid #444; 
+            padding-bottom: 10px;
             margin-top: 10px;
         }
-        .container {
+        #container { 
+            max-width: 1200px; 
+            margin: auto;
+        }
+        #video-container {
             display: flex;
-            flex-wrap: wrap; /* Permite quebrar a linha em ecrãs pequenos */
             justify-content: center;
-            gap: 30px;
-            width: 100%;
-            max-width: 1400px;
+            margin-bottom: 20px;
         }
-
-        /* --- Coluna de Vídeo --- */
-        .video-column {
-            flex: 2; /* Ocupa 2/3 do espaço */
-            min-width: 640px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .video-stream {
-            display: block;
-            border: 2px solid #444;
-            background-color: #000;
-            border-radius: 8px;
-            width: 100%;
-            max-width: 640px; /* Limita ao tamanho do vídeo */
+        img#stream { 
+            border: 1px solid #555; 
+            background-color: #000; 
+            max-width: 90%; 
             height: auto;
+            min-height: 480px; /* Evita "pulos" na página */
         }
-        .status-bar {
-            font-size: 0.9em;
-            color: #aaa;
-            margin-top: 10px;
-        }
-
-        /* --- Coluna de Calibração --- */
-        .controls-column {
-            flex: 1; /* Ocupa 1/3 do espaço */
-            min-width: 320px;
-            max-width: 400px;
-            background-color: #2a2a2a;
-            padding: 20px;
-            border-radius: 8px;
-            border: 1px solid #444;
+        #controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            text-align: left;
         }
         .control-group {
-            margin-bottom: 25px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         }
         .control-group h2 {
-            font-size: 1.3em;
+            font-size: 1.2em;
             margin-top: 0;
             margin-bottom: 15px;
-            border-color: #555;
+            color: #4CAF50; /* Verde para destacar */
         }
-        label {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 1em;
-            margin-bottom: 8px;
+        .slider-container, .select-container {
+            margin-bottom: 15px;
         }
-        /* Valor numérico do slider (ex: "0.25") */
-        label span {
+        label { 
+            display: block; 
+            margin-bottom: 5px; 
             font-weight: bold;
-            color: #4CAF50; /* Verde */
-            background-color: #1a1a1a;
-            padding: 3px 8px;
-            border-radius: 5px;
-            font-family: "Courier New", Courier, monospace;
+            font-size: 0.9em;
         }
-
-        /* --- Estilos dos Sliders (Barras) --- */
-        input[type="range"] {
-            -webkit-appearance: none;
-            appearance: none;
+        input[type="range"] { 
+            width: 100%; 
+            cursor: pointer;
+        }
+        select {
             width: 100%;
-            height: 10px;
-            background: #444;
-            outline: none;
-            opacity: 0.9;
-            -webkit-transition: .2s;
-            transition: opacity .2s;
-            border-radius: 5px;
-        }
-        input[type="range"]:hover {
-            opacity: 1;
-        }
-        /* O "puxador" do slider */
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 22px;
-            height: 22px;
-            background: #4CAF50; /* Verde */
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            background-color: #333;
+            color: #eee;
+            font-size: 1em;
             cursor: pointer;
-            border-radius: 50%;
-            border: 2px solid #fff;
         }
-        input[type="range"]::-moz-range-thumb {
-            width: 22px;
-            height: 22px;
-            background: #4CAF50;
-            cursor: pointer;
-            border-radius: 50%;
-            border: 2px solid #fff;
+        .value-display { 
+            float: right; 
+            font-weight: bold; 
+            color: #4CAF50;
         }
-
-        /* --- Botão de Reset --- */
-        #reset-button {
-            background-color: #f44336; /* Vermelho */
+        button {
+            background-color: #4CAF50;
             color: white;
             padding: 10px 15px;
             border: none;
-            border-radius: 5px;
+            border-radius: 4px;
             cursor: pointer;
             font-size: 1em;
-            width: 100%;
-            transition: background-color 0.2s;
+            margin-top: 10px;
         }
-        #reset-button:hover {
-            background-color: #d32f2f;
+        button:hover {
+            background-color: #45a049;
         }
-
+        #status-bar {
+            margin-top: 20px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        #save-status {
+            color: #FFC107; /* Amarelo */
+            margin-left: 10px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
-    <h1>SistemaDMS - Calibração em Tempo Real</h1>
-    
-    <div class="container">
-        <!-- Coluna da Esquerda (Vídeo) -->
-        <div class="video-column">
-            <img id="stream" class="video-stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}" alt="Stream da câmara">
-            <div class="status-bar">
-                Fonte: {{ cam_source_desc }} | Resolução: {{ width }}x{{ height }}
-            </div>
+
+    <div id="container">
+        <h1>SistemaDMS - Calibração em Tempo Real</h1>
+        
+        <div id="video-container">
+            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
         </div>
 
-        <!-- Coluna da Direita (Controlos) -->
-        <div class="controls-column">
-            
-            <!-- Grupo: Câmara -->
+        <div id="controls-grid">
             <div class="control-group">
-                <h2>Câmara</h2>
-                <!-- Controlo de Brilho -->
-                <label for="brightness">Brilho: <span id="brightness_val">0</span></label>
-                <input type="range" min="0" max="100" value="50" class="slider" id="brightness" data-target="brightness_val">
+                <h2>Parâmetros de Deteção (Dlib)</h2>
+                
+                <div class="slider-container">
+                    <label for="ear_threshold">Sensibilidade Sonolência (EAR) <span class="value-display" id="ear_threshold_val">0.25</span></label>
+                    <input type="range" id="ear_threshold" min="0.1" max="0.4" step="0.01">
+                </div>
+                
+                <div class="slider-container">
+                    <label for="ear_consec_frames">Frames Sonolência <span class="value-display" id="ear_consec_frames_val">15</span></label>
+                    <input type="range" id="ear_consec_frames" min="5" max="50" step="1">
+                </div>
+
+                <div class="slider-container">
+                    <label for="distraction_threshold_angle">Sensibilidade Distração (Ângulo) <span class="value-display" id="distraction_threshold_angle_val">30</span></label>
+                    <input type="range" id="distraction_threshold_angle" min="15" max="60" step="1">
+                </div>
+
+                <div class="slider-container">
+                    <label for="distraction_consec_frames">Frames Distração <span class="value-display" id="distraction_consec_frames_val">25</span></label>
+                    <input type="range" id="distraction_consec_frames" min="5" max="50" step="1">
+                </div>
             </div>
 
-            <!-- Grupo: Sonolência -->
             <div class="control-group">
-                <h2>Deteção de Sonolência</h2>
-                <!-- Controlo: Limite EAR -->
-                <label for="ear_threshold">Limite EAR: <span id="ear_threshold_val">0.00</span></label>
-                <input type="range" min="0.10" max="0.40" step="0.01" value="0.25" class="slider" id="ear_threshold" data-target="ear_threshold_val">
-                
-                <!-- Controlo: Frames EAR -->
-                <label for="ear_consec_frames">Frames Consecutivos: <span id="ear_consec_frames_val">0</span></label>
-                <input type="range" min="1" max="50" step="1" value="15" class="slider" id="ear_consec_frames" data-target="ear_consec_frames_val">
-            </div>
-            
-            <!-- Grupo: Distração -->
-            <div class="control-group">
-                <h2>Deteção de Distração</h2>
-                <!-- Controlo: Ângulo Limite -->
-                <label for="distraction_threshold_angle">Ângulo Limite (°): <span id="distraction_threshold_angle_val">0</span></label>
-                <input type="range" min="10" max="60" step="1" value="30" class="slider" id="distraction_threshold_angle" data-target="distraction_threshold_angle_val">
-                
-                <!-- Controlo: Frames Distração -->
-                <label for="distraction_consec_frames">Frames Consecutivos: <span id="distraction_consec_frames_val">0</span></label>
-                <input type="range" min="1" max="50" step="1" value="25" class="slider" id="distraction_consec_frames" data-target="distraction_consec_frames_val">
-            </div>
+                <h2>Configurações da Câmara</h2>
 
-            <!-- Botão de Reset -->
-            <button id="reset-button">Reiniciar para Padrão</button>
+                <div class="slider-container">
+                    <label for="brightness">Brilho da Câmara (IR) <span class="value-display" id="brightness_val">50</span></label>
+                    <input type="range" id="brightness" min="0" max="100" step="1">
+                </div>
+
+                <!-- (NOVO) Seletor de Rotação -->
+                <div class="select-container">
+                    <label for="rotation">Rotação da Imagem</label>
+                    <select id="rotation">
+                        <option value="0">0° (Padrão)</option>
+                        <option value="90">90° (Horário)</option>
+                        <option value="180">180° (Invertido)</option>
+                        <option value="270">270° (Anti-horário)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <button id="restoreDefaults">Restaurar Padrões</button>
+        <div id="status-bar">
+            <strong>Fonte:</strong> {{ cam_source_desc }} 
+            <span id="save-status"></span>
         </div>
     </div>
 
     <script>
-        // IIFE (Immediately Invoked Function Expression) para encapsular o nosso código
-        (function() {
-            "use strict";
-
-            // --- Constantes e Variáveis ---
-            const API_URL = "/api/config";
-            // IDs dos elementos (Chave: ID do slider, Valor: ID do <span> que mostra o valor)
-            const sliders = {
-                "brightness": "brightness_val",
-                "ear_threshold": "ear_threshold_val",
-                "ear_consec_frames": "ear_consec_frames_val",
-                "distraction_threshold_angle": "distraction_threshold_angle_val",
-                "distraction_consec_frames": "distraction_consec_frames_val"
+        document.addEventListener('DOMContentLoaded', () => {
+            const controls = {
+                // Dlib
+                ear_threshold: document.getElementById('ear_threshold'),
+                ear_consec_frames: document.getElementById('ear_consec_frames'),
+                distraction_threshold_angle: document.getElementById('distraction_threshold_angle'),
+                distraction_consec_frames: document.getElementById('distraction_consec_frames'),
+                // Câmara
+                brightness: document.getElementById('brightness'),
+                rotation: document.getElementById('rotation') // (NOVO)
             };
 
-            // Guarda os valores padrão para o Reset
-            const defaultSettings = {}; 
+            const valueDisplays = {
+                ear_threshold: document.getElementById('ear_threshold_val'),
+                ear_consec_frames: document.getElementById('ear_consec_frames_val'),
+                distraction_threshold_angle: document.getElementById('distraction_threshold_angle_val'),
+                distraction_consec_frames: document.getElementById('distraction_consec_frames_val'),
+                brightness: document.getElementById('brightness_val')
+            };
 
-            // --- Funções ---
-
-            /**
-             * Atualiza o texto do <span> de um slider.
-             * @param {string} sliderId - O ID do <input type="range">.
-             * @param {string} value - O valor a ser exibido.
-             */
-            function updateSliderLabel(sliderId, value) {
-                const labelId = sliders[sliderId];
-                if (labelId) {
-                    const labelEl = document.getElementById(labelId);
-                    if (labelEl) {
-                        // Formata valores 'float' (ex: 0.25)
-                        if (value.includes && value.includes('.')) {
-                            labelEl.textContent = parseFloat(value).toFixed(2);
-                        } else {
-                            labelEl.textContent = value;
-                        }
-                    }
-                }
-            }
-
-            /**
-             * Define o valor de um slider (e atualiza o seu label).
-             * @param {string} sliderId - O ID do <input type="range">.
-             * @param {string|number} value - O valor a ser definido.
-             */
-            function setSliderValue(sliderId, value) {
-                const sliderEl = document.getElementById(sliderId);
-                if (sliderEl) {
-                    sliderEl.value = value;
-                    updateSliderLabel(sliderId, value.toString());
-                }
-            }
-
-            /**
-             * Carrega as configurações atuais do servidor (API GET).
-             */
-            async function loadInitialSettings() {
-                try {
-                    const response = await fetch(API_URL);
-                    if (!response.ok) {
-                        throw new Error(`Erro ao carregar config: ${response.statusText}`);
-                    }
-                    const settings = await response.json();
-                    
-                    console.log("Configurações recebidas:", settings);
-
-                    // Itera sobre as configurações recebidas e atualiza os sliders
-                    for (const [key, value] of Object.entries(settings)) {
-                        if (sliders[key]) {
-                            setSliderValue(key, value);
-                            // Guarda o valor padrão (o primeiro valor carregado)
-                            defaultSettings[key] = value;
-                        }
-                    }
-                } catch (error) {
-                    console.error("Falha ao carregar configurações:", error);
-                    alert("Não foi possível carregar as configurações do servidor.");
-                }
-            }
-
-            /**
-             * Envia as configurações atuais para o servidor (API POST).
-             */
-            async function postSettings() {
-                const currentSettings = {};
-                // Lê o valor atual de todos os sliders
-                for (const sliderId in sliders) {
-                    const sliderEl = document.getElementById(sliderId);
-                    if (sliderEl) {
-                        currentSettings[sliderId] = sliderEl.value;
-                    }
-                }
-                
-                console.log("A enviar configurações:", currentSettings);
-
-                try {
-                    const response = await fetch(API_URL, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                        },
-                        body: JSON.stringify(currentSettings),
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`Erro ao enviar config: ${response.statusText}`);
-                    }
-                    
-                    // (Opcional) Poderia mostrar uma mensagem de "Guardado!"
-                    
-                } catch (error) {
-                    console.error("Falha ao enviar configurações:", error);
-                }
-            }
-
-            /**
-             * Função "debounce": Atraso para não enviar a API a cada micro-movimento.
-             * @param {Function} func - A função a ser chamada (ex: postSettings).
-             * @param {number} delay - O tempo de espera em milissegundos.
-             * @returns {Function} - A nova função "debounce".
-             */
-            function debounce(func, delay) {
-                let timeoutId;
-                return function(...args) {
-                    clearTimeout(timeoutId);
-                    timeoutId = setTimeout(() => {
-                        func.apply(this, args);
-                    }, delay);
-                };
-            }
-
-            // --- Inicialização e Event Listeners ---
+            const saveStatus = document.getElementById('save-status');
+            const restoreButton = document.getElementById('restoreDefaults');
             
-            // Atrasa o envio da API em 300ms após o utilizador parar de mexer o slider
-            const debouncedPostSettings = debounce(postSettings, 300);
+            let defaultSettings = {};
+            let updateTimeout;
 
-            // Adiciona os 'listeners' a todos os sliders
-            document.addEventListener("DOMContentLoaded", () => {
-                // 1. Carrega os valores iniciais quando a página abre
-                loadInitialSettings();
+            // --- 1. Carregar Configurações Iniciais ---
+            async function fetchInitialConfig() {
+                try {
+                    const response = await fetch('/api/config');
+                    if (!response.ok) throw new Error('Falha ao carregar API');
+                    
+                    const data = await response.json();
+                    
+                    // Guarda os valores padrão (para o botão "Restaurar")
+                    defaultSettings = { ...data }; 
 
-                // 2. Adiciona 'listeners' para os sliders
-                for (const sliderId in sliders) {
-                    const sliderEl = document.getElementById(sliderId);
-                    if (sliderEl) {
-                        // 'input' é acionado continuamente enquanto se arrasta
-                        sliderEl.addEventListener("input", (event) => {
-                            // Atualiza o <span> (ex: "0.25") instantaneamente
-                            updateSliderLabel(sliderId, event.target.value);
-                        });
-                        
-                        // 'change' é acionado *após* o utilizador largar o slider
-                        sliderEl.addEventListener("change", () => {
-                            // Envia a configuração para a API (com atraso)
-                            debouncedPostSettings();
-                        });
+                    // Define os valores nos controlos
+                    updateControls(data);
+                    
+                } catch (error) {
+                    console.error('Erro ao carregar configurações:', error);
+                    saveStatus.textContent = "Erro ao carregar API!";
+                }
+            }
+            
+            // --- 2. Atualizar a Interface (Sliders/Selects) ---
+            function updateControls(settings) {
+                for (const key in controls) {
+                    if (settings.hasOwnProperty(key)) {
+                        controls[key].value = settings[key];
+                        if (valueDisplays[key]) {
+                            valueDisplays[key].textContent = settings[key];
+                        }
                     }
                 }
+            }
 
-                // 3. Adiciona 'listener' para o botão de Reset
-                const resetButton = document.getElementById("reset-button");
-                if (resetButton) {
-                    resetButton.addEventListener("click", () => {
-                        console.log("A reiniciar para os valores padrão:", defaultSettings);
-                        for (const [key, value] of Object.entries(defaultSettings)) {
-                            setSliderValue(key, value);
-                        }
-                        // Envia os valores padrão para a API
-                        debouncedPostSettings();
+            // --- 3. Enviar Configurações para a API (POST) ---
+            async function postConfig() {
+                const newConfig = {
+                    ear_threshold: parseFloat(controls.ear_threshold.value),
+                    ear_consec_frames: parseInt(controls.ear_consec_frames.value, 10),
+                    distraction_threshold_angle: parseInt(controls.distraction_threshold_angle.value, 10),
+                    distraction_consec_frames: parseInt(controls.distraction_consec_frames.value, 10),
+                    brightness: parseFloat(controls.brightness.value),
+                    rotation: parseInt(controls.rotation.value, 10) // (NOVO)
+                };
+
+                saveStatus.textContent = "A guardar...";
+                
+                try {
+                    const response = await fetch('/api/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newConfig)
                     });
+                    
+                    if (!response.ok) throw new Error('Falha ao guardar');
+                    
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        saveStatus.textContent = "Guardado!";
+                    } else {
+                        throw new Error(result.message || 'Erro desconhecido');
+                    }
+                } catch (error) {
+                    console.error('Erro ao guardar configurações:', error);
+                    saveStatus.textContent = "Erro ao guardar!";
+                }
+            }
+
+            // --- 4. Adicionar Event Listeners ---
+            
+            // Adiciona listeners para todos os sliders
+            Object.keys(valueDisplays).forEach(key => {
+                controls[key].addEventListener('input', () => {
+                    valueDisplays[key].textContent = controls[key].value;
+                });
+            });
+
+            // Adiciona listeners para todos os controlos (sliders e select)
+            Object.values(controls).forEach(control => {
+                control.addEventListener('change', () => {
+                    // Usa um "debounce" para não sobrecarregar a API
+                    clearTimeout(updateTimeout);
+                    updateTimeout = setTimeout(postConfig, 250);
+                });
+            });
+
+            // Listener do botão "Restaurar"
+            restoreButton.addEventListener('click', () => {
+                if (defaultSettings) {
+                    updateControls(defaultSettings);
+                    // Dispara o evento 'change' para o primeiro controlo para guardar
+                    controls.ear_threshold.dispatchEvent(new Event('change'));
                 }
             });
 
-            // Recarrega o stream se ele falhar
+            // --- 5. Lidar com Erros do Stream ---
             const stream = document.getElementById("stream");
-            if (stream) {
-                stream.onerror = function() {
-                    console.log("Erro no stream, a tentar recarregar em 5s...");
-                    setTimeout(function() {
-                        // Adiciona um timestamp para evitar o cache
-                        stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
-                    }, 5000);
-                };
-            }
+            stream.onerror = function() {
+                console.log("Erro no stream, a tentar recarregar em 5s...");
+                saveStatus.textContent = "Stream de vídeo perdido! A tentar reconectar...";
+                setTimeout(function() {
+                    stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
+                }, 5000);
+            };
 
-        })(); // Fim da IIFE
+            // --- Iniciar ---
+            fetchInitialConfig();
+        });
     </script>
 </body>
 </html>
