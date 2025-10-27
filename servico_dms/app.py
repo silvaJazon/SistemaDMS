@@ -129,6 +129,13 @@ HTML_TEMPLATE = """
                 <input type="range" id="distraction_consec_frames" min="10" max="60" step="1">
                 <span id="distraction_consec_frames_val">25</span>
             </div>
+
+            <!-- NOVO: Slider de Brilho -->
+            <div class="control-group">
+                <label for="brightness">Brilho da Câmara</label>
+                <input type="range" id="brightness" min="0" max="255" step="1">
+                <span id="brightness_val">128</span>
+            </div>
             
             <button id="saveButton">Guardar Configuração</button>
         </div>
@@ -170,7 +177,8 @@ HTML_TEMPLATE = """
                 ear_threshold: document.getElementById('ear_threshold').value,
                 ear_consec_frames: document.getElementById('ear_consec_frames').value,
                 distraction_threshold_angle: document.getElementById('distraction_threshold_angle').value,
-                distraction_consec_frames: document.getElementById('distraction_consec_frames').value
+                distraction_consec_frames: document.getElementById('distraction_consec_frames').value,
+                brightness: document.getElementById('brightness').value // NOVO: Envia o brilho
             };
             
             try {
@@ -269,10 +277,13 @@ def video_feed():
 @app.route("/api/config", methods=['GET'])
 def get_config():
     """API (GET): Retorna os valores de configuração atuais do dms_monitor."""
-    if dms_monitor:
+    # NOVO: Obtém configurações de AMBOS os módulos
+    if dms_monitor and cam_thread:
         settings = dms_monitor.get_settings()
+        # Adiciona o brilho ao dicionário de configurações
+        settings['brightness'] = cam_thread.get_brightness()
         return jsonify(settings)
-    return jsonify({"error": "Monitor não inicializado"}), 500
+    return jsonify({"error": "Monitor ou Câmara não inicializado"}), 500
 
 @app.route("/api/config", methods=['POST'])
 def set_config():
@@ -281,20 +292,27 @@ def set_config():
     if not data:
         return jsonify({"error": "Dados inválidos"}), 400
         
-    if dms_monitor:
+    # NOVO: Atualiza AMBOS os módulos
+    if dms_monitor and cam_thread:
         try:
+            # 1. Atualiza as configurações do DMS (Sonolência, etc.)
             dms_monitor.update_settings(
                 ear_thresh=data.get('ear_threshold'),
                 ear_frames=data.get('ear_consec_frames'),
                 distraction_angle=data.get('distraction_threshold_angle'),
                 distraction_frames=data.get('distraction_consec_frames')
             )
+            
+            # 2. Atualiza o brilho da câmara
+            if 'brightness' in data:
+                cam_thread.update_brightness(data.get('brightness'))
+            
             return jsonify({"success": True, "message": "Configuração atualizada."})
         except Exception as e:
             logging.error(f"Erro ao atualizar configuração: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
             
-    return jsonify({"error": "Monitor não inicializado"}), 500
+    return jsonify({"error": "Monitor ou Câmara não inicializado"}), 500
 
 # --- NOVO: Thread de Deteção ---
 
@@ -327,8 +345,11 @@ def detection_loop():
             continue
             
         # 2. Converte para Preto e Branco (Gray)
-        # NOVO: Corrigido o bug de digitação
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        except cv2.error as e:
+            logging.warning(f"Erro ao converter frame para 'gray' (frame pode estar corrompido): {e}")
+            continue
             
         # 3. Processa o frame no DMS Core
         if dms_monitor:
