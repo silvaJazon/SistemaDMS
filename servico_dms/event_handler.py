@@ -1,146 +1,99 @@
-# Documentação: Gestor de Eventos (Event Handler)
-# Responsável por receber alertas do loop principal e guardá-los
-# de forma assíncrona (noutra thread) para não bloquear a deteção.
+# Documentação: Gestor de Eventos Assíncrono (A "Central")
+# Responsável por:
+# 1. Receber "eventos" (alertas + imagens) através de uma Fila (Queue).
+# 2. Guardar a imagem e o log .jsonl numa thread separada (para não bloquear a deteção).
 
 import threading
-import queue
+import time
+import logging
 import os
 import cv2
-import datetime
-import logging
 import json
-import sys # Adicionado para sys.exit
+from datetime import datetime
+import queue # Importa o módulo queue
 
-class EventHandler:
+class EventHandler(threading.Thread):
     """
-    Gere uma fila de eventos e um 'worker' (trabalhador)
-    para guardar alertas (metadados + imagem) no disco.
+    Esta thread consome eventos da fila e guarda-os no disco.
+    Isto evita que a operação "lenta" de guardar ficheiros
+    atrase o loop principal de deteção.
     """
     
-    def __init__(self, save_path="/app/alerts"):
-        self.save_path = save_path
-        # .jsonl (JSON Lines) é um formato onde cada linha é um JSON válido
-        self.log_file_path = os.path.join(self.save_path, "alerts_log.jsonl") 
-        
-        # Garante que o diretório de destino existe
-        if not os.path.exists(self.save_path):
-            try:
-                os.makedirs(self.save_path)
-            except OSError as e:
-                logging.error(f"!!! ERRO FATAL: Não foi possível criar o diretório de alertas: {e}")
-                sys.exit(1) # Para a aplicação se não puder guardar
-
-        # A Fila (Queue) é 'thread-safe' (segura para threads)
-        self.event_queue = queue.Queue(maxsize=100) # Define um limite para a fila
-        
-        # O 'None' é um sinal para a thread parar ('sentinel')
-        self.stop_signal = None 
-        
-        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+    # (NOVO) A assinatura __init__ está correta agora
+    def __init__(self, queue, save_path="/app/alerts"):
+        threading.Thread.__init__(self)
+        self.daemon = True
         self.running = False
+        
+        # Esta é a fila (Queue) partilhada com o app.py
+        self.queue = queue 
+        
+        # Caminho onde os alertas serão guardados
+        self.save_path = save_path
+        
+        # Caminho completo para o ficheiro de log JSONL
+        self.log_file_path = os.path.join(self.save_path, "alerts_log.jsonl")
         
         logging.info(f"Gestor de Eventos inicializado. Alertas serão guardados em: {self.save_path}")
 
-    def start(self):
-        """Inicia a thread do 'worker'."""
+    def run(self):
+        """O loop principal da thread worker."""
         self.running = True
-        self.worker_thread.start()
         logging.info("Thread do Gestor de Eventos iniciada.")
-
-    def stop(self):
-        """Sinaliza ao 'worker' para parar."""
-        if not self.running:
-            return
-            
-        self.running = False
-        self.event_queue.put(self.stop_signal) # Envia o sinal de paragem
-        logging.info("A aguardar 'worker' de eventos terminar...")
-        self.worker_thread.join(timeout=2.0) # Espera 2s pela thread
-        logging.info("'Worker' de eventos terminado.")
-
-    def _worker_loop(self):
-        """O loop que corre na thread 'worker'."""
+        
         while self.running:
             try:
-                # Bloqueia até um item estar disponível
-                event = self.event_queue.get(timeout=1.0) # Timeout de 1s para verificar self.running
+                # Espera por um item na fila (bloqueia até receber algo)
+                # O timeout de 1 segundo permite que a thread verifique self.running
+                item = self.queue.get(timeout=1.0)
                 
-                if event is None: # Se .get() der timeout
-                    continue
-
-                # Verifica se é o sinal de paragem
-                if event is self.stop_signal:
-                    break
+                if item:
+                    self.process_event(item)
+                    self.queue.task_done()
                     
-                # Processa o evento
-                self._save_event_to_disk(event)
-                
-                # Informa a fila que a tarefa foi concluída
-                self.event_queue.task_done()
-                
             except queue.Empty:
-                # Isto é normal, acontece se não houver eventos durante 1s
-                continue 
+                # Isto é normal, significa que a fila esteve vazia durante 1s
+                continue
             except Exception as e:
-                logging.error(f"Erro no 'worker' de eventos: {e}", exc_info=True)
+                logging.error(f"Erro na thread do Gestor de Eventos: {e}", exc_info=True)
+        
+        logging.info("Thread do Gestor de Eventos terminada.")
 
-    def log_event(self, event_type, value, frame):
-        """
-        Método PÚBLICO chamado pelo app.py para registar um novo evento.
-        Isto é rápido e não-bloqueante.
-        """
-        if not self.running:
-            return
-            
+    def process_event(self, item):
+        """Processa e guarda um único evento de alerta."""
         try:
-            # Cria o carimbo de data/hora
-            timestamp = datetime.datetime.now(datetime.timezone.utc)
+            event_data = item.get("event")
+            frame = item.get("frame")
+            event_type = event_data.get("type", "DESCONHECIDO")
             
-            event_data = {
-                "timestamp_utc": timestamp.isoformat(),
-                "event_type": event_type,
-                "value": round(value, 3) if isinstance(value, float) else value,
-                "frame": frame.copy() # Copia o frame para processamento seguro
-            }
-            
-            # Coloca o evento na fila (sem bloquear)
-            self.event_queue.put_nowait(event_data)
-            
-        except queue.Full:
-            logging.warning("Fila de eventos está cheia! A descartar alerta.")
-        except Exception as e:
-            logging.error(f"Erro ao colocar evento na fila: {e}", exc_info=True)
+            # 1. Gerar carimbo de data/hora e nome do ficheiro
+            # Formato ISO 8601 (seguro para nomes de ficheiro)
+            timestamp_iso = datetime.utcnow().isoformat(timespec='microseconds') + "Z"
+            filename = f"{timestamp_iso}_{event_type}.jpg"
+            image_path = os.path.join(self.save_path, filename)
 
-    def _save_event_to_disk(self, event):
-        """
-        Método PRIVADO que faz o trabalho lento de I/O (guardar no disco).
-        """
-        try:
-            # 1. Preparar nomes e metadados
-            # Converte o timestamp para string (seguro para nomes de ficheiro)
-            ts_str = event['timestamp_utc'].replace(":", "-").replace("+00-00", "Z")
+            # 2. Guardar a imagem (operação "lenta")
+            cv2.imwrite(image_path, frame)
             
-            image_filename = f"{ts_str}_{event['event_type']}.jpg"
-            image_path = os.path.join(self.save_path, image_filename)
-            
-            # 2. Guardar a Imagem (Operação Lenta)
-            cv2.imwrite(image_path, event['frame'], [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            
-            # 3. Preparar o Log (JSON)
+            # 3. Preparar o log
             log_entry = {
-                "timestamp_utc": event['timestamp_utc'],
-                "event_type": event['event_type'],
-                "value": event['value'],
-                "image_path_container": image_path # Caminho *dentro* do contentor
+                "timestamp": timestamp_iso,
+                "event_type": event_type,
+                "image_file": filename,
+                "details": event_data.get("details", {})
             }
-            
-            # 4. Guardar o Log (Operação Lenta)
-            # Usamos 'a' (append) para adicionar ao ficheiro de log
-            with open(self.log_file_path, "a") as f:
-                f.write(json.dumps(log_entry) + "\n") # .jsonl (JSON Lines)
 
-            logging.warning(f"*** ALERTA ARMAZENADO *** Tipo: {event['event_type']}, Imagem: {image_filename}")
+            # 4. Anexar ao ficheiro JSONL (JSON Lines)
+            # O 'a' significa "append" (anexar)
+            with open(self.log_file_path, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+
+            logging.warning(f"*** ALERTA ARMAZENADO *** Tipo: {event_type}, Imagem: {filename}")
 
         except Exception as e:
-            logging.error(f"Falha ao guardar evento no disco: {e}", exc_info=True)
+            logging.error(f"Falha ao processar e guardar evento: {e}", exc_info=True)
+
+    def stop(self):
+        """Sinaliza à thread para parar."""
+        self.running = False
 
