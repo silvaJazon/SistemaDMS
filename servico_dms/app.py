@@ -311,7 +311,7 @@ if __name__ == '__main__':
     finally:
         logging.info(">>> A iniciar encerramento do serviço...")
         
-        # Sinaliza às threads para pararem
+        # Sinaliza às threads para pararem #
         if 'cam_thread' in locals() and cam_thread.is_alive():
             cam_thread.stop()
             cam_thread.join(timeout=2) # Espera um pouco pela thread
