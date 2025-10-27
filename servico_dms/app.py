@@ -225,7 +225,8 @@ if __name__ == '__main__':
         logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
 
         # 1. Inicia o Gestor de Eventos (A "Central")
-        event_handler = EventHandler(event_queue)
+        # (CORREÇÃO) Usa um argumento nomeado (keyword argument) para evitar confusão
+        event_handler = EventHandler(queue=event_queue)
         event_handler.start()
         
         # 2. Inicia o "Cérebro"
