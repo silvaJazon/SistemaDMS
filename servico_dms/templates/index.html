@@ -68,6 +68,21 @@
             margin-bottom: 5px;
             color: #ccc;
         }
+        /* (NOVO) Estilo para o ícone de informação */
+        .info-icon {
+            display: inline-block;
+            margin-left: 5px;
+            color: #aaa;
+            cursor: help; /* Muda o cursor para indicar ajuda */
+            font-size: 0.9em;
+            border: 1px solid #888;
+            border-radius: 50%; /* Faz um círculo */
+            width: 16px;
+            height: 16px;
+            line-height: 16px; /* Centraliza o texto verticalmente */
+            text-align: center; /* Centraliza o texto horizontalmente */
+            background-color: #555;
+        }
         input[type="range"] {
             width: 100%;
             cursor: pointer;
@@ -144,7 +159,7 @@
             <!-- Área para mostrar status EAR/MAR/Yaw/etc -->
             <div class="status-info">
                 EAR: <span id="status-ear">-</span> |
-                MAR: <span id="status-mar">-</span> | <!-- (NOVO) -->
+                MAR: <span id="status-mar">-</span> |
                 Yaw: <span id="status-yaw">-</span> |
                 Pitch: <span id="status-pitch">-</span> |
                 Roll: <span id="status-roll">-</span>
@@ -156,48 +171,64 @@
 
             <!-- Sonolência -->
             <div>
-                <label for="ear_threshold">Limite EAR Sonolência:</label>
-                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01" value="0.25"> <!-- Valor padrão inicial -->
+                <label for="ear_threshold">Limite EAR Sonolência:
+                    <span class="info-icon" title="Eye Aspect Ratio (EAR) mínimo antes de disparar o alerta. Valores mais baixos = olhos mais fechados. Padrão: 0.25">ⓘ</span>
+                </label>
+                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01" value="0.25">
                 <span class="slider-value" id="ear_threshold_value">0.25</span>
             </div>
             <div>
-                <label for="ear_frames">Frames Sonolência:</label>
+                <label for="ear_frames">Frames Sonolência:
+                    <span class="info-icon" title="Número de frames consecutivos com EAR abaixo do limite para disparar o alerta. Padrão: 15">ⓘ</span>
+                </label>
                 <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1" value="15">
                 <span class="slider-value" id="ear_frames_value">15</span>
             </div>
 
-            <!-- (NOVO) Bocejo -->
+            <!-- Bocejo -->
             <div>
-                <label for="mar_threshold">Limite MAR Bocejo:</label>
+                <label for="mar_threshold">Limite MAR Bocejo:
+                     <span class="info-icon" title="Mouth Aspect Ratio (MAR) mínimo para considerar um bocejo. Valores mais altos = boca mais aberta. Padrão: 0.60">ⓘ</span>
+                </label>
                 <input type="range" id="mar_threshold" name="mar_threshold" min="0.3" max="1.0" step="0.05" value="0.60">
                 <span class="slider-value" id="mar_threshold_value">0.60</span>
             </div>
              <div>
-                <label for="mar_frames">Frames Bocejo:</label>
+                <label for="mar_frames">Frames Bocejo:
+                    <span class="info-icon" title="Número de frames consecutivos com MAR acima do limite para disparar o alerta. Padrão: 20">ⓘ</span>
+                </label>
                 <input type="range" id="mar_frames" name="mar_frames" min="5" max="40" step="1" value="20">
                 <span class="slider-value" id="mar_frames_value">20</span>
             </div>
 
             <!-- Distração -->
             <div>
-                <label for="distraction_angle">Ângulo Distração (°):</label>
+                <label for="distraction_angle">Ângulo Distração (°):
+                    <span class="info-icon" title="Ângulo máximo (em graus) que a cabeça pode desviar (olhar para o lado ou para baixo) antes de disparar o alerta. Padrão: 30">ⓘ</span>
+                </label>
                 <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1" value="30">
                 <span class="slider-value" id="distraction_angle_value">30</span>
             </div>
             <div>
-                <label for="distraction_frames">Frames Distração:</label>
+                <label for="distraction_frames">Frames Distração:
+                    <span class="info-icon" title="Número de frames consecutivos com a cabeça fora do ângulo limite para disparar o alerta. Padrão: 25">ⓘ</span>
+                </label>
                 <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1" value="25">
                 <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
 
             <h2>Configurações da Câmara</h2>
              <div>
-                <label for="brightness">Brilho:</label>
+                <label for="brightness">Brilho:
+                    <span class="info-icon" title="Ajusta o brilho da imagem da câmara (apenas para câmaras USB).">ⓘ</span>
+                </label>
                 <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1" value="0">
                 <span class="slider-value" id="brightness_value">0</span>
             </div>
             <div>
-                <label for="rotation">Rotação:</label>
+                <label for="rotation">Rotação:
+                     <span class="info-icon" title="Gira a imagem da câmara para corrigir a orientação.">ⓘ</span>
+                </label>
                 <select id="rotation" name="rotation">
                     <option value="0">0°</option>
                     <option value="90">90°</option>
@@ -220,7 +251,7 @@
 
         // Elementos de status (EAR, MAR, Yaw, etc.)
         const statusEar = document.getElementById('status-ear');
-        const statusMar = document.getElementById('status-mar'); // (NOVO)
+        const statusMar = document.getElementById('status-mar');
         const statusYaw = document.getElementById('status-yaw');
         const statusPitch = document.getElementById('status-pitch');
         const statusRoll = document.getElementById('status-roll');
@@ -234,7 +265,8 @@
             }
             if (valueSpan) {
                 // Formata números decimais com 2 casas, inteiros sem casas decimais
-                valueSpan.textContent = Number.isInteger(Number(value)) ? value : Number(value).toFixed(2);
+                const numericValue = Number(value); // Converte para número primeiro
+                valueSpan.textContent = Number.isInteger(numericValue) ? numericValue : numericValue.toFixed(2);
             }
         }
 
@@ -243,26 +275,23 @@
             try {
                 const response = await fetch('/api/config');
                 if (!response.ok) {
-                    // Se o serviço estiver a reiniciar (503), não mostra erro, tenta de novo
                     if (response.status === 503) {
                          console.log("Serviço indisponível (503), a tentar novamente...");
                          saveStatus.textContent = "Aguardando serviço...";
                          saveStatus.style.color = "#ffeb3b"; // Amarelo
-                         return; // Sai sem atualizar
+                         return;
                     }
                     throw new Error(`Erro HTTP: ${response.status}`);
                 }
                 const data = await response.json();
                 console.log("Configurações recebidas:", data); // Debug
 
-                // Guarda como padrão na primeira vez que recebe dados válidos
                 if (Object.keys(defaultSettings).length === 0 && data && !data.error) {
                     defaultSettings = { ...data };
-                    delete defaultSettings.status; // Remove 'status' dos padrões
+                    delete defaultSettings.status;
                     console.log("Valores padrão guardados:", defaultSettings);
                 }
 
-                // Atualiza sliders e dropdown usando a função auxiliar
                 sliders.forEach(slider => {
                     if (data.hasOwnProperty(slider.name)) {
                         updateSliderAndValue(slider.id, data[slider.name]);
@@ -277,20 +306,18 @@
                      console.warn("Configuração 'rotation' não encontrada.");
                 }
 
-                // Atualiza os dados de status
                 if (data.status) {
                     statusEar.textContent = data.status.ear || '-';
-                    statusMar.textContent = data.status.mar || '-'; // (NOVO)
+                    statusMar.textContent = data.status.mar || '-';
                     statusYaw.textContent = data.status.yaw || '-';
                     statusPitch.textContent = data.status.pitch || '-';
                     statusRoll.textContent = data.status.roll || '-';
-                    // Limpa a mensagem de "Aguardando serviço" se houver status
                     if (saveStatus.textContent === "Aguardando serviço...") {
                         saveStatus.textContent = "";
                     }
                 } else {
                     statusEar.textContent = '-';
-                    statusMar.textContent = '-'; // (NOVO)
+                    statusMar.textContent = '-';
                     statusYaw.textContent = '-';
                     statusPitch.textContent = '-';
                     statusRoll.textContent = '-';
@@ -300,9 +327,8 @@
                 console.error("Erro ao buscar configurações:", error);
                 saveStatus.textContent = "Erro ao carregar.";
                 saveStatus.style.color = "#f44336"; // Vermelho
-                 // Limpa os dados de status em caso de erro
                 statusEar.textContent = 'Erro';
-                statusMar.textContent = 'Erro'; // (NOVO)
+                statusMar.textContent = 'Erro';
                 statusYaw.textContent = 'Erro';
                 statusPitch.textContent = 'Erro';
                 statusRoll.textContent = 'Erro';
@@ -313,7 +339,6 @@
         async function postSettings() {
             const currentSettings = {};
             sliders.forEach(slider => {
-                // Converte para número (float ou int dependendo do step)
                 currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
             });
             currentSettings.rotation = parseInt(rotationSelect.value);
@@ -329,13 +354,12 @@
                     body: JSON.stringify(currentSettings)
                 });
 
-                // Verifica o status da resposta antes de tentar analisar JSON
                 if (!response.ok) {
                      let errorMsg = `Erro ${response.status}`;
-                     try { // Tenta obter mensagem de erro do corpo da resposta
+                     try {
                          const errorData = await response.json();
                          errorMsg += `: ${errorData.error || response.statusText}`;
-                     } catch (e) { /* Ignora erro ao analisar JSON do erro */ }
+                     } catch (e) { /* Ignora */ }
                      throw new Error(errorMsg);
                 }
 
@@ -351,9 +375,7 @@
                 saveStatus.textContent = `Erro: ${error.message}`;
                 saveStatus.style.color = "#f44336"; // Vermelho
             }
-            // Limpa a mensagem após alguns segundos
             setTimeout(() => {
-                // Só limpa se ainda for uma mensagem de erro/sucesso
                  if (saveStatus.style.color === 'rgb(76, 175, 80)' || saveStatus.style.color === 'rgb(244, 67, 54)') {
                      saveStatus.textContent = "";
                  }
@@ -364,12 +386,10 @@
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                // Atualiza o span visualmente ENQUANTO o slider mexe
                 slider.addEventListener('input', () => {
-                     const value = slider.step.includes('.') ? parseFloat(slider.value).toFixed(2) : slider.value;
-                     valueSpan.textContent = value;
+                     const numericValue = Number(slider.value);
+                     valueSpan.textContent = Number.isInteger(numericValue) ? numericValue : numericValue.toFixed(2);
                 });
-                // Envia para a API SÓ QUANDO o utilizador solta o slider (change event)
                 slider.addEventListener('change', postSettings);
             } else {
                  console.warn(`Span de valor não encontrado para ${slider.id}`);
@@ -383,46 +403,40 @@
                 console.log("A restaurar para:", defaultSettings);
                 sliders.forEach(slider => {
                     if (defaultSettings.hasOwnProperty(slider.name)) {
-                        // Usa a função auxiliar para garantir que o span também é atualizado
                         updateSliderAndValue(slider.id, defaultSettings[slider.name]);
                     }
                 });
                  if (defaultSettings.hasOwnProperty('rotation')) {
                     rotationSelect.value = defaultSettings.rotation;
                  }
-                // Envia os valores restaurados para a API
                 postSettings();
             } else {
                 alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
             }
         });
 
-        // --- Atualização periódica do status (e configurações se mudaram no backend) ---
-        // Busca a cada 2 segundos
+        // --- Atualização periódica do status ---
         setInterval(fetchAndUpdateSettings, 2000);
 
-        // Busca as configurações iniciais imediatamente quando a página carrega
-        // Adiciona um pequeno delay para dar tempo ao backend de iniciar completamente
+        // Busca as configurações iniciais
         setTimeout(fetchAndUpdateSettings, 500);
 
 
         // Tratamento de erro e recarregamento do stream de vídeo
         var stream = document.getElementById("stream");
-        var reloadTimeout; // Para evitar reloads múltiplos
+        var reloadTimeout;
 
         function reloadStream() {
-             clearTimeout(reloadTimeout); // Cancela timeout anterior se houver
+             clearTimeout(reloadTimeout);
              console.log("Erro no stream, a tentar recarregar em 5s...");
              stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Imagem transparente
              reloadTimeout = setTimeout(function() {
-                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime(); // Adiciona timestamp para evitar cache
+                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
              }, 5000);
         }
         stream.onerror = reloadStream;
-        // (Opcional) Tenta recarregar também se a imagem parar de carregar (pode acontecer em redes instáveis)
-        // stream.onload = () => { clearTimeout(reloadTimeout); }; // Cancela o timeout se carregar bem
-        // stream.onabort = reloadStream; // Se o carregamento for abortado
 
     </script>
 </body>
 </html>
+
