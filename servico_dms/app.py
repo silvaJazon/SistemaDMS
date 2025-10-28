@@ -101,37 +101,55 @@ def detection_loop(cam_thread, dms_monitor, event_queue_ref):
 
     while not stop_event.is_set():
         start_time = time.time()
+        logging.debug("DetectionLoop: Topo do loop.") # NOVO
 
         if not cam_thread.is_alive():
              logging.error("!!! Thread da câmara não está ativa. A parar loop de deteção.")
              break
 
+        logging.debug("DetectionLoop: A chamar cam_thread.get_frame()...") # NOVO
         frame = cam_thread.get_frame()
+        logging.debug(f"DetectionLoop: cam_thread.get_frame() retornou {'um frame' if frame is not None else 'None'}.") # NOVO
+
 
         if frame is None:
             if not stop_event.is_set():
-                logging.debug("Frame não recebido da câmara. A aguardar...")
+                logging.debug("DetectionLoop: Frame não recebido da câmara. A aguardar...") # Nível DEBUG
             time.sleep(0.1)
             continue
 
         try:
+            logging.debug("DetectionLoop: A converter frame para cinzento...") # NOVO
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            processed_frame, events, status_data = dms_monitor.process_frame(frame.copy(), gray)
 
+            logging.debug("DetectionLoop: A chamar dms_monitor.process_frame()...") # NOVO
+            processed_frame, events, status_data = dms_monitor.process_frame(frame.copy(), gray)
+            logging.debug("DetectionLoop: dms_monitor.process_frame() retornou.") # NOVO
+
+            logging.debug("DetectionLoop: A adquirir output_frame_lock...") # NOVO
             with output_frame_lock:
+                logging.debug("DetectionLoop: output_frame_lock adquirido.") # NOVO
                 output_frame_display = processed_frame.copy()
+            logging.debug("DetectionLoop: output_frame_lock libertado.") # NOVO
+
             # (NOVO) Log de debug a cada 100 frames
             frame_count += 1
             if frame_count % 100 == 0:
-                 logging.debug(f"Loop de deteção: Frame {frame_count} processado e atualizado.")
+                 logging.debug(f"DetectionLoop: Frame {frame_count} processado e atualizado.")
 
 
+            logging.debug("DetectionLoop: A adquirir status_data_lock...") # NOVO
             with status_data_lock:
-                status_data_global = status_data.copy()
+                 logging.debug("DetectionLoop: status_data_lock adquirido.") # NOVO
+                 status_data_global = status_data.copy()
+            logging.debug("DetectionLoop: status_data_lock libertado.") # NOVO
+
 
             if events:
+                logging.debug(f"DetectionLoop: {len(events)} eventos detetados neste frame.") # NOVO
                 for event in events:
                     try:
+                        logging.debug(f"DetectionLoop: A colocar evento '{event.get('type')}' na fila...") # NOVO
                         event_queue_ref.put({"event_data": event, "frame": frame.copy()}, block=False, timeout=0.1)
                     except queue.Full:
                         logging.warning("!!! Fila de eventos cheia. Evento descartado.")
@@ -154,12 +172,14 @@ def detection_loop(cam_thread, dms_monitor, event_queue_ref):
 
 
         if wait_time > 0:
+            logging.debug(f"DetectionLoop: A esperar {wait_time:.3f}s...") # NOVO
             stop_event.wait(timeout=wait_time)
         else:
             current_time = time.time()
             if current_time - last_process_time > 5.0:
                  logging.warning(f"!!! LOOP LENTO. Processamento demorou {processing_time:.2f}s (Alvo era {TARGET_FRAME_TIME:.2f}s)")
                  last_process_time = current_time
+            logging.debug("DetectionLoop: Loop lento, pequena pausa (0.01s).") # NOVO
             stop_event.wait(timeout=0.01)
 
 
@@ -196,14 +216,17 @@ def generate_video_stream():
         frame_to_encode = None
         # (NOVO) Verifica se há um frame novo ou usa placeholder
         use_placeholder = False
+        logging.debug("generate_video_stream: A adquirir output_frame_lock...") # NOVO
         with output_frame_lock:
-            if output_frame_display is not None:
-                frame_to_encode = output_frame_display.copy()
-                logging.debug("generate_video_stream: Usando frame processado.") # (NOVO)
-            else:
-                frame_to_encode = placeholder.copy()
-                use_placeholder = True
-                logging.debug("generate_video_stream: Usando placeholder.") # (NOVO)
+             logging.debug("generate_video_stream: output_frame_lock adquirido.") # NOVO
+             if output_frame_display is not None:
+                 frame_to_encode = output_frame_display.copy()
+                 logging.debug("generate_video_stream: Usando frame processado.")
+             else:
+                 frame_to_encode = placeholder.copy()
+                 use_placeholder = True
+                 logging.debug("generate_video_stream: Usando placeholder.")
+        logging.debug("generate_video_stream: output_frame_lock libertado.") # NOVO
 
         # Garante que frame_to_encode não é None (segurança extra)
         if frame_to_encode is None:
@@ -219,7 +242,10 @@ def generate_video_stream():
                  use_placeholder = True
 
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+            logging.debug("generate_video_stream: A codificar frame...") # NOVO
             (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, encode_param)
+            logging.debug(f"generate_video_stream: Codificação {'bem-sucedida' if flag else 'falhou'}.") # NOVO
+
 
             if not flag:
                 logging.warning(f"generate_video_stream: Falha ao codificar frame (placeholder={use_placeholder}). Tentando placeholder.")
@@ -252,6 +278,7 @@ def generate_video_stream():
         current_time = time.time()
         sleep_time = target_stream_time - (current_time - last_frame_time)
         if sleep_time > 0:
+             # logging.debug(f"generate_video_stream: A esperar {sleep_time:.3f}s...") # (Opcional, muito verboso)
              stop_event.wait(timeout=sleep_time)
         last_frame_time = time.time()
 
@@ -282,8 +309,11 @@ def api_config():
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
+            logging.debug("api_config GET: A adquirir status_data_lock...") # NOVO
             with status_data_lock:
-                current_settings['status'] = status_data_global.copy()
+                 logging.debug("api_config GET: status_data_lock adquirido.") # NOVO
+                 current_settings['status'] = status_data_global.copy()
+            logging.debug("api_config GET: status_data_lock libertado.") # NOVO
             try:
                 current_settings['queue_depth'] = event_queue.qsize()
                 current_settings['queue_max_size'] = event_queue.maxsize
@@ -460,14 +490,16 @@ if __name__ == '__main__':
         logging.info(">>> A iniciar encerramento final do serviço...")
         # A ordem de join pode ser importante
         threads_to_join = []
-        if detection_thread and detection_thread.is_alive(): threads_to_join.append(detection_thread)
-        if cam_thread and cam_thread.is_alive(): threads_to_join.append(cam_thread)
-        if event_handler and event_handler.is_alive(): threads_to_join.append(event_handler)
+        # Adiciona threads à lista apenas se foram inicializadas e estão vivas
+        if 'detection_thread' in locals() and detection_thread and detection_thread.is_alive(): threads_to_join.append(detection_thread)
+        if 'cam_thread' in locals() and cam_thread and cam_thread.is_alive(): threads_to_join.append(cam_thread)
+        if 'event_handler' in locals() and event_handler and event_handler.is_alive(): threads_to_join.append(event_handler)
+
 
         for t in threads_to_join:
              logging.info(f"A aguardar thread '{t.name}'...")
              # Timeout mais curto para deteção (daemon)
-             timeout = 2 if t == detection_thread else 5
+             timeout = 2 if t.daemon else 5 # Aumenta timeout para não-daemon
              t.join(timeout=timeout)
              if t.is_alive():
                   logging.warning(f"!!! Timeout ao esperar pela thread '{t.name}'.")
