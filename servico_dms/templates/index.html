@@ -84,6 +84,9 @@
             font-weight: bold;
             color: #fff;
             margin-left: 10px;
+            min-width: 30px; /* Garante espaço para o valor */
+            display: inline-block; /* Para alinhar corretamente */
+            text-align: right;
         }
         button {
             padding: 10px 15px;
@@ -102,10 +105,14 @@
             margin-top: 15px;
             font-size: 0.9em;
             color: #bbb;
+            text-align: center; /* Centraliza o texto de status */
+            width: 100%; /* Ocupa a largura total */
+            line-height: 1.4; /* Melhora a legibilidade */
         }
         .status-info span {
             font-weight: bold;
             color: #ddd;
+            margin: 0 5px; /* Adiciona espaçamento entre os valores */
         }
 
         /* Responsividade: Empilha em ecrãs pequenos */
@@ -116,6 +123,10 @@
             .video-container, .controls-container {
                 min-width: 100%;
             }
+             .status-info span {
+                 display: inline-block; /* Evita quebra de linha estranha em mobile */
+                 margin-bottom: 5px;
+             }
         }
     </style>
 </head>
@@ -128,11 +139,12 @@
 
     <div class="container">
         <div class="video-container">
-            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
+            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}" alt="Video Stream">
             <p>Fonte: {{ source_desc }}</p>
-             <!-- (NOVO) Área para mostrar status EAR/Yaw/etc -->
+            <!-- Área para mostrar status EAR/MAR/Yaw/etc -->
             <div class="status-info">
                 EAR: <span id="status-ear">-</span> |
+                MAR: <span id="status-mar">-</span> | <!-- (NOVO) -->
                 Yaw: <span id="status-yaw">-</span> |
                 Pitch: <span id="status-pitch">-</span> |
                 Roll: <span id="status-roll">-</span>
@@ -142,31 +154,46 @@
         <div class="controls-container">
             <h2>Parâmetros de Deteção</h2>
 
+            <!-- Sonolência -->
             <div>
                 <label for="ear_threshold">Limite EAR Sonolência:</label>
-                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01">
+                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01" value="0.25"> <!-- Valor padrão inicial -->
                 <span class="slider-value" id="ear_threshold_value">0.25</span>
             </div>
             <div>
                 <label for="ear_frames">Frames Sonolência:</label>
-                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1">
+                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1" value="15">
                 <span class="slider-value" id="ear_frames_value">15</span>
             </div>
+
+            <!-- (NOVO) Bocejo -->
+            <div>
+                <label for="mar_threshold">Limite MAR Bocejo:</label>
+                <input type="range" id="mar_threshold" name="mar_threshold" min="0.3" max="1.0" step="0.05" value="0.60">
+                <span class="slider-value" id="mar_threshold_value">0.60</span>
+            </div>
+             <div>
+                <label for="mar_frames">Frames Bocejo:</label>
+                <input type="range" id="mar_frames" name="mar_frames" min="5" max="40" step="1" value="20">
+                <span class="slider-value" id="mar_frames_value">20</span>
+            </div>
+
+            <!-- Distração -->
             <div>
                 <label for="distraction_angle">Ângulo Distração (°):</label>
-                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
+                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1" value="30">
                 <span class="slider-value" id="distraction_angle_value">30</span>
             </div>
             <div>
                 <label for="distraction_frames">Frames Distração:</label>
-                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
+                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1" value="25">
                 <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
 
             <h2>Configurações da Câmara</h2>
              <div>
                 <label for="brightness">Brilho:</label>
-                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1">
+                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1" value="0">
                 <span class="slider-value" id="brightness_value">0</span>
             </div>
             <div>
@@ -189,69 +216,93 @@
         const rotationSelect = document.getElementById('rotation');
         const saveStatus = document.getElementById('save_status');
         const resetButton = document.getElementById('reset_button');
-        let defaultSettings = {}; // Para guardar os valores padrão
+        let defaultSettings = {}; // Para guardar os valores padrão carregados da API
 
-        // Elementos de status (EAR, Yaw, etc.)
+        // Elementos de status (EAR, MAR, Yaw, etc.)
         const statusEar = document.getElementById('status-ear');
+        const statusMar = document.getElementById('status-mar'); // (NOVO)
         const statusYaw = document.getElementById('status-yaw');
         const statusPitch = document.getElementById('status-pitch');
         const statusRoll = document.getElementById('status-roll');
+
+        // Função auxiliar para atualizar um slider e o seu span
+        function updateSliderAndValue(sliderId, value) {
+            const slider = document.getElementById(sliderId);
+            const valueSpan = document.getElementById(`${sliderId}_value`);
+            if (slider) {
+                slider.value = value;
+            }
+            if (valueSpan) {
+                // Formata números decimais com 2 casas, inteiros sem casas decimais
+                valueSpan.textContent = Number.isInteger(Number(value)) ? value : Number(value).toFixed(2);
+            }
+        }
 
         // Função para buscar e atualizar as configurações e status da API
         async function fetchAndUpdateSettings() {
             try {
                 const response = await fetch('/api/config');
                 if (!response.ok) {
+                    // Se o serviço estiver a reiniciar (503), não mostra erro, tenta de novo
+                    if (response.status === 503) {
+                         console.log("Serviço indisponível (503), a tentar novamente...");
+                         saveStatus.textContent = "Aguardando serviço...";
+                         saveStatus.style.color = "#ffeb3b"; // Amarelo
+                         return; // Sai sem atualizar
+                    }
                     throw new Error(`Erro HTTP: ${response.status}`);
                 }
                 const data = await response.json();
                 console.log("Configurações recebidas:", data); // Debug
-                
-                // Guarda como padrão na primeira vez
-                if (Object.keys(defaultSettings).length === 0) {
-                    defaultSettings = { ...data }; // Clona os dados
-                    // Remove 'status' dos padrões, se existir
-                    delete defaultSettings.status; 
+
+                // Guarda como padrão na primeira vez que recebe dados válidos
+                if (Object.keys(defaultSettings).length === 0 && data && !data.error) {
+                    defaultSettings = { ...data };
+                    delete defaultSettings.status; // Remove 'status' dos padrões
+                    console.log("Valores padrão guardados:", defaultSettings);
                 }
 
-                // Atualiza sliders e dropdown
+                // Atualiza sliders e dropdown usando a função auxiliar
                 sliders.forEach(slider => {
-                    const valueSpan = document.getElementById(`${slider.id}_value`);
                     if (data.hasOwnProperty(slider.name)) {
-                        slider.value = data[slider.name]; // Define o valor do input
-                        if (valueSpan) {
-                            valueSpan.textContent = data[slider.name]; // Define o texto do span
-                        }
+                        updateSliderAndValue(slider.id, data[slider.name]);
                     } else {
                         console.warn(`Configuração '${slider.name}' não encontrada na resposta da API.`);
                     }
                 });
+
                 if (data.hasOwnProperty('rotation')) {
                      rotationSelect.value = data.rotation;
                 } else {
                      console.warn("Configuração 'rotation' não encontrada.");
                 }
 
-                // (NOVO) Atualiza os dados de status
+                // Atualiza os dados de status
                 if (data.status) {
                     statusEar.textContent = data.status.ear || '-';
+                    statusMar.textContent = data.status.mar || '-'; // (NOVO)
                     statusYaw.textContent = data.status.yaw || '-';
                     statusPitch.textContent = data.status.pitch || '-';
                     statusRoll.textContent = data.status.roll || '-';
+                    // Limpa a mensagem de "Aguardando serviço" se houver status
+                    if (saveStatus.textContent === "Aguardando serviço...") {
+                        saveStatus.textContent = "";
+                    }
                 } else {
                     statusEar.textContent = '-';
+                    statusMar.textContent = '-'; // (NOVO)
                     statusYaw.textContent = '-';
                     statusPitch.textContent = '-';
                     statusRoll.textContent = '-';
                 }
 
-
             } catch (error) {
                 console.error("Erro ao buscar configurações:", error);
-                saveStatus.textContent = "Erro ao carregar conf.";
+                saveStatus.textContent = "Erro ao carregar.";
                 saveStatus.style.color = "#f44336"; // Vermelho
                  // Limpa os dados de status em caso de erro
                 statusEar.textContent = 'Erro';
+                statusMar.textContent = 'Erro'; // (NOVO)
                 statusYaw.textContent = 'Erro';
                 statusPitch.textContent = 'Erro';
                 statusRoll.textContent = 'Erro';
@@ -262,13 +313,12 @@
         async function postSettings() {
             const currentSettings = {};
             sliders.forEach(slider => {
-                currentSettings[slider.name] = parseFloat(slider.value); // Usa parseFloat para EAR
-                // Garante que valores inteiros sejam enviados como inteiros
-                if (slider.step === '1') {
-                    currentSettings[slider.name] = parseInt(slider.value);
-                }
+                // Converte para número (float ou int dependendo do step)
+                currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
             });
             currentSettings.rotation = parseInt(rotationSelect.value);
+
+            console.log("A enviar configurações:", currentSettings); // Debug
 
             try {
                 saveStatus.textContent = "A guardar...";
@@ -278,6 +328,17 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentSettings)
                 });
+
+                // Verifica o status da resposta antes de tentar analisar JSON
+                if (!response.ok) {
+                     let errorMsg = `Erro ${response.status}`;
+                     try { // Tenta obter mensagem de erro do corpo da resposta
+                         const errorData = await response.json();
+                         errorMsg += `: ${errorData.error || response.statusText}`;
+                     } catch (e) { /* Ignora erro ao analisar JSON do erro */ }
+                     throw new Error(errorMsg);
+                }
+
                 const result = await response.json();
                 if (result.success) {
                     saveStatus.textContent = "Guardado!";
@@ -287,23 +348,31 @@
                 }
             } catch (error) {
                 console.error("Erro ao guardar configurações:", error);
-                saveStatus.textContent = `Erro ao guardar: ${error.message}`;
+                saveStatus.textContent = `Erro: ${error.message}`;
                 saveStatus.style.color = "#f44336"; // Vermelho
             }
             // Limpa a mensagem após alguns segundos
-            setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+            setTimeout(() => {
+                // Só limpa se ainda for uma mensagem de erro/sucesso
+                 if (saveStatus.style.color === 'rgb(76, 175, 80)' || saveStatus.style.color === 'rgb(244, 67, 54)') {
+                     saveStatus.textContent = "";
+                 }
+            }, 3000);
         }
 
         // Adiciona listeners aos sliders e select
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                // Atualiza o span quando o slider muda
+                // Atualiza o span visualmente ENQUANTO o slider mexe
                 slider.addEventListener('input', () => {
-                    valueSpan.textContent = slider.value;
+                     const value = slider.step.includes('.') ? parseFloat(slider.value).toFixed(2) : slider.value;
+                     valueSpan.textContent = value;
                 });
-                // Envia para a API quando o utilizador solta o slider
+                // Envia para a API SÓ QUANDO o utilizador solta o slider (change event)
                 slider.addEventListener('change', postSettings);
+            } else {
+                 console.warn(`Span de valor não encontrado para ${slider.id}`);
             }
         });
         rotationSelect.addEventListener('change', postSettings);
@@ -311,13 +380,11 @@
          // Listener para o botão Restaurar Padrões
         resetButton.addEventListener('click', () => {
             if (Object.keys(defaultSettings).length > 0) {
+                console.log("A restaurar para:", defaultSettings);
                 sliders.forEach(slider => {
-                    const valueSpan = document.getElementById(`${slider.id}_value`);
                     if (defaultSettings.hasOwnProperty(slider.name)) {
-                        slider.value = defaultSettings[slider.name];
-                         if (valueSpan) {
-                            valueSpan.textContent = defaultSettings[slider.name];
-                         }
+                        // Usa a função auxiliar para garantir que o span também é atualizado
+                        updateSliderAndValue(slider.id, defaultSettings[slider.name]);
                     }
                 });
                  if (defaultSettings.hasOwnProperty('rotation')) {
@@ -329,23 +396,33 @@
                 alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
             }
         });
-        
-        // --- (NOVO) Atualização periódica do status ---
-        // Busca as configurações (e status) a cada 2 segundos
-        setInterval(fetchAndUpdateSettings, 2000); 
 
-        // Busca as configurações iniciais quando a página carrega
-        fetchAndUpdateSettings();
+        // --- Atualização periódica do status (e configurações se mudaram no backend) ---
+        // Busca a cada 2 segundos
+        setInterval(fetchAndUpdateSettings, 2000);
 
-        // Tratamento de erro do stream de vídeo
+        // Busca as configurações iniciais imediatamente quando a página carrega
+        // Adiciona um pequeno delay para dar tempo ao backend de iniciar completamente
+        setTimeout(fetchAndUpdateSettings, 500);
+
+
+        // Tratamento de erro e recarregamento do stream de vídeo
         var stream = document.getElementById("stream");
-        stream.onerror = function() {
-            console.log("Erro no stream, a tentar recarregar em 5s...");
-            setTimeout(function() {
-                stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
-            }, 5000);
-        };
+        var reloadTimeout; // Para evitar reloads múltiplos
+
+        function reloadStream() {
+             clearTimeout(reloadTimeout); // Cancela timeout anterior se houver
+             console.log("Erro no stream, a tentar recarregar em 5s...");
+             stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Imagem transparente
+             reloadTimeout = setTimeout(function() {
+                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime(); // Adiciona timestamp para evitar cache
+             }, 5000);
+        }
+        stream.onerror = reloadStream;
+        // (Opcional) Tenta recarregar também se a imagem parar de carregar (pode acontecer em redes instáveis)
+        // stream.onload = () => { clearTimeout(reloadTimeout); }; // Cancela o timeout se carregar bem
+        // stream.onabort = reloadStream; // Se o carregamento for abortado
+
     </script>
 </body>
 </html>
-
