@@ -1,4 +1,6 @@
 # Documentação: Dockerfile para o Serviço DMS
+# Usando "bookworm" (Debian 12) para ter acesso a um 'cmake' moderno.
+
 # --- Estágio Base ---
 FROM python:3.9-slim-bookworm AS base
 WORKDIR /app
@@ -6,7 +8,7 @@ WORKDIR /app
 # --- Estágio de Dependências ---
 COPY requirements.txt .
 
-# Instala dependências de sistema
+# Instala dependências de sistema (incluindo cmake 3.25.1)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         cmake \
@@ -24,15 +26,18 @@ RUN apt-get update && \
     && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-
-# Verifica a instalação do cmake
+# Verifica a versão do CMake (deve ser 3.25.1)
 RUN which cmake && cmake --version
 
-# Instala as dependências Python listadas no requirements.txt
+# Instala as dependências do requirements.txt (SEM dlib, SEM cmake)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala a versão específica do dlib
-RUN pip install --no-cache-dir dlib==19.24.2
+# Instala o pybind11 (dependência de build do dlib)
+RUN pip install --no-cache-dir pybind11
+
+# (NOVO) Instala o 'dlib' separadamente, FORÇANDO a política do CMake
+# A flag -DCMAKE_POLICY_VERSION_MINIMUM=3.5 tenta contornar o erro interno.
+RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" pip install --no-cache-dir dlib==19.24.2
 
 # --- Estágio de Download do Modelo (Dlib) ---
 # Descarrega o modelo de 68 pontos de referência faciais
@@ -41,21 +46,12 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
 # --- Estágio Final ---
-
-# Cria a pasta para guardar os alertas
 RUN mkdir /app/alerts
-
-# Copia a pasta de templates HTML
 COPY templates/ ./templates/
-
-# Copia os scripts Python da aplicação
 COPY app.py .
 COPY dms_core.py .
 COPY camera_thread.py .
 COPY event_handler.py .
-# Expõe a porta do Flask
 EXPOSE 5000
-
-# Comando de execução
 CMD ["python", "app.py"]
 
