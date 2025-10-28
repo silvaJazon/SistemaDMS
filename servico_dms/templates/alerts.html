@@ -130,9 +130,9 @@
                     throw new Error(`Erro HTTP: ${response.status}`);
                 }
                 const alerts = await response.json();
-                
+
                 // Limpa a tabela antes de adicionar novos dados
-                tableBody.innerHTML = ''; 
+                tableBody.innerHTML = '';
 
                 if (alerts.length === 0) {
                      tableBody.innerHTML = '<tr><td colspan="4" style="text-align: center;">Nenhum alerta registado ainda.</td></tr>';
@@ -141,23 +141,37 @@
 
                 alerts.forEach(alert => {
                     const row = tableBody.insertRow();
-                    
+
                     // Formata o timestamp para melhor leitura
-                    const timestamp = new Date(alert.timestamp.replace('Z', '+00:00'));
-                    const formattedTimestamp = timestamp.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
+                    let formattedTimestamp = 'Data inválida';
+                    try {
+                        // Tenta analisar o timestamp ISO 8601
+                        const timestamp = new Date(alert.timestamp.replace('Z', '+00:00'));
+                        // Verifica se a data é válida
+                        if (!isNaN(timestamp)) {
+                            formattedTimestamp = timestamp.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
+                        } else {
+                            console.warn("Timestamp inválido recebido:", alert.timestamp);
+                        }
+                    } catch (e) {
+                        console.error("Erro ao formatar timestamp:", alert.timestamp, e);
+                    }
+
 
                     row.insertCell(0).textContent = formattedTimestamp;
-                    // (CORRIGIDO) Usa alert.type (lowercase) que vem do dms_core.py
-                    row.insertCell(1).textContent = alert.type || 'Indefinido'; 
-                    row.insertCell(2).textContent = alert.value || '-';
-                    
+                    // Usa alert.event_type que vem da API e da BD SQLite
+                    row.insertCell(1).textContent = alert.event_type || 'Indefinido';
+                    // Usa alert.details que vem da API e da BD SQLite
+                    row.insertCell(2).textContent = alert.details || '-';
+
                     // Adiciona a miniatura da imagem
                     const imgCell = row.insertCell(3);
                     if (alert.image_file) {
                         const img = document.createElement('img');
+                        // O URL é construído com base no caminho relativo guardado na BD
                         const imageUrl = `/alerts/images/${alert.image_file}`;
                         img.src = imageUrl;
-                        img.alt = `Alerta ${alert.type || 'Indefinido'} em ${formattedTimestamp}`;
+                        img.alt = `Alerta ${alert.event_type || 'Indefinido'} em ${formattedTimestamp}`;
                         img.width = 100; // Define largura para consistência
 
                         // Adiciona evento de clique para abrir o modal
@@ -197,4 +211,3 @@
     </script>
 </body>
 </html>
-
