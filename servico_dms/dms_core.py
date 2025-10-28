@@ -1,6 +1,6 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
 # Responsável por toda a lógica de análise de imagem (IA).
-# (Atualizado com pitch configurável para câmara alta)
+# (Atualizado com ajustes no tracking para reduzir falsos positivos)
 
 import cv2
 import dlib
@@ -20,8 +20,10 @@ cv2.setUseOptimized(True)
 MOUTH_AR_START = 60 # Índice inicial dos pontos da boca (base 0)
 MOUTH_AR_END = 68   # Índice final dos pontos da boca (exclusivo)
 
-# Constante para a deteção/redeteção de faces
-FRAMES_FOR_REDETECTION = 10 # Executa a deteção completa a cada X frames
+# (AJUSTADO) Constante para a deteção/redeteção de faces
+FRAMES_FOR_REDETECTION = 5 # Executa a deteção completa a cada 5 frames
+# (NOVO) Limite de confiança para o tracker
+TRACKER_CONFIDENCE_THRESHOLD = 7.0
 
 class DriverMonitor:
     """
@@ -92,11 +94,10 @@ class DriverMonitor:
         self.ear_frames = 15
         self.mar_threshold = 0.60
         self.mar_frames = 20
-        self.distraction_angle = 35.0 # Ângulo Yaw (lateral)
+        self.distraction_angle = 35.0 # Yaw
         self.distraction_frames = 25
-        # (CONFIGURÁVEL) Limites de Pitch para câmara alta
-        self.pitch_down_offset = 15.0 # Quanto *mais* para baixo além do ângulo yaw
-        self.pitch_up_threshold = -10.0 # Limite para olhar para cima
+        self.pitch_down_offset = 15.0
+        self.pitch_up_threshold = -10.0
 
 
     def initialize_dlib(self):
@@ -133,9 +134,10 @@ class DriverMonitor:
 
     def _mouth_aspect_ratio(self, mouth):
         """Calcula o Mouth Aspect Ratio (MAR)."""
-        A = dist.euclidean(mouth[1], mouth[7])
-        B = dist.euclidean(mouth[3], mouth[5])
-        C = dist.euclidean(mouth[0], mouth[4])
+        # Pontos relativos ao slice 'mouth' (índices 0 a 7)
+        A = dist.euclidean(mouth[1], mouth[7]) # Pontos 62 e 68 (base 1) -> Índices 1 e 7 no slice
+        B = dist.euclidean(mouth[3], mouth[5]) # Pontos 64 e 66 (base 1) -> Índices 3 e 5 no slice
+        C = dist.euclidean(mouth[0], mouth[4]) # Pontos 61 e 65 (base 1) -> Índices 0 e 4 no slice
         if C < 1e-6: return 0.0
         mar = (A + B) / (2.0 * C)
         return mar
@@ -150,7 +152,7 @@ class DriverMonitor:
         try:
             (success, rotation_vector, translation_vector) = cv2.solvePnP(
                 self.HEAD_MODEL_POINTS, image_points, self.camera_matrix,
-                self.dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE
+                self.dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE # Experimentar SOLVEPNP_IPPE se houver instabilidade?
             )
             if not success:
                  logging.debug("DMSCore: cv2.solvePnP falhou.")
@@ -212,10 +214,11 @@ class DriverMonitor:
                      current_rect = max(rects, key=lambda r: r.width() * r.height())
                      if self.face_tracker is None: self.face_tracker = dlib.correlation_tracker()
                      logging.debug("DMSCore: A iniciar/reiniciar tracker...")
+                     # Usa o frame ORIGINAL (colorido) para iniciar o tracking
                      self.face_tracker.start_track(frame, current_rect)
                      self.tracking_active = True
                      self.tracked_rect = current_rect
-                     self.frame_since_detection = 0
+                     self.frame_since_detection = 0 # Reinicia contador após deteção
                      face_found_this_frame = True
                  else:
                      logging.debug("DMSCore: Nenhuma face detetada.")
@@ -225,16 +228,20 @@ class DriverMonitor:
              elif self.tracking_active:
                  logging.debug("DMSCore: A executar tracking...")
                  start_time_track = time.time()
+                 # Usa o frame ORIGINAL (colorido) para atualizar o tracking
                  confidence = self.face_tracker.update(frame)
                  logging.debug(f"DMSCore: Track atualizado (conf={confidence:.2f}) em {time.time() - start_time_track:.4f}s.")
-                 if confidence > 6.0:
+
+                 # (AJUSTADO) Usa novo limite de confiança
+                 if confidence > TRACKER_CONFIDENCE_THRESHOLD:
                      self.tracked_rect = self.face_tracker.get_position()
+                     # Converte para dlib.rectangle para o predictor
                      current_rect = dlib.rectangle(int(self.tracked_rect.left()), int(self.tracked_rect.top()),
                                                     int(self.tracked_rect.right()), int(self.tracked_rect.bottom()))
                      self.frame_since_detection += 1
                      face_found_this_frame = True
                  else:
-                     logging.debug("DMSCore: Tracker perdeu a face.")
+                     logging.debug(f"DMSCore: Tracker perdeu a face (confiança {confidence:.2f} <= {TRACKER_CONFIDENCE_THRESHOLD}).")
                      self._reset_counters_and_cooldowns()
                      self.tracking_active = False
                      self.tracked_rect = None
@@ -243,6 +250,7 @@ class DriverMonitor:
         if face_found_this_frame and current_rect is not None:
             logging.debug("DMSCore: A prever landmarks...")
             start_time_predict = time.time()
+            # Usa frame CINZENTO (não equalizado) para predição - geralmente mais estável
             shape = self.predictor(gray, current_rect)
             shape_np = self._shape_to_np(shape)
             logging.debug(f"DMSCore: Landmarks previstos em {time.time() - start_time_predict:.4f}s.")
@@ -294,15 +302,13 @@ class DriverMonitor:
                     self.yawn_counter = 0
                     self.yawn_alert_active = False
                 # Distração (Câmara Alta)
-                # Usa os limites configuráveis de pitch
                 pitch_down_limit = self.distraction_angle + self.pitch_down_offset
                 is_distracted_angle = (abs(yaw) > self.distraction_angle) or \
                                       (pitch < self.pitch_up_threshold) or \
                                       (pitch > pitch_down_limit)
-
                 if is_distracted_angle:
                     self.distraction_counter += 1
-                    logging.debug(f"DMSCore: Ângulo fora (Yaw={yaw:.1f} > {self.distraction_angle} OU Pitch={pitch:.1f} fora de [{self.pitch_up_threshold}, {pitch_down_limit}]), cont={self.distraction_counter}/{self.distraction_frames}")
+                    logging.debug(f"DMSCore: Ângulo fora (Yaw={yaw:.1f} > {self.distraction_angle} OU Pitch={pitch:.1f} fora [{self.pitch_up_threshold}, {pitch_down_limit}]), cont={self.distraction_counter}/{self.distraction_frames}")
                     if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
                         self.distraction_alert_active = True
                         events_list.append({"type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}", "timestamp": datetime.now().isoformat() + "Z"})
@@ -336,17 +342,16 @@ class DriverMonitor:
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle))
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
-                # (NOVO) Atualiza limites de pitch
                 self.pitch_up_threshold = float(settings.get('pitch_up_threshold', self.pitch_up_threshold))
                 self.pitch_down_offset = float(settings.get('pitch_down_offset', self.pitch_down_offset))
 
-                logging.info(f"Configurações DMS Core atualizadas: EAR<{self.ear_threshold} ({self.ear_frames}f), MAR>{self.mar_threshold} ({self.mar_frames}f), Yaw>{self.distraction_angle} ({self.distraction_frames}f), Pitch<({self.pitch_up_threshold})>({self.distraction_angle + self.pitch_down_offset})")
+                logging.info(f"Conf DMS Core atualizada: EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Yaw>{self.distraction_angle}({self.distraction_frames}f), Pitch<({self.pitch_up_threshold})>({self.distraction_angle + self.pitch_down_offset})")
                 return True
             except (ValueError, TypeError) as e:
-                logging.error(f"Erro ao atualizar conf. DMS Core (valor inválido?): {e}")
+                logging.error(f"Erro ao atualizar conf DMS Core (valor inválido?): {e}")
                 return False
             except Exception as e:
-                logging.error(f"Erro inesperado ao atualizar conf. DMS Core: {e}", exc_info=True)
+                logging.error(f"Erro inesperado ao atualizar conf DMS Core: {e}", exc_info=True)
                 return False
 
     def get_settings(self):
@@ -360,7 +365,6 @@ class DriverMonitor:
                 "mar_frames": self.mar_frames,
                 "distraction_angle": self.distraction_angle, # Yaw
                 "distraction_frames": self.distraction_frames,
-                # (NOVO) Retorna limites de pitch
                 "pitch_up_threshold": self.pitch_up_threshold,
                 "pitch_down_offset": self.pitch_down_offset
             }
