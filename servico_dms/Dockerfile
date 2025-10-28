@@ -29,15 +29,20 @@ RUN apt-get update && \
 # Verifica a versão do CMake (deve ser 3.25.1)
 RUN which cmake && cmake --version
 
+# (NOVO) Atualiza pip e setuptools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Instala as dependências do requirements.txt (SEM dlib, SEM cmake)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Instala o pybind11 (dependência de build do dlib)
-RUN pip install --no-cache-dir pybind11
+# Nota: Adicionamos --no-build-isolation aqui também por segurança
+RUN pip install --no-cache-dir --no-build-isolation pybind11
 
-# (NOVO) Instala o 'dlib' separadamente, FORÇANDO a política do CMake
-# A flag -DCMAKE_POLICY_VERSION_MINIMUM=3.5 tenta contornar o erro interno.
-RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" pip install --no-cache-dir dlib==19.24.2
+# Instala o 'dlib' separadamente
+# (NOVO) Usamos --no-build-isolation para forçar o uso do cmake do sistema
+# Mantemos CMAKE_ARGS por precaução, embora possa não ser necessário agora.
+RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" pip install --no-cache-dir --no-build-isolation dlib==19.24.2
 
 # --- Estágio de Download do Modelo (Dlib) ---
 # Descarrega o modelo de 68 pontos de referência faciais
