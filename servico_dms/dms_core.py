@@ -1,6 +1,6 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
 # Responsável por toda a lógica de análise de imagem (IA).
-# (Atualizado com lógica de tracking, bocejo, correção de MAR e debug detalhado)
+# (Atualizado com lógica de tracking, bocejo, correção de MAR, debug e ajuste para câmara alta)
 
 import cv2
 import dlib
@@ -35,13 +35,14 @@ class DriverMonitor:
     EYE_AR_RIGHT_END = 42
 
     # --- Modelo 3D da Cabeça (para SolvePnP) ---
+    # Ajustado ligeiramente para potentially melhor estabilidade com ângulos altos
     HEAD_MODEL_POINTS = np.array([
-        (0.0, 0.0, 0.0),       # Ponta do nariz (30)
-        (0.0, -330.0, -65.0),  # Queixo (8)
-        (-225.0, 170.0, -135.0),# Canto do olho esquerdo (36)
-        (225.0, 170.0, -135.0), # Canto do olho direito (45)
+        (0.0, 0.0, 0.0),        # Ponta do nariz (30)
+        (0.0, -330.0, -65.0),   # Queixo (8)
+        (-225.0, 170.0, -135.0), # Canto do olho esquerdo (36)
+        (225.0, 170.0, -135.0),  # Canto do olho direito (45)
         (-150.0, -150.0, -125.0),# Canto da boca esquerdo (48)
-        (150.0, -150.0, -125.0) # Canto da boca direito (54)
+        (150.0, -150.0, -125.0)  # Canto da boca direito (54)
     ])
 
     # Índices dos pontos 2D correspondentes no Dlib (base 0)
@@ -52,7 +53,7 @@ class DriverMonitor:
 
         # Parâmetros da câmara (baseado no tamanho do frame)
         self.frame_height, self.frame_width = frame_size
-        self.focal_length = self.frame_width
+        self.focal_length = self.frame_width # Aproximação comum
         self.camera_center = (self.frame_width / 2, self.frame_height / 2)
 
         self.camera_matrix = np.array([
@@ -93,8 +94,14 @@ class DriverMonitor:
         self.ear_frames = 15           # Nº de frames consecutivos para alarme de sonolência
         self.mar_threshold = 0.60      # Limite do Mouth Aspect Ratio
         self.mar_frames = 20           # Nº de frames consecutivos para alarme de bocejo
-        self.distraction_angle = 30.0  # Ângulo (graus) para alarme de distração
+        # (AJUSTADO) Aumenta o ângulo padrão para compensar a câmara alta
+        self.distraction_angle = 35.0
         self.distraction_frames = 25   # Nº de frames consecutivos para alarme de distração
+        # (NOVO) Offset para deteção de olhar para baixo (considerando câmara alta)
+        self.PITCH_DOWN_OFFSET = 15.0
+        # (NOVO) Limite para deteção de olhar para cima
+        self.PITCH_UP_THRESHOLD = -10.0
+
 
     def initialize_dlib(self):
         """Carrega o detetor de face e o preditor de landmarks do Dlib."""
@@ -123,32 +130,21 @@ class DriverMonitor:
 
     def _eye_aspect_ratio(self, eye):
         """Calcula a distância euclidiana entre os pontos verticais e horizontais do olho."""
-        # eye é um array NumPy com 6 pontos (índices 0 a 5)
-        # Pontos verticais (pálpebras)
-        A = dist.euclidean(eye[1], eye[5]) # Pontos 2 e 6 do olho (base 1)
-        B = dist.euclidean(eye[2], eye[4]) # Pontos 3 e 5 do olho (base 1)
-        # Pontos horizontais (cantos)
-        C = dist.euclidean(eye[0], eye[3]) # Pontos 1 e 4 do olho (base 1)
+        A = dist.euclidean(eye[1], eye[5])
+        B = dist.euclidean(eye[2], eye[4])
+        C = dist.euclidean(eye[0], eye[3])
 
-        if C < 1e-6: return 0.3 # Evita divisão por zero ou valores muito pequenos
+        if C < 1e-6: return 0.3
         ear = (A + B) / (2.0 * C)
         return ear
 
     def _mouth_aspect_ratio(self, mouth):
         """Calcula o Mouth Aspect Ratio (MAR)."""
-        # mouth é um array NumPy com 8 pontos (índices 0 a 7, Dlib 61 a 68)
-        # Distâncias verticais (lábio superior ao inferior nos pontos médios)
-        # Pontos Dlib originais: 62 e 68 (base 1) -> mouth[1] e mouth[7] (base 0)
-        # Pontos Dlib originais: 64 e 66 (base 1) -> mouth[3] e mouth[5] (base 0)
-        A = dist.euclidean(mouth[1], mouth[7])
-        B = dist.euclidean(mouth[3], mouth[5])
+        A = dist.euclidean(mouth[1], mouth[7]) # Pontos 62 e 68 (base 1)
+        B = dist.euclidean(mouth[3], mouth[5]) # Pontos 64 e 66 (base 1)
+        C = dist.euclidean(mouth[0], mouth[4]) # Pontos 61 e 65 (base 1)
 
-        # Distância horizontal (canto a canto)
-        # Pontos Dlib originais: 61 e 65 (base 1) -> mouth[0] e mouth[4] (base 0)
-        C = dist.euclidean(mouth[0], mouth[4])
-
-        if C < 1e-6: return 0.0 # Evita divisão por zero
-
+        if C < 1e-6: return 0.0
         mar = (A + B) / (2.0 * C)
         return mar
 
@@ -158,11 +154,9 @@ class DriverMonitor:
         logging.debug("DMSCore: A estimar pose da cabeça...")
         start_time_pose = time.time()
 
-        # Pontos 2D correspondentes do Dlib (índices base 0)
         image_points = np.array([shape_np[i] for i in self.HEAD_IMAGE_POINTS_IDX], dtype="double")
 
         try:
-            # Resolve a pose da cabeça (PnP)
             (success, rotation_vector, translation_vector) = cv2.solvePnP(
                 self.HEAD_MODEL_POINTS,
                 image_points,
@@ -175,14 +169,15 @@ class DriverMonitor:
                  logging.debug("DMSCore: cv2.solvePnP falhou.")
                  return 0, 0, 0
 
-            # Converte o vetor de rotação em ângulos de Euler (pitch, yaw, roll)
             (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
             angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
 
-            # Ângulos em graus
             yaw = angles[1]
             pitch = angles[0]
             roll = angles[2]
+
+            # (AJUSTE OPCIONAL) Pode ser necessário inverter yaw ou pitch dependendo da câmara/setup
+            # yaw = -yaw
 
             logging.debug(f"DMSCore: Pose estimada (Yaw={yaw:.1f}, Pitch={pitch:.1f}, Roll={roll:.1f}) em {time.time() - start_time_pose:.4f}s.")
             return yaw, pitch, roll
@@ -195,6 +190,7 @@ class DriverMonitor:
 
     def _reset_counters_and_cooldowns(self):
         """Reinicia todos os contadores de frames e flags de cooldown."""
+        # Não precisa de lock aqui, pois é chamada DENTRO de blocos que já têm lock
         logging.debug("DMSCore: A reiniciar contadores e cooldowns.")
         self.drowsiness_counter = 0
         self.distraction_counter = 0
@@ -210,7 +206,7 @@ class DriverMonitor:
         """
         Função principal de processamento. Analisa um frame e retorna o
         frame processado, quaisquer eventos de alerta e dados de status.
-        (Otimizado com Tracking)
+        (Otimizado com Tracking e ajuste para câmara alta)
         """
         logging.debug("DMSCore: process_frame iniciado.")
         start_time_total = time.time()
@@ -224,9 +220,8 @@ class DriverMonitor:
         logging.debug("DMSCore: Histograma equalizado.")
 
         # --- Lógica de Deteção/Tracking ---
-        current_rect = None # O retângulo da face neste frame
+        current_rect = None
 
-        # Lock protege acesso a self.tracking_active, self.frame_since_detection, self.face_tracker, self.tracked_rect
         logging.debug("DMSCore: A adquirir lock para tracking...")
         with self.lock:
              logging.debug("DMSCore: Lock de tracking adquirido.")
@@ -244,12 +239,13 @@ class DriverMonitor:
                      if self.face_tracker is None:
                           self.face_tracker = dlib.correlation_tracker()
                      logging.debug("DMSCore: A iniciar/reiniciar tracker...")
-                     self.face_tracker.start_track(frame, current_rect) # Usa o frame original (colorido)
+                     self.face_tracker.start_track(frame, current_rect)
                      self.tracking_active = True
                      self.tracked_rect = current_rect
                      self.frame_since_detection = 0
                      face_found_this_frame = True
-                     # Não reinicia contadores aqui, a face foi encontrada
+                     # Reinicia contadores APENAS se o tracking estava inativo antes (evita resets desnecessários)
+                     # if not self.tracking_active: self._reset_counters_and_cooldowns() # Comentado - reset só na perda
                  else:
                      logging.debug("DMSCore: Nenhuma face detetada na deteção completa.")
                      if self.tracking_active: # Só reinicia se estava ativo antes
@@ -260,13 +256,11 @@ class DriverMonitor:
              elif self.tracking_active:
                  logging.debug("DMSCore: A executar tracking...")
                  start_time_track = time.time()
-                 confidence = self.face_tracker.update(frame) # Usa frame colorido
+                 confidence = self.face_tracker.update(frame)
                  logging.debug(f"DMSCore: Tracking atualizado (confiança={confidence:.2f}) em {time.time() - start_time_track:.4f}s.")
 
-                 # Limiar de confiança ajustado (experimentalmente pode precisar de ajuste)
-                 if confidence > 6.0: # Reduzido ligeiramente de 7.0
+                 if confidence > 6.0:
                      self.tracked_rect = self.face_tracker.get_position()
-                     # Converte para dlib.rectangle para consistência
                      current_rect = dlib.rectangle(
                          int(self.tracked_rect.left()), int(self.tracked_rect.top()),
                          int(self.tracked_rect.right()), int(self.tracked_rect.bottom())
@@ -282,44 +276,38 @@ class DriverMonitor:
         logging.debug("DMSCore: Lock de tracking libertado.")
 
 
-        # --- Processamento dos Landmarks (APENAS se uma face foi encontrada/rastreada) ---
+        # --- Processamento dos Landmarks ---
         if face_found_this_frame and current_rect is not None:
             logging.debug("DMSCore: A prever landmarks...")
             start_time_predict = time.time()
-            # Usa o frame cinzento original (não o equalizado) para predição
             shape = self.predictor(gray, current_rect)
             shape_np = self._shape_to_np(shape)
             logging.debug(f"DMSCore: Landmarks previstos em {time.time() - start_time_predict:.4f}s.")
 
-            # --- 1. Verificação de Sonolência (EAR) ---
+            # --- Cálculos ---
             leftEye = shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]
             rightEye = shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
-            leftEAR = self._eye_aspect_ratio(leftEye)
-            rightEAR = self._eye_aspect_ratio(rightEye)
-            ear = (leftEAR + rightEAR) / 2.0
+            ear = (self._eye_aspect_ratio(leftEye) + self._eye_aspect_ratio(rightEye)) / 2.0
             logging.debug(f"DMSCore: EAR calculado: {ear:.3f}")
 
-            # --- 2. Verificação de Bocejo (MAR) ---
             mouth = shape_np[MOUTH_AR_START:MOUTH_AR_END]
-            mar = self._mouth_aspect_ratio(mouth) # Já corrigido
+            mar = self._mouth_aspect_ratio(mouth)
             logging.debug(f"DMSCore: MAR calculado: {mar:.3f}")
 
-            # --- 3. Verificação de Distração (Pose da Cabeça) ---
             yaw, pitch, roll = self._estimate_head_pose(shape_np)
 
 
-            # Desenha os contornos dos olhos e boca (debug visual)
+            # --- Desenho ---
             try:
                 leftEyeHull = cv2.convexHull(leftEye)
                 rightEyeHull = cv2.convexHull(rightEye)
                 mouthHull = cv2.convexHull(mouth)
-                cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1) # Verde
-                cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1) # Verde
-                cv2.drawContours(frame, [mouthHull], -1, (0, 255, 255), 1) # Ciano
-                # Desenha o retângulo da face
+                cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [mouthHull], -1, (0, 255, 255), 1)
                 pt1 = (int(current_rect.left()), int(current_rect.top()))
                 pt2 = (int(current_rect.right()), int(current_rect.bottom()))
-                cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2) # Azul claro
+                cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2)
             except Exception as draw_err:
                  logging.warning(f"DMSCore: Erro ao desenhar contornos: {draw_err}")
 
@@ -340,10 +328,10 @@ class DriverMonitor:
                         })
                         logging.warning("DMSCore: EVENTO SONOLENCIA disparado.")
                 else:
-                    if self.drowsiness_counter > 0: # Só loga/reseta se estava a contar
+                    if self.drowsiness_counter > 0:
                         logging.debug("DMSCore: Condição de sonolência terminada ou contador reiniciado.")
                         self.drowsiness_counter = 0
-                    self.drowsy_alert_active = False # Rearma sempre que EAR > threshold
+                    self.drowsy_alert_active = False
 
                 # Bocejo
                 if mar > self.mar_threshold:
@@ -362,12 +350,15 @@ class DriverMonitor:
                          self.yawn_counter = 0
                     self.yawn_alert_active = False
 
-                # Distração
-                is_distracted_angle = abs(yaw) > self.distraction_angle or \
-                                      abs(pitch) > self.distraction_angle # Simplificado: mesmo ângulo para ambos
+                # Distração (AJUSTADO PARA CÂMARA ALTA)
+                # Verifica Yaw (lateral) OU Pitch muito para cima OU Pitch muito para baixo
+                is_distracted_angle = (abs(yaw) > self.distraction_angle) or \
+                                      (pitch < self.PITCH_UP_THRESHOLD) or \
+                                      (pitch > (self.distraction_angle + self.PITCH_DOWN_OFFSET))
+
                 if is_distracted_angle:
                     self.distraction_counter += 1
-                    logging.debug(f"DMSCore: Ângulo fora (Yaw={yaw:.1f}, Pitch={pitch:.1f} > {self.distraction_angle}), contador={self.distraction_counter}/{self.distraction_frames}")
+                    logging.debug(f"DMSCore: Ângulo fora (Yaw={yaw:.1f} > {self.distraction_angle} OU Pitch={pitch:.1f} fora de [{self.PITCH_UP_THRESHOLD}, {self.distraction_angle + self.PITCH_DOWN_OFFSET}]), contador={self.distraction_counter}/{self.distraction_frames}")
                     if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
                         self.distraction_alert_active = True
                         events_list.append({
@@ -383,23 +374,21 @@ class DriverMonitor:
 
             logging.debug("DMSCore: Lock de alerta libertado.")
 
-            # --- Atualiza dados de status para a UI ---
+            # --- Atualiza dados de status ---
             status_data = { "ear": f"{ear:.2f}", "mar": f"{mar:.2f}", "yaw": f"{yaw:.1f}", "pitch": f"{pitch:.1f}", "roll": f"{roll:.1f}" }
 
-            # --- Desenha Alertas Visuais Finais ---
+            # --- Desenha Alertas Visuais ---
             if self.drowsy_alert_active:
                 cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if self.yawn_alert_active:
-                cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2) # Ciano
+                cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             if self.distraction_alert_active:
-                cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2) # Laranja
+                cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
 
-        else: # Nenhuma face encontrada/rastreada neste frame
+        else: # Nenhuma face encontrada/rastreada
              logging.debug("DMSCore: Nenhuma face encontrada/rastreada neste frame.")
-             # Lock necessário se _reset_counters_and_cooldowns modifica estado partilhado
-             # Mas já é chamado dentro do lock de tracking quando a face é perdida.
-             # self._reset_counters_and_cooldowns() # Redundante aqui
+             # O reset já acontece dentro do lock de tracking quando a face é perdida
 
         total_time = time.time() - start_time_total
         logging.debug(f"DMSCore: process_frame concluído em {total_time:.4f}s.")
@@ -417,6 +406,7 @@ class DriverMonitor:
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle))
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
+                # (Nota: PITCH_DOWN_OFFSET e PITCH_UP_THRESHOLD não são configuráveis pela UI por enquanto)
                 logging.info(f"Configurações do DMS Core atualizadas para: EAR<{self.ear_threshold} ({self.ear_frames}f), MAR>{self.mar_threshold} ({self.mar_frames}f), Angle>{self.distraction_angle} ({self.distraction_frames}f)")
                 return True
             except (ValueError, TypeError) as e:
