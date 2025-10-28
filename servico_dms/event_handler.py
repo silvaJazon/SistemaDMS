@@ -1,37 +1,45 @@
+# Documentação: Gestor de Eventos (Central de Alertas - SQLite)
+# Responsável por receber eventos (com frames) de uma fila e guardá-los
+# de forma assíncrona (imagem JPG + linha SQLite).
+# (Atualizado para aceitar 'stop_event' e usar paths relativos consistentes)
+
 import threading
 import queue
 import logging
 import os
 import cv2
+import json
 from datetime import datetime
-import sqlite3 # (NOVO) Importa a biblioteca SQLite
+import sqlite3
+import time # Para o retry
 
 class EventHandler(threading.Thread):
     """
     Processa eventos de alerta numa thread separada para guardar
-    informações numa base de dados SQLite e imagens em pastas organizadas por data.
+    informações (SQLite) e imagens (JPG) sem bloquear a thread principal.
     """
-    def __init__(self, queue, base_save_path="/app/alerts"):
+    # (NOVO) Aceita stop_event no construtor
+    def __init__(self, queue, stop_event, save_path="/app/alerts", db_name="alerts.db"):
         threading.Thread.__init__(self)
-        self.daemon = True
+        self.daemon = True # Permite que a thread termine quando a app principal fechar
         self.queue = queue
-        self.base_save_path = base_save_path
-        self.image_save_path = os.path.join(self.base_save_path, "images") # (NOVO) Subpasta para imagens
-        self.db_path = os.path.join(self.base_save_path, "alerts.db") # (NOVO) Caminho para a base de dados
-        self.running = False
+        self.stop_event = stop_event # Guarda o evento de paragem
+        self.save_path = save_path
+        self.image_save_path = os.path.join(self.save_path, "images") # Pasta específica para imagens
+        self.db_path = os.path.join(self.save_path, db_name)
+        self.conn = None # Conexão SQLite será estabelecida no run()
 
-        # Cria a pasta base e a subpasta de imagens se não existirem
-        os.makedirs(self.image_save_path, exist_ok=True)
-
-        # (NOVO) Inicializa a base de dados
-        self._init_db()
+        os.makedirs(self.image_save_path, exist_ok=True) # Cria a pasta de imagens
 
         logging.info(f"Gestor de Eventos inicializado. Base de dados: {self.db_path}, Imagens em: {self.image_save_path}")
+        self._init_db() # Verifica/Cria a tabela imediatamente
 
     def _init_db(self):
-        """Cria a base de dados e a tabela 'alerts' se não existirem."""
+        """Inicializa a base de dados SQLite e cria a tabela se não existir."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            # isolation_level=None para autocommit (mais simples para inserções únicas)
+            # timeout aumentado para evitar busy errors em escritas concorrentes (raro aqui, mas boa prática)
+            conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10.0)
             cursor = conn.cursor()
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS alerts (
@@ -42,115 +50,153 @@ class EventHandler(threading.Thread):
                     image_file TEXT
                 )
             ''')
-            # (Opcional) Adicionar um índice na coluna timestamp para pesquisas mais rápidas
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON alerts (timestamp DESC)')
-            conn.commit()
+            # (Opcional) Adicionar índice no timestamp para acelerar futuras consultas por data
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON alerts (timestamp)
+            ''')
             conn.close()
             logging.info(f"Base de dados SQLite '{self.db_path}' verificada/inicializada com sucesso.")
         except sqlite3.Error as e:
-            logging.error(f"Erro ao inicializar a base de dados SQLite: {e}", exc_info=True)
-            # Considerar parar a aplicação se a BD falhar aqui? Por agora, apenas loga.
+            logging.error(f"!!! Erro ao inicializar a base de dados SQLite: {e}", exc_info=True)
+            # Considerar parar a aplicação se a BD não puder ser inicializada?
+            # Por agora, apenas loga. A thread tentará conectar novamente.
+
+    def _get_db_connection(self):
+        """Obtém uma conexão à base de dados, com retry simples."""
+        if self.conn is None:
+            try:
+                # isolation_level=None (autocommit)
+                self.conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10.0)
+                logging.debug("Conexão SQLite estabelecida.")
+            except sqlite3.Error as e:
+                logging.error(f"Erro ao conectar à base de dados SQLite: {e}")
+                self.conn = None # Garante que continua None
+        return self.conn # Retorna None se a conexão falhou
+
 
     def run(self):
         """Loop principal da thread: espera por eventos na fila e processa-os."""
-        self.running = True
         logging.info("Thread do Gestor de Eventos (SQLite) iniciada.")
 
-        while self.running:
-            conn = None # (NOVO) Garante que a conexão é definida
+        while not self.stop_event.is_set(): # Usa o evento de paragem
             try:
-                item = self.queue.get(timeout=1)
-                if item is None: # Sinal de paragem
+                # Espera por um item (timeout curto para verificar stop_event frequentemente)
+                item = self.queue.get(timeout=0.2)
+
+                if item is None: # Sinal de paragem explícito (opcional)
                     break
 
-                # (NOVO) Abre a conexão com a BD *antes* de processar
-                conn = sqlite3.connect(self.db_path, timeout=10) # Timeout de 10s para operações
-
-                self.process_event(item, conn)
+                self.process_event(item)
                 self.queue.task_done()
 
             except queue.Empty:
+                # Timeout - normal, apenas continua a verificar stop_event
                 continue
-            except sqlite3.Error as e:
-                logging.error(f"Erro SQLite na thread do EventHandler: {e}", exc_info=True)
-                # Poderíamos tentar reconectar ou logar o evento falhado
             except Exception as e:
-                logging.error(f"Erro na thread do EventHandler: {e}", exc_info=True)
-            finally:
-                # (NOVO) Garante que a conexão é fechada, mesmo em caso de erro
-                if conn:
-                    conn.close()
+                logging.error(f"Erro inesperado na thread do EventHandler: {e}", exc_info=True)
+                # Pausa curta para evitar spam de logs em caso de erro rápido
+                time.sleep(1)
 
+        # Fecha a conexão SQLite ao terminar
+        if self.conn:
+            logging.info("A fechar conexão SQLite...")
+            self.conn.close()
         logging.info("Thread do Gestor de Eventos (SQLite) terminada.")
 
-    def process_event(self, item, conn):
-        """Guarda os dados do evento na BD SQLite e a imagem em JPG."""
+    def process_event(self, item):
+        """Guarda os dados do evento em SQLite e a imagem em JPG."""
+        conn = self._get_db_connection()
+        if not conn:
+             logging.error("Impossível processar evento: sem conexão à base de dados.")
+             # Poderíamos tentar colocar o item de volta na fila? Por agora, perdemos o evento.
+             return
+
         try:
             event_data = item.get("event_data")
             frame = item.get("frame")
 
-            if event_data is None:
-                logging.warning("Evento recebido com event_data=None. Ignorando.")
-                return
-            if frame is None:
-                logging.warning("Evento recebido sem frame. Ignorando.")
+            if event_data is None or frame is None:
+                logging.warning(f"Evento inválido recebido (event_data={event_data is None}, frame={frame is None}). Ignorando.")
                 return
 
             event_type = event_data.get("type", "DESCONHECIDO")
-            details = event_data.get("value", None) # Pode ser nulo
-            timestamp_str = event_data.get("timestamp", datetime.now().isoformat() + "Z") # ISO 8601 format
+            details = event_data.get("value", None) # Usar 'value' como 'details'
+            timestamp_str = event_data.get("timestamp", datetime.now().isoformat() + "Z") # ISO 8601 com Z
 
-            # Converte timestamp para objeto datetime
+            # Converte timestamp para objeto datetime para extrair data
             try:
-                # O SQLite guarda TEXT, mas usar datetime ajuda a extrair partes
-                timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                 timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             except ValueError:
-                logging.warning(f"Timestamp inválido recebido: {timestamp_str}. Usando 'agora'.")
-                timestamp_dt = datetime.now()
-                timestamp_str = timestamp_dt.isoformat() + "Z" # Atualiza o string
+                 logging.warning(f"Timestamp inválido no evento: {timestamp_str}. Usando hora atual.")
+                 timestamp_dt = datetime.now()
+                 timestamp_str = timestamp_dt.isoformat() + "Z" # Garante formato ISO
 
-            # --- (NOVO) Cria estrutura de pastas Ano/Mês/Dia ---
-            year_str = timestamp_dt.strftime("%Y")
-            month_str = timestamp_dt.strftime("%m")
-            day_str = timestamp_dt.strftime("%d")
-            image_dir = os.path.join(self.image_save_path, year_str, month_str, day_str)
-            os.makedirs(image_dir, exist_ok=True) # Cria as pastas se não existirem
+            # Cria estrutura de pastas Ano/Mês/Dia
+            date_path = timestamp_dt.strftime("%Y/%m/%d")
+            image_dir = os.path.join(self.image_save_path, date_path)
+            os.makedirs(image_dir, exist_ok=True)
 
-            # --- (NOVO) Cria nome de ficheiro e caminho relativo ---
-            filename_base = timestamp_dt.strftime("%Y-%m-%dT%H-%M-%S.%fZ") + f"_{event_type}"
+            # Cria nome de ficheiro único (sem Z no nome, mas Z no timestamp guardado)
+            filename_base = timestamp_dt.strftime("%Y-%m-%dT%H-%M-%S.%f") + f"_{event_type}"
             image_filename = filename_base + ".jpg"
-            relative_image_path = os.path.join(year_str, month_str, day_str, image_filename) # Ex: 2025/10/28/....jpg
-            full_image_path = os.path.join(self.image_save_path, relative_image_path) # Caminho completo para guardar
+            image_full_path = os.path.join(image_dir, image_filename)
 
             # Guarda a imagem JPG
-            save_success = cv2.imwrite(full_image_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            if not save_success:
-                 logging.error(f"Falha ao guardar a imagem: {full_image_path}")
-                 # Decide se continua ou não. Por agora, continua e guarda na BD sem path da imagem.
-                 relative_image_path = None # Não guarda o path na BD se a imagem falhou
+            quality = 90
+            success = cv2.imwrite(image_full_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
 
-            # --- (NOVO) Insere na base de dados SQLite ---
+            if not success:
+                 logging.error(f"Falha ao guardar imagem: {image_full_path}")
+                 image_relative_path = None # Não guarda referência se falhou
+            else:
+                 # Guarda o caminho RELATIVO à pasta 'images' na BD
+                 image_relative_path = os.path.join(date_path, image_filename)
+                 # (NOVO) Garante barras '/' para consistência web
+                 image_relative_path = image_relative_path.replace(os.path.sep, '/')
+
+
+            # Insere na base de dados SQLite
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO alerts (timestamp, event_type, details, image_file)
+                    VALUES (?, ?, ?, ?)
+                ''', (timestamp_str, event_type, details, image_relative_path))
+                # conn.commit() # Não necessário com isolation_level=None
+
+                log_msg_img = f"Imagem: {image_relative_path}" if image_relative_path else "Imagem falhou"
+                logging.warning(f"*** ALERTA GUARDADO (SQLite) *** Tipo: {event_type}, {log_msg_img}")
+
+            except sqlite3.Error as e:
+                logging.error(f"Erro ao inserir alerta na base de dados: {e}")
+                # Se a inserção falhar, talvez apagar a imagem? Por agora, deixamos.
+
+        except Exception as e:
+            logging.error(f"Falha inesperada ao processar/gravar evento: {e}", exc_info=True)
+
+    def get_alerts(self, limit=50):
+        """Busca os últimos 'limit' alertas da base de dados."""
+        conn = self._get_db_connection()
+        if not conn:
+             logging.error("Impossível buscar alertas: sem conexão à base de dados.")
+             return [] # Retorna lista vazia
+
+        alerts = []
+        try:
+            # Usar row_factory para retornar dicionários em vez de tuplos
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO alerts (timestamp, event_type, details, image_file)
-                VALUES (?, ?, ?, ?)
-            ''', (timestamp_str, event_type, details, relative_image_path))
-            conn.commit()
+                SELECT id, timestamp, event_type, details, image_file
+                FROM alerts
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (limit,))
+            # Converte os resultados de sqlite3.Row para dicionários padrão
+            alerts = [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logging.error(f"Erro ao buscar alertas da base de dados: {e}")
+            alerts = [] # Retorna vazio em caso de erro
 
-            logging.info(f"*** ALERTA GUARDADO (SQLite) *** Tipo: {event_type}, Imagem: {relative_image_path or 'N/A'}")
+        return alerts
 
-        # Não apanhar sqlite3.Error aqui, deixa o loop principal tratar disso
-        except Exception as e:
-            logging.error(f"Falha ao processar e guardar evento: {e}", exc_info=True)
-            # Se a conexão existir e ocorreu um erro ANTES do commit, faz rollback
-            if conn:
-                try:
-                    conn.rollback()
-                except Exception as rb_e:
-                    logging.error(f"Erro adicional durante o rollback: {rb_e}")
-
-    def stop(self):
-        """Sinaliza à thread para parar."""
-        logging.info("A sinalizar paragem para o Gestor de Eventos (SQLite)...")
-        self.running = False
-        self.queue.put(None) # Envia um item 'None' para desbloquear o get()
