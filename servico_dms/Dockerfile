@@ -32,11 +32,17 @@ RUN apt-get update && \
 # Isto é crucial para garantir que ele esteja disponível para o build do dlib.
 RUN pip install --no-cache-dir "cmake==3.27.7"
 
-# (NOVO) Passo 2: Verifica a versão do CMake
+# (NOVO) Passo 2: Força o PATH
+# Adiciona o diretório de binários do pip (/usr/local/bin) ao início do PATH.
+# Isto força qualquer subprocesso a encontrar o cmake (3.27.7)
+# antes de encontrar qualquer versão antiga do sistema (em /usr/bin).
+ENV PATH="/usr/local/bin:${PATH}"
+
+# (NOVO) Passo 3: Verifica a versão do CMake (agora com o PATH forçado)
 # Este passo vai mostrar-nos no log qual 'cmake' está no PATH e a sua versão.
 RUN which cmake && cmake --version
 
-# (NOVO) Passo 3: Instala o resto das dependências.
+# (NOVO) Passo 4: Instala o resto das dependências.
 # 'cmake' já está instalado (do passo anterior), então o pip vai saltá-lo
 # e prosseguir para compilar o 'dlib' usando a versão correta.
 RUN pip install --no-cache-dir -r requirements.txt
