@@ -1,6 +1,6 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
 # Responsável por toda a lógica de análise de imagem (IA).
-# (Atualizado com lógica de "cooldown" para eventos)
+# (Atualizado com otimização de tracking de face para melhor desempenho)
 
 import cv2
 import dlib
@@ -37,6 +37,10 @@ class DriverMonitor:
     
     # Índices dos pontos 2D correspondentes no Dlib
     HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54]
+    
+    # --- (NOVO) Constantes de Otimização ---
+    FRAMES_FOR_REDETECTION = 10 # Executa a deteção de face completa a cada 10 frames
+    TRACKER_CONFIDENCE_THRESHOLD = 7.0 # Limite de confiança do Dlib correlation_tracker
 
     def __init__(self, frame_size):
         logging.info("A inicializar o DriverMonitor Core...")
@@ -67,11 +71,15 @@ class DriverMonitor:
         self.drowsiness_counter = 0
         self.distraction_counter = 0
 
-        # --- (NOVO) Lógica de Cooldown de Alerta ---
-        # Estes booleanos controlam se um alerta já está ATIVO,
-        # para evitar disparar 100 eventos para 100 frames seguidos.
+        # Lógica de Cooldown de Alerta
         self.drowsy_alert_active = False
         self.distraction_alert_active = False
+        
+        # --- (NOVO) Otimização de Tracking ---
+        self.face_tracker = None # dlib.correlation_tracker()
+        self.tracking_active = False # Flag se estamos ativamente a seguir uma face
+        self.frame_counter = 0 # Contador de frames para redeteção
+        self.current_face_rect = None # Último retângulo (dlib.rectangle) da face
         
         # --- Configurações de Calibração (Valores Padrão) ---
         self.ear_threshold = 0.25      # Limite do Eye Aspect Ratio
@@ -152,97 +160,133 @@ class DriverMonitor:
         """
         Função principal de processamento. Analisa um frame e retorna o
         frame processado e quaisquer eventos de alerta.
+        (Otimizado com tracking)
         """
         
         events_list = [] # Lista para guardar os eventos DESTE frame
         status_data = {} # Dicionário para enviar status para a UI
         
-        # (NOVO) Aplica equalização de histograma para melhorar contraste (especialmente útil para IR)
+        # Aplica equalização de histograma para melhorar contraste
         gray_processed = cv2.equalizeHist(gray)
         
-        # Deteção de Faces
-        rects = self.detector(gray_processed, 0)
+        self.frame_counter += 1
         
-        # (NOVO) Se nenhuma face for detetada, reinicia os contadores e o estado de "cooldown"
-        if not rects:
+        # --- (NOVO) Lógica de Deteção vs Tracking ---
+        
+        # 1. Devemos fazer uma deteção completa?
+        #    Sim, se o tracking não estiver ativo OU se for altura da redeteção periódica
+        if not self.tracking_active or self.frame_counter % self.FRAMES_FOR_REDETECTION == 0:
+            # logging.debug("Executando DETEÇÃO completa...") # (Descomentar para debug)
+            rects = self.detector(gray_processed, 0)
+            
+            if rects:
+                # Encontrámos uma face, inicia/reinicia o tracker
+                self.current_face_rect = rects[0] # Assume a primeira/maior face
+                if self.face_tracker is None:
+                    self.face_tracker = dlib.correlation_tracker()
+                
+                self.face_tracker.start_track(gray_processed, self.current_face_rect)
+                self.tracking_active = True
+            else:
+                # Nenhuma face detetada, desativa o tracking
+                self.tracking_active = False
+                
+        # 2. Se o tracking estiver ativo, atualiza-o (processo leve)
+        else:
+            # logging.debug("Executando TRACKING leve...") # (Descomentar para debug)
+            confidence = self.face_tracker.update(gray_processed)
+            
+            if confidence > self.TRACKER_CONFIDENCE_THRESHOLD:
+                # Tracking bem sucedido, obtém a nova posição
+                rect_dlib = self.face_tracker.get_position()
+                self.current_face_rect = dlib.rectangle(
+                    int(rect_dlib.left()), int(rect_dlib.top()),
+                    int(rect_dlib.right()), int(rect_dlib.bottom())
+                )
+            else:
+                # Tracker perdeu a face, desativa o tracking
+                # A próxima iteração fará uma deteção completa
+                self.tracking_active = False
+        
+        # --- Fim da Lógica de Deteção/Tracking ---
+
+        # Se nenhuma face estiver a ser seguida (nem detetada, nem rastreada),
+        # reinicia os contadores e sai mais cedo.
+        if not self.tracking_active:
             self.drowsiness_counter = 0
             self.distraction_counter = 0
             self.drowsy_alert_active = False
             self.distraction_alert_active = False
+            # Retorna o frame original, sem processamento
+            return frame, events_list, status_data 
 
-        # Loop sobre as faces detetadas (deve ser apenas 1, o motorista)
-        for rect in rects:
-            shape = self.predictor(gray, rect)
-            shape_np = self._shape_to_np(shape)
+        # --- Processamento (só acontece se self.tracking_active == True) ---
+        
+        # Obtém os landmarks faciais a partir da 'rect' (seja do detetor ou do tracker)
+        shape = self.predictor(gray, self.current_face_rect)
+        shape_np = self._shape_to_np(shape)
 
-            # --- 1. Verificação de Sonolência (EAR) ---
-            leftEye = shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]
-            rightEye = shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
-            leftEAR = self._eye_aspect_ratio(leftEye)
-            rightEAR = self._eye_aspect_ratio(rightEye)
-            ear = (leftEAR + rightEAR) / 2.0
+        # --- 1. Verificação de Sonolência (EAR) ---
+        leftEye = shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]
+        rightEye = shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
+        leftEAR = self._eye_aspect_ratio(leftEye)
+        rightEAR = self._eye_aspect_ratio(rightEye)
+        ear = (leftEAR + rightEAR) / 2.0
 
-            # Desenha os contornos dos olhos (debug visual)
-            leftEyeHull = cv2.convexHull(leftEye)
-            rightEyeHull = cv2.convexHull(rightEye)
-            cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
-            cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+        # Desenha os contornos dos olhos (debug visual)
+        leftEyeHull = cv2.convexHull(leftEye)
+        rightEyeHull = cv2.convexHull(rightEye)
+        cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+        cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
 
-            with self.lock: # Garante que as configurações não mudem durante o cálculo
-                # --- Lógica de Sonolência (com Cooldown) ---
-                if ear < self.ear_threshold:
-                    self.drowsiness_counter += 1
-                    
-                    if self.drowsiness_counter >= self.ear_frames and not self.drowsy_alert_active:
-                        # (NOVO) DISPARA O ALERTA (SÓ UMA VEZ)
-                        self.drowsy_alert_active = True # Ativa o "cooldown"
-                        events_list.append({
-                            "type": "SONOLENCIA",
-                            "value": f"EAR: {ear:.2f}",
-                            "timestamp": datetime.now().isoformat() + "Z"
-                        })
-                else:
-                    # (NOVO) REARMA O ALERTA
-                    self.drowsiness_counter = 0
-                    self.drowsy_alert_active = False
-
-                # --- 2. Verificação de Distração (Pose da Cabeça) ---
-                yaw, pitch, roll = self._estimate_head_pose(shape_np)
+        with self.lock: # Garante que as configurações não mudem durante o cálculo
+            # --- Lógica de Sonolência (com Cooldown) ---
+            if ear < self.ear_threshold:
+                self.drowsiness_counter += 1
                 
-                # Verifica se está a olhar para os lados (Yaw) ou muito para baixo (Pitch)
-                # (O Pitch para baixo costuma ter ângulos positivos altos)
-                if abs(yaw) > self.distraction_angle or pitch > (self.distraction_angle + 10):
-                    self.distraction_counter += 1
-                    
-                    if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
-                        # (NOVO) DISPARA O ALERTA (SÓ UMA VEZ)
-                        self.distraction_alert_active = True # Ativa o "cooldown"
-                        events_list.append({
-                            "type": "DISTRACAO",
-                            "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}",
-                            "timestamp": datetime.now().isoformat() + "Z"
-                        })
-                else:
-                    # (NOVO) REARMA O ALERTA
-                    self.distraction_counter = 0
-                    self.distraction_alert_active = False
+                if self.drowsiness_counter >= self.ear_frames and not self.drowsy_alert_active:
+                    self.drowsy_alert_active = True # Ativa o "cooldown"
+                    events_list.append({
+                        "type": "SONOLENCIA",
+                        "value": f"EAR: {ear:.2f}",
+                        "timestamp": datetime.now().isoformat() + "Z"
+                    })
+            else:
+                self.drowsiness_counter = 0
+                self.drowsy_alert_active = False
+
+            # --- 2. Verificação de Distração (Pose da Cabeça) ---
+            yaw, pitch, roll = self._estimate_head_pose(shape_np)
             
-            # --- Desenha Alertas Visuais Finais ---
-            # (O alerta VISUAL permanece ativo enquanto a condição persistir)
-            if self.drowsy_alert_active:
-                cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-            if self.distraction_alert_active:
-                cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-            
-            # Atualiza dados de status para a UI
-            status_data = {
-                "ear": f"{ear:.2f}",
-                "yaw": f"{yaw:.1f}",
-                "pitch": f"{pitch:.1f}",
-                "roll": f"{roll:.1f}"
-            }
+            if abs(yaw) > self.distraction_angle or pitch > (self.distraction_angle + 10):
+                self.distraction_counter += 1
+                
+                if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
+                    self.distraction_alert_active = True # Ativa o "cooldown"
+                    events_list.append({
+                        "type": "DISTRACAO",
+                        "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}",
+                        "timestamp": datetime.now().isoformat() + "Z"
+                    })
+            else:
+                self.distraction_counter = 0
+                self.distraction_alert_active = False
+        
+        # --- Desenha Alertas Visuais Finais ---
+        if self.drowsy_alert_active:
+            cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        if self.distraction_alert_active:
+            cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        
+        # Atualiza dados de status para a UI
+        status_data = {
+            "ear": f"{ear:.2f}",
+            "yaw": f"{yaw:.1f}",
+            "pitch": f"{pitch:.1f}",
+            "roll": f"{roll:.1f}"
+        }
 
         return frame, events_list, status_data
 
@@ -269,4 +313,3 @@ class DriverMonitor:
                 "distraction_angle": self.distraction_angle,
                 "distraction_frames": self.distraction_frames
             }
-

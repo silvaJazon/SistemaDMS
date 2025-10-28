@@ -1,5 +1,5 @@
-opencv-python-headless
-Flask
+opencv-python-headless==4.8.0.76
+Flask==2.3.3
 numpy<2
-scipy
-dlib
+scipy==1.11.3
+dlib==19.24.2
