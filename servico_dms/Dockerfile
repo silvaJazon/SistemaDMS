@@ -10,10 +10,9 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instala dependências de sistema
-# Essencial: g++ é necessário para COMPILAR o 'dlib' via pip
-# Essencial: bzip2 é necessário para descompactar o modelo de landmarks
-# (NOVO) 'cmake' foi removido daqui. Ele agora será instalado via 'pip'
-#          pelo 'requirements.txt', o que garante a versão correta.
+# Essencial: g++ (compilador C++) e bzip2 (para o modelo dlib)
+# (NOVO) Adicionadas bibliotecas de desenvolvimento C++ cruciais para a compilação do dlib em aarch64
+# (NOVO) 'cmake' e 'cmake-data' são removidos para evitar conflitos com a versão do pip.
 RUN apt-get update && \
     apt-get purge -y cmake cmake-data && \
     apt-get install -y --no-install-recommends \
@@ -23,6 +22,11 @@ RUN apt-get update && \
         build-essential \
         curl \
         bzip2 \
+        pkg-config \
+        libx11-dev \
+        libboost-dev \
+        libboost-python-dev \
+        libopenblas-dev \
     && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
