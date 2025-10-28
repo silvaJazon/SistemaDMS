@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
-# (VERSÃO DE TESTE: Tracking DESATIVADO para depurar distração)
+# (VERSÃO DE TESTE: Tracking DESATIVADO + Suavização de Ângulos)
 
 import cv2
 import dlib
@@ -11,18 +11,20 @@ from scipy.spatial import distance as dist
 from datetime import datetime
 import time # Para medir tempo
 import sys # Para sair em caso de erro fatal
+from collections import deque # (NOVO) Para suavização
 
 cv2.setUseOptimized(True)
 
 MOUTH_AR_START = 60
 MOUTH_AR_END = 68
-# FRAMES_FOR_REDETECTION = 5 # Comentado - Não usado nesta versão
-# TRACKER_CONFIDENCE_THRESHOLD = 7.0 # Comentado - Não usado
+
+# (NOVO) Número de frames para suavização dos ângulos
+ANGLE_SMOOTHING_FRAMES = 5
 
 class DriverMonitor:
     """
     Classe principal para a deteção de sonolência e distração.
-    (VERSÃO DE TESTE: Tracking DESATIVADO)
+    (VERSÃO DE TESTE: Tracking DESATIVADO + Suavização de Ângulos)
     """
 
     EYE_AR_LEFT_START = 42
@@ -63,11 +65,10 @@ class DriverMonitor:
         self.yawn_alert_active = False
 
         # --- Tracking Desativado ---
-        # self.face_tracker = None
-        # self.tracking_active = False
-        # self.tracked_rect = None
-        # self.frame_since_detection = 0
-        # ---------------------------
+
+        # (NOVO) Deques para suavização dos ângulos
+        self.yaw_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
+        self.pitch_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
 
         self.ear_threshold = 0.25
         self.ear_frames = 15
@@ -125,21 +126,23 @@ class DriverMonitor:
             (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
             angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
             yaw = angles[1]; pitch = angles[0]; roll = angles[2]
-            logging.debug(f"DMSCore: Pose (Y={yaw:.1f}, P={pitch:.1f}, R={roll:.1f}) em {time.time() - start_time_pose:.4f}s.")
+            logging.debug(f"DMSCore: Pose RAW (Y={yaw:.1f}, P={pitch:.1f}, R={roll:.1f}) em {time.time() - start_time_pose:.4f}s.") # Log Raw
             return yaw, pitch, roll
         except cv2.error as cv_err: logging.warning(f"DMSCore: Erro OpenCV pose: {cv_err}"); return 0, 0, 0
         except Exception as e: logging.error(f"DMSCore: Erro inesperado pose: {e}", exc_info=True); return 0, 0, 0
 
     def _reset_counters_and_cooldowns(self):
         """Reinicia contadores e cooldowns."""
-        # Não precisa de lock aqui se for chamada apenas quando a face é perdida
         logging.debug("DMSCore: A reiniciar contadores e cooldowns.")
         self.drowsiness_counter = 0; self.distraction_counter = 0; self.yawn_counter = 0
         self.drowsy_alert_active = False; self.distraction_alert_active = False; self.yawn_alert_active = False
+        # (NOVO) Limpa também o histórico de ângulos
+        self.yaw_history.clear()
+        self.pitch_history.clear()
 
     def process_frame(self, frame, gray):
-        """Analisa um frame (SEM TRACKING)."""
-        logging.debug("DMSCore: process_frame (SEM TRACKING) iniciado.")
+        """Analisa um frame (SEM TRACKING + Suavização de Ângulos)."""
+        logging.debug("DMSCore: process_frame (SEM TRACKING + SMOOTHING) iniciado.")
         start_time_total = time.time()
         events_list = []
         status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
@@ -148,10 +151,9 @@ class DriverMonitor:
         logging.debug("DMSCore: Histograma equalizado.")
         current_rect = None
 
-        # --- Lógica de Deteção (SEMPRE) ---
         logging.debug("DMSCore: A executar deteção completa (tracking desativado)...")
         start_time_detect = time.time()
-        rects = self.detector(gray_processed, 0) # Executa deteção em *todos* os frames
+        rects = self.detector(gray_processed, 0)
         logging.debug(f"DMSCore: Deteção encontrou {len(rects)} faces em {time.time() - start_time_detect:.4f}s.")
 
         if rects:
@@ -159,11 +161,10 @@ class DriverMonitor:
             face_found_this_frame = True
         else:
             logging.debug("DMSCore: Nenhuma face detetada.")
-            # Reinicia contadores se nenhuma face for encontrada
-            with self.lock: # Lock necessário aqui pois acede a contadores
+            # Lock necessário aqui para aceder a _reset_counters_and_cooldowns que limpa os deques
+            with self.lock:
                  self._reset_counters_and_cooldowns()
 
-        # --- Processamento dos Landmarks ---
         if face_found_this_frame and current_rect is not None:
             logging.debug("DMSCore: A prever landmarks...")
             start_time_predict = time.time()
@@ -180,6 +181,20 @@ class DriverMonitor:
             logging.debug(f"DMSCore: MAR={mar:.3f}")
             yaw, pitch, roll = self._estimate_head_pose(shape_np)
 
+            # --- (NOVO) Suavização dos Ângulos ---
+            avg_yaw = yaw
+            avg_pitch = pitch
+            with self.lock: # Protege acesso aos deques
+                self.yaw_history.append(yaw)
+                self.pitch_history.append(pitch)
+                if len(self.yaw_history) == ANGLE_SMOOTHING_FRAMES: # Calcula média só se tiver N frames
+                    avg_yaw = np.mean(self.yaw_history)
+                    avg_pitch = np.mean(self.pitch_history)
+                    logging.debug(f"DMSCore: Ângulos Suavizados (Y={avg_yaw:.1f}, P={avg_pitch:.1f})")
+                else:
+                    logging.debug(f"DMSCore: Aguardando histórico de ângulos ({len(self.yaw_history)}/{ANGLE_SMOOTHING_FRAMES})")
+            # ------------------------------------
+
             try:
                 cv2.drawContours(frame, [cv2.convexHull(leftEye)], -1, (0, 255, 0), 1)
                 cv2.drawContours(frame, [cv2.convexHull(rightEye)], -1, (0, 255, 0), 1)
@@ -192,7 +207,7 @@ class DriverMonitor:
             logging.debug("DMSCore: A adquirir lock para alerta...")
             with self.lock:
                 logging.debug("DMSCore: Lock de alerta adquirido.")
-                # Sonolência
+                # Sonolência (usa EAR instantâneo)
                 if ear < self.ear_threshold:
                     self.drowsiness_counter += 1
                     logging.debug(f"DMSCore: EAR baixo ({ear:.3f}<{self.ear_threshold}), cont={self.drowsiness_counter}/{self.ear_frames}")
@@ -203,7 +218,7 @@ class DriverMonitor:
                 else:
                     if self.drowsiness_counter > 0: logging.debug("DMSCore: Sonolência reset.")
                     self.drowsiness_counter = 0; self.drowsy_alert_active = False
-                # Bocejo
+                # Bocejo (usa MAR instantâneo)
                 if mar > self.mar_threshold:
                     self.yawn_counter += 1
                     logging.debug(f"DMSCore: MAR alto ({mar:.3f}>{self.mar_threshold}), cont={self.yawn_counter}/{self.mar_frames}")
@@ -214,16 +229,19 @@ class DriverMonitor:
                 else:
                     if self.yawn_counter > 0: logging.debug("DMSCore: Bocejo reset.")
                     self.yawn_counter = 0; self.yawn_alert_active = False
-                # Distração
+                # Distração (usa ângulos MÉDIOS)
                 pitch_down_limit = self.distraction_angle + self.pitch_down_offset
-                is_distracted_angle = (abs(yaw) > self.distraction_angle) or \
-                                      (pitch < self.pitch_up_threshold) or \
-                                      (pitch > pitch_down_limit)
+                # (ALTERADO) Usa avg_yaw e avg_pitch
+                is_distracted_angle = (abs(avg_yaw) > self.distraction_angle) or \
+                                      (avg_pitch < self.pitch_up_threshold) or \
+                                      (avg_pitch > pitch_down_limit)
                 if is_distracted_angle:
                     self.distraction_counter += 1
-                    logging.debug(f"DMSCore: Ângulo fora (Y={yaw:.1f}>{self.distraction_angle} OU P={pitch:.1f} fora [{self.pitch_up_threshold},{pitch_down_limit}]), cont={self.distraction_counter}/{self.distraction_frames}")
+                    # Log usa ângulos médios
+                    logging.debug(f"DMSCore: Ângulo MÉDIO fora (Y={avg_yaw:.1f}>{self.distraction_angle} OU P={avg_pitch:.1f} fora [{self.pitch_up_threshold},{pitch_down_limit}]), cont={self.distraction_counter}/{self.distraction_frames}")
                     if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
                         self.distraction_alert_active = True
+                        # Evento ainda guarda ângulos RAW do frame atual para informação
                         events_list.append({"type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}", "timestamp": datetime.now().isoformat() + "Z"})
                         logging.warning("DMSCore: EVENTO DISTRACAO.")
                 else:
@@ -231,17 +249,19 @@ class DriverMonitor:
                     self.distraction_counter = 0; self.distraction_alert_active = False
             logging.debug("DMSCore: Lock de alerta libertado.")
 
+            # Status usa ângulos RAW para feedback imediato na UI
             status_data = { "ear": f"{ear:.2f}", "mar": f"{mar:.2f}", "yaw": f"{yaw:.1f}", "pitch": f"{pitch:.1f}", "roll": f"{roll:.1f}" }
 
+            # Desenha alertas
             if self.drowsy_alert_active: cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if self.yawn_alert_active: cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             if self.distraction_alert_active: cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
         else:
              logging.debug("DMSCore: Nenhuma face encontrada neste frame.")
-             # Reset já feito fora do 'if' se rects estava vazio
+             # Reset já feito se rects estava vazio
 
         total_time = time.time() - start_time_total
-        logging.debug(f"DMSCore: process_frame (SEM TRACKING) concluído em {total_time:.4f}s.")
+        logging.debug(f"DMSCore: process_frame (SEM TRACKING + SMOOTHING) concluído em {total_time:.4f}s.")
         return frame, events_list, status_data
 
     def update_settings(self, settings):
