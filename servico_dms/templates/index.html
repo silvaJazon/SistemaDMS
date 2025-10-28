@@ -68,21 +68,6 @@
             margin-bottom: 5px;
             color: #ccc;
         }
-        /* Estilo para o ícone de informação */
-        .info-icon {
-            display: inline-block;
-            margin-left: 5px;
-            color: #aaa;
-            cursor: help; /* Muda o cursor para indicar ajuda */
-            font-size: 0.9em;
-            border: 1px solid #888;
-            border-radius: 50%; /* Faz um círculo */
-            width: 16px;
-            height: 16px;
-            line-height: 16px; /* Centraliza o texto verticalmente */
-            text-align: center; /* Centraliza o texto horizontalmente */
-            background-color: #555;
-        }
         input[type="range"] {
             width: 100%;
             cursor: pointer;
@@ -99,8 +84,8 @@
             font-weight: bold;
             color: #fff;
             margin-left: 10px;
-            min-width: 30px; /* Garante espaço para o valor */
-            display: inline-block; /* Para alinhar corretamente */
+            min-width: 35px; /* Garante espaço para valores */
+            display: inline-block; /* Permite definir largura */
             text-align: right;
         }
         button {
@@ -120,24 +105,41 @@
             margin-top: 15px;
             font-size: 0.9em;
             color: #bbb;
-            text-align: center; /* Centraliza o texto de status */
-            width: 100%; /* Ocupa a largura total */
-            line-height: 1.4; /* Melhora a legibilidade */
+            display: flex; /* Para alinhar itens */
+            flex-wrap: wrap; /* Quebra linha se necessário */
+            gap: 10px; /* Espaço entre itens */
+            justify-content: center; /* Centraliza itens */
         }
         .status-info span {
             font-weight: bold;
             color: #ddd;
-            margin: 0 5px; /* Adiciona espaçamento entre os valores */
         }
-        /* (NOVO) Estilo para o status da fila */
-        .queue-status {
-             margin-top: 5px;
-             font-size: 0.8em;
+        /* (NOVO) Ícone de Informação */
+        .info-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            background-color: #666;
+            color: #eee;
+            border-radius: 50%;
+            text-align: center;
+            font-size: 12px;
+            line-height: 16px; /* Centraliza verticalmente */
+            cursor: help; /* Indica que é clicável/informativo */
+            margin-left: 5px;
+            font-style: italic; /* Opcional: para diferenciar o 'i' */
         }
-        .queue-status-ok { color: #8f8; } /* Verde */
-        .queue-status-warn { color: #ff8; } /* Amarelo */
-        .queue-status-full { color: #f88; font-weight: bold;} /* Vermelho */
 
+        /* (NOVO) Estilos para status da fila */
+        .queue-status {
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+        .queue-status-ok { background-color: #4CAF50; color: white; }
+        .queue-status-warn { background-color: #ffeb3b; color: #333; }
+        .queue-status-error { background-color: #f44336; color: white; }
+        .queue-status-unknown { background-color: #777; color: white; }
 
         /* Responsividade: Empilha em ecrãs pequenos */
         @media (max-width: 768px) {
@@ -147,10 +149,6 @@
             .video-container, .controls-container {
                 min-width: 100%;
             }
-             .status-info span {
-                 display: inline-block; /* Evita quebra de linha estranha em mobile */
-                 margin-bottom: 5px;
-             }
         }
     </style>
 </head>
@@ -163,82 +161,77 @@
 
     <div class="container">
         <div class="video-container">
-            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}" alt="Video Stream">
+            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
             <p>Fonte: {{ source_desc }}</p>
-            <!-- Área para mostrar status EAR/MAR/Yaw/etc -->
+             <!-- Área para mostrar status EAR/MAR/Yaw/etc e Fila -->
             <div class="status-info">
-                EAR: <span id="status-ear">-</span> |
-                MAR: <span id="status-mar">-</span> |
-                Yaw: <span id="status-yaw">-</span> |
-                Pitch: <span id="status-pitch">-</span> |
-                Roll: <span id="status-roll">-</span>
-                <!-- (NOVO) Status da fila de eventos -->
-                <div class="queue-status">Fila Eventos: <span id="status-queue-depth">-</span></div>
+                <span>EAR: <span id="status-ear">-</span></span> |
+                <span>MAR: <span id="status-mar">-</span></span> |
+                <span>Yaw: <span id="status-yaw">-</span></span> |
+                <span>Pitch: <span id="status-pitch">-</span></span> |
+                <span>Roll: <span id="status-roll">-</span></span>
+                <!-- (NOVO) Indicador da Fila -->
+                <span class="queue-status queue-status-unknown" id="status-queue">Fila Eventos: <span id="status-queue-depth">-</span> / <span id="status-queue-max">-</span></span>
             </div>
         </div>
 
         <div class="controls-container">
             <h2>Parâmetros de Deteção</h2>
 
-            <!-- Sonolência -->
             <div>
                 <label for="ear_threshold">Limite EAR Sonolência:
-                    <span class="info-icon" title="Eye Aspect Ratio (EAR) mínimo antes de disparar o alerta. Valores mais baixos = olhos mais fechados. Padrão: 0.25">ⓘ</span>
+                    <span class="info-icon" title="Eye Aspect Ratio (EAR) abaixo deste valor indica olhos fechando. Valores menores são mais sensíveis.">ⓘ</span>
                 </label>
-                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01" value="0.25">
+                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01">
                 <span class="slider-value" id="ear_threshold_value">0.25</span>
             </div>
             <div>
                 <label for="ear_frames">Frames Sonolência:
-                    <span class="info-icon" title="Número de frames consecutivos com EAR abaixo do limite para disparar o alerta. Padrão: 15">ⓘ</span>
+                    <span class="info-icon" title="Número de frames consecutivos com EAR baixo para disparar o alerta de sonolência.">ⓘ</span>
                 </label>
-                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1" value="15">
+                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1">
                 <span class="slider-value" id="ear_frames_value">15</span>
             </div>
-
-            <!-- Bocejo -->
             <div>
                 <label for="mar_threshold">Limite MAR Bocejo:
-                     <span class="info-icon" title="Mouth Aspect Ratio (MAR) mínimo para considerar um bocejo. Valores mais altos = boca mais aberta. Padrão: 0.60">ⓘ</span>
+                     <span class="info-icon" title="Mouth Aspect Ratio (MAR) acima deste valor indica boca aberta (bocejo). Valores menores são mais sensíveis.">ⓘ</span>
                 </label>
-                <input type="range" id="mar_threshold" name="mar_threshold" min="0.3" max="1.0" step="0.05" value="0.60">
+                <input type="range" id="mar_threshold" name="mar_threshold" min="0.4" max="1.0" step="0.01">
                 <span class="slider-value" id="mar_threshold_value">0.60</span>
             </div>
-             <div>
-                <label for="mar_frames">Frames Bocejo:
-                    <span class="info-icon" title="Número de frames consecutivos com MAR acima do limite para disparar o alerta. Padrão: 20">ⓘ</span>
-                </label>
-                <input type="range" id="mar_frames" name="mar_frames" min="5" max="40" step="1" value="20">
+            <div>
+                 <label for="mar_frames">Frames Bocejo:
+                     <span class="info-icon" title="Número de frames consecutivos com MAR alto para disparar o alerta de bocejo.">ⓘ</span>
+                 </label>
+                <input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="mar_frames_value">20</span>
             </div>
-
-            <!-- Distração -->
             <div>
                 <label for="distraction_angle">Ângulo Distração (°):
-                    <span class="info-icon" title="Ângulo máximo (em graus) que a cabeça pode desviar (olhar para o lado ou para baixo) antes de disparar o alerta. Padrão: 30">ⓘ</span>
+                     <span class="info-icon" title="Ângulo (Yaw/Pitch) que a cabeça precisa virar (em graus) para ser considerado distração.">ⓘ</span>
                 </label>
-                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1" value="30">
+                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
                 <span class="slider-value" id="distraction_angle_value">30</span>
             </div>
             <div>
                 <label for="distraction_frames">Frames Distração:
-                    <span class="info-icon" title="Número de frames consecutivos com a cabeça fora do ângulo limite para disparar o alerta. Padrão: 25">ⓘ</span>
+                     <span class="info-icon" title="Número de frames consecutivos com a cabeça virada para disparar o alerta de distração.">ⓘ</span>
                 </label>
-                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1" value="25">
+                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
 
             <h2>Configurações da Câmara</h2>
              <div>
                 <label for="brightness">Brilho:
-                    <span class="info-icon" title="Ajusta o brilho da imagem da câmara (apenas para câmaras USB).">ⓘ</span>
+                    <span class="info-icon" title="Ajusta o brilho da imagem da câmara (útil para condições de pouca luz).">ⓘ</span>
                 </label>
-                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1" value="0">
+                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1">
                 <span class="slider-value" id="brightness_value">0</span>
             </div>
             <div>
                 <label for="rotation">Rotação:
-                     <span class="info-icon" title="Gira a imagem da câmara para corrigir a orientação.">ⓘ</span>
+                    <span class="info-icon" title="Gira a imagem da câmara se ela estiver montada de lado ou invertida.">ⓘ</span>
                 </label>
                 <select id="rotation" name="rotation">
                     <option value="0">0°</option>
@@ -258,29 +251,24 @@
         const rotationSelect = document.getElementById('rotation');
         const saveStatus = document.getElementById('save_status');
         const resetButton = document.getElementById('reset_button');
-        let defaultSettings = {}; // Para guardar os valores padrão carregados da API
+        let defaultSettings = {}; // Para guardar os valores padrão
 
         // Elementos de status (EAR, MAR, Yaw, etc.)
         const statusEar = document.getElementById('status-ear');
-        const statusMar = document.getElementById('status-mar');
+        const statusMar = document.getElementById('status-mar'); // (NOVO)
         const statusYaw = document.getElementById('status-yaw');
         const statusPitch = document.getElementById('status-pitch');
         const statusRoll = document.getElementById('status-roll');
-        // (NOVO) Elemento para status da fila
+        // (NOVO) Elementos da fila
+        const statusQueueSpan = document.getElementById('status-queue');
         const statusQueueDepth = document.getElementById('status-queue-depth');
+        const statusQueueMax = document.getElementById('status-queue-max');
 
-        // Função auxiliar para atualizar um slider e o seu span
-        function updateSliderAndValue(sliderId, value) {
-            const slider = document.getElementById(sliderId);
-            const valueSpan = document.getElementById(`${sliderId}_value`);
-            if (slider) {
-                slider.value = value;
-            }
-            if (valueSpan) {
-                // Formata números decimais com 2 casas, inteiros sem casas decimais
-                const numericValue = Number(value); // Converte para número primeiro
-                valueSpan.textContent = Number.isInteger(numericValue) ? numericValue : numericValue.toFixed(2);
-            }
+
+        // Função auxiliar para formatar números
+        function formatNumber(value, decimalPlaces = 2) {
+            const num = parseFloat(value);
+            return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
 
         // Função para buscar e atualizar as configurações e status da API
@@ -288,85 +276,93 @@
             try {
                 const response = await fetch('/api/config');
                 if (!response.ok) {
-                    if (response.status === 503) {
-                         console.log("Serviço indisponível (503), a tentar novamente...");
-                         saveStatus.textContent = "Aguardando serviço...";
-                         saveStatus.style.color = "#ffeb3b"; // Amarelo
-                         return;
-                    }
                     throw new Error(`Erro HTTP: ${response.status}`);
                 }
                 const data = await response.json();
-                console.log("Configurações recebidas:", data); // Debug
+                console.debug("Configurações recebidas:", data); // Debug (mudar para debug)
 
+                // Guarda como padrão na primeira vez
                 if (Object.keys(defaultSettings).length === 0 && data && !data.error) {
                     defaultSettings = { ...data };
                     delete defaultSettings.status;
-                    delete defaultSettings.queue_depth; // Remove queue_depth dos padrões
-                    console.log("Valores padrão guardados:", defaultSettings);
+                    delete defaultSettings.queue_depth;
+                    delete defaultSettings.queue_max_size;
+                    console.debug("Valores padrão guardados:", defaultSettings); // Debug
                 }
 
+                // Atualiza sliders e dropdown
                 sliders.forEach(slider => {
+                    const valueSpan = document.getElementById(`${slider.id}_value`);
                     if (data.hasOwnProperty(slider.name)) {
-                        updateSliderAndValue(slider.id, data[slider.name]);
+                        slider.value = data[slider.name];
+                        if (valueSpan) {
+                            // Formata o valor no span
+                            const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                            valueSpan.textContent = formatNumber(data[slider.name], decimals);
+                        }
                     } else {
                         console.warn(`Configuração '${slider.name}' não encontrada na resposta da API.`);
                     }
                 });
-
                 if (data.hasOwnProperty('rotation')) {
                      rotationSelect.value = data.rotation;
                 } else {
                      console.warn("Configuração 'rotation' não encontrada.");
                 }
 
+                // Atualiza os dados de status
                 if (data.status) {
-                    statusEar.textContent = data.status.ear || '-';
-                    statusMar.textContent = data.status.mar || '-';
-                    statusYaw.textContent = data.status.yaw || '-';
-                    statusPitch.textContent = data.status.pitch || '-';
-                    statusRoll.textContent = data.status.roll || '-';
-                    if (saveStatus.textContent === "Aguardando serviço...") {
-                        saveStatus.textContent = "";
-                    }
+                    statusEar.textContent = formatNumber(data.status.ear, 2);
+                    statusMar.textContent = formatNumber(data.status.mar, 2); // (NOVO)
+                    statusYaw.textContent = formatNumber(data.status.yaw, 1);
+                    statusPitch.textContent = formatNumber(data.status.pitch, 1);
+                    statusRoll.textContent = formatNumber(data.status.roll, 1);
                 } else {
                     statusEar.textContent = '-';
-                    statusMar.textContent = '-';
+                    statusMar.textContent = '-'; // (NOVO)
                     statusYaw.textContent = '-';
                     statusPitch.textContent = '-';
                     statusRoll.textContent = '-';
                 }
 
-                 // (NOVO) Atualiza status da fila
-                if (data.hasOwnProperty('queue_depth')) {
+                 // (NOVO) Atualiza o status da fila
+                if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
                     const depth = data.queue_depth;
-                    const queueSize = data.queue_max_size || 100; // Usa 100 se não vier da API
-                    statusQueueDepth.textContent = `${depth} / ${queueSize}`;
-                    // Muda a cor com base na profundidade
-                    if (depth > queueSize * 0.9) {
-                        statusQueueDepth.className = 'queue-status-full'; // Quase cheia
-                    } else if (depth > queueSize * 0.6) {
-                        statusQueueDepth.className = 'queue-status-warn'; // Meio cheia
+                    const max_size = data.queue_max_size;
+                    statusQueueDepth.textContent = depth;
+                    statusQueueMax.textContent = max_size;
+
+                    const occupancy = depth / max_size;
+                    let queueClass = 'queue-status-unknown';
+                    if (occupancy < 0.5) {
+                        queueClass = 'queue-status-ok';
+                    } else if (occupancy < 0.8) {
+                        queueClass = 'queue-status-warn';
                     } else {
-                         statusQueueDepth.className = 'queue-status-ok'; // OK
+                        queueClass = 'queue-status-error';
                     }
+                    statusQueueSpan.className = `queue-status ${queueClass}`;
                 } else {
-                    statusQueueDepth.textContent = '-';
-                    statusQueueDepth.className = ''; // Remove classe de cor
+                    statusQueueDepth.textContent = '?';
+                    statusQueueMax.textContent = '?';
+                    statusQueueSpan.className = 'queue-status queue-status-unknown';
+                    if(data.queue_depth === -1) console.warn("Erro ao obter status da fila do backend.")
                 }
 
 
             } catch (error) {
                 console.error("Erro ao buscar configurações:", error);
-                saveStatus.textContent = "Erro ao carregar.";
-                saveStatus.style.color = "#f44336"; // Vermelho
+                saveStatus.textContent = "Erro ao carregar conf.";
+                saveStatus.style.color = "#f44336";
+                // Limpa os dados de status em caso de erro
                 statusEar.textContent = 'Erro';
-                statusMar.textContent = 'Erro';
+                statusMar.textContent = 'Erro'; // (NOVO)
                 statusYaw.textContent = 'Erro';
                 statusPitch.textContent = 'Erro';
                 statusRoll.textContent = 'Erro';
-                statusQueueDepth.textContent = 'Erro'; // (NOVO)
-                statusQueueDepth.className = 'queue-status-full'; // (NOVO)
+                statusQueueDepth.textContent = 'Erro';
+                statusQueueMax.textContent = '?';
+                 statusQueueSpan.className = 'queue-status queue-status-error';
             }
         }
 
@@ -374,12 +370,12 @@
         async function postSettings() {
             const currentSettings = {};
             sliders.forEach(slider => {
-                // Converte para número (float ou int) com base no 'step'
+                // Envia como número (float ou int)
                 currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
             });
             currentSettings.rotation = parseInt(rotationSelect.value);
 
-            console.log("A enviar configurações:", currentSettings); // Debug
+            console.debug("A enviar configurações:", currentSettings); // Debug
 
             try {
                 saveStatus.textContent = "A guardar...";
@@ -389,50 +385,44 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(currentSettings)
                 });
-
+                // Verifica se a resposta foi bem-sucedida (status 2xx)
                 if (!response.ok) {
-                     let errorMsg = `Erro ${response.status}`;
-                     try {
-                         const errorData = await response.json();
-                         errorMsg += `: ${errorData.error || response.statusText}`;
-                     } catch (e) { /* Ignora */ }
-                     throw new Error(errorMsg);
+                    // Tenta ler a mensagem de erro do corpo da resposta JSON
+                    let errorMsg = `Erro HTTP: ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMsg = errorData.error || errorMsg;
+                    } catch (e) { /* Ignora erro ao ler JSON */ }
+                    throw new Error(errorMsg);
                 }
-
                 const result = await response.json();
                 if (result.success) {
                     saveStatus.textContent = "Guardado!";
                     saveStatus.style.color = "#4CAF50"; // Verde
                 } else {
-                    throw new Error(result.error || "Falha ao guardar.");
+                    // Usa a mensagem de erro da API, se disponível
+                    throw new Error(result.error || "Falha ao guardar (resposta da API).");
                 }
             } catch (error) {
                 console.error("Erro ao guardar configurações:", error);
                 saveStatus.textContent = `Erro: ${error.message}`;
                 saveStatus.style.color = "#f44336"; // Vermelho
             }
-            // Limpa a mensagem após 3 segundos apenas se for sucesso ou erro
-            setTimeout(() => {
-                 if (saveStatus.style.color === 'rgb(76, 175, 80)' || saveStatus.style.color === 'rgb(244, 67, 54)') {
-                     saveStatus.textContent = "";
-                 }
-            }, 3000);
+            // Limpa a mensagem após alguns segundos
+            setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
         // Adiciona listeners aos sliders e select
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                // Atualiza o span visualmente ENQUANTO arrasta
+                // Atualiza o span quando o slider muda
                 slider.addEventListener('input', () => {
-                     const numericValue = Number(slider.value);
-                     // Formata com base no step (int ou float com 2 casas)
-                     valueSpan.textContent = slider.step.includes('.') ? numericValue.toFixed(2) : numericValue;
+                     const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                    valueSpan.textContent = formatNumber(slider.value, decimals);
                 });
-                // Envia para a API SÓ QUANDO solta o slider
+                // Envia para a API quando o utilizador solta o slider
                 slider.addEventListener('change', postSettings);
-            } else {
-                 console.warn(`Span de valor não encontrado para ${slider.id}`);
             }
         });
         rotationSelect.addEventListener('change', postSettings);
@@ -440,47 +430,55 @@
          // Listener para o botão Restaurar Padrões
         resetButton.addEventListener('click', () => {
             if (Object.keys(defaultSettings).length > 0) {
-                console.log("A restaurar para:", defaultSettings);
+                 console.debug("A restaurar padrões:", defaultSettings); // Debug
                 sliders.forEach(slider => {
-                    // Restaura valor no slider e no span
+                    const valueSpan = document.getElementById(`${slider.id}_value`);
                     if (defaultSettings.hasOwnProperty(slider.name)) {
-                        updateSliderAndValue(slider.id, defaultSettings[slider.name]);
+                        slider.value = defaultSettings[slider.name];
+                         if (valueSpan) {
+                            const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                            valueSpan.textContent = formatNumber(defaultSettings[slider.name], decimals);
+                         }
                     }
                 });
-                 // Restaura valor no select
                  if (defaultSettings.hasOwnProperty('rotation')) {
                     rotationSelect.value = defaultSettings.rotation;
                  }
                 // Envia os valores restaurados para a API
                 postSettings();
             } else {
-                alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
+                console.warn("Valores padrão ainda não foram carregados. Tente novamente em breve.");
+                saveStatus.textContent = "Padrões não carregados.";
+                saveStatus.style.color = "#ffeb3b";
+                setTimeout(() => { saveStatus.textContent = ""; }, 3000);
             }
         });
 
-        // --- Atualização periódica do status (incluindo fila) ---
-        // A função fetchAndUpdateSettings já busca tudo
-        setInterval(fetchAndUpdateSettings, 2000); // A cada 2 segundos
+        // --- Atualização periódica do status ---
+        // Busca as configurações (e status) a cada 2 segundos
+        const statusInterval = setInterval(fetchAndUpdateSettings, 2000);
 
-        // Busca as configurações iniciais um pouco depois do load
-        // para dar tempo ao backend de iniciar completamente
-        setTimeout(fetchAndUpdateSettings, 500);
+        // Busca as configurações iniciais quando a página carrega
+        fetchAndUpdateSettings();
 
-
-        // Tratamento de erro e recarregamento do stream de vídeo
+        // (COMENTADO PARA DEBUG) Tratamento de erro do stream de vídeo
         var stream = document.getElementById("stream");
-        var reloadTimeout;
+        /*
+        stream.onerror = function() {
+            console.warn("Erro no stream de vídeo (onerror). Tentando recarregar em 5s...");
+            setTimeout(function() {
+                // Adiciona um timestamp para evitar cache
+                var timestamp = new Date().getTime();
+                stream.src = "{{ url_for('video_feed') }}?" + timestamp;
+                console.log("Tentando recarregar stream:", stream.src);
+            }, 5000);
+        };
+        */
 
-        function reloadStream() {
-             clearTimeout(reloadTimeout);
-             console.log("Erro no stream, a tentar recarregar em 5s...");
-             stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Imagem transparente para limpar
-             reloadTimeout = setTimeout(function() {
-                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime(); // Adiciona timestamp para evitar cache
-             }, 5000);
-        }
-        // Associa a função ao evento onerror
-        stream.onerror = reloadStream;
+        // Limpa o intervalo quando a janela fecha (boa prática)
+        window.addEventListener('beforeunload', () => {
+            clearInterval(statusInterval);
+        });
 
     </script>
 </body>
