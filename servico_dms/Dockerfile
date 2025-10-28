@@ -10,8 +10,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instala dependências de sistema
-# Essencial: cmake e g++ são necessários para COMPILAR o 'dlib' via pip
+# Essencial: g++ é necessário para COMPILAR o 'dlib' via pip
 # Essencial: bzip2 é necessário para descompactar o modelo de landmarks
+# (NOVO) 'cmake' foi removido daqui. Ele agora será instalado via 'pip'
+#          pelo 'requirements.txt', o que garante a versão correta.
 RUN apt-get update && \
     apt-get remove -y cmake && \
     apt-get install -y --no-install-recommends \
@@ -25,6 +27,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Instala dependências Python (agora inclui o dlib)
+
+# (NOVO) Passo 1: Instala o CMake PRIMEIRO e sozinho.
+# Isto é crucial para garantir que ele esteja disponível para o build do dlib.
+RUN pip install --no-cache-dir "cmake==3.27.7"
+
+# (NOVO) Passo 2: Instala o resto das dependências.
+# 'cmake' já está instalado (do passo anterior), então o pip vai saltá-lo
+# e prosseguir para compilar o 'dlib' usando a versão correta.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Estágio de Download do Modelo (Dlib) ---
