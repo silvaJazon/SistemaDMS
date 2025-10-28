@@ -1,6 +1,6 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
 # Responsável por toda a lógica de análise de imagem (IA).
-# (Atualizado com tracking de face e deteção de bocejo)
+# (Atualizado com lógica de tracking, bocejo e debug detalhado)
 
 import cv2
 import dlib
@@ -10,27 +10,29 @@ import math
 import threading
 from scipy.spatial import distance as dist
 from datetime import datetime
-import sys # Para sys.exit
+import time # Para medir tempo
+import sys # Para sair em caso de erro fatal
 
 # Habilita otimizações do OpenCV
 cv2.setUseOptimized(True)
 
+# (NOVO) Constantes para índices dos landmarks da boca
+MOUTH_AR_START = 60 # Índice inicial dos pontos da boca
+MOUTH_AR_END = 68   # Índice final dos pontos da boca (exclusivo)
+
+# (NOVO) Constante para a deteção/redeteção de faces
+FRAMES_FOR_REDETECTION = 10 # Executa a deteção completa a cada X frames
+
 class DriverMonitor:
     """
-    Classe principal para a deteção de sonolência, distração e bocejo.
+    Classe principal para a deteção de sonolência e distração.
     """
-
-    # --- Constantes ---
-    FRAMES_FOR_REDETECTION = 10 # Executa a deteção completa a cada X frames
 
     # --- Índices dos Landmarks Faciais (Dlib 68 pontos) ---
     EYE_AR_LEFT_START = 42
     EYE_AR_LEFT_END = 48
     EYE_AR_RIGHT_START = 36
     EYE_AR_RIGHT_END = 42
-    # (NOVO) Pontos da boca (usaremos os lábios internos para MAR)
-    MOUTH_AR_START = 60 # Canto esquerdo interno
-    MOUTH_AR_END = 68   # Canto direito interno (exclusivo)
 
     # --- Modelo 3D da Cabeça (para SolvePnP) ---
     HEAD_MODEL_POINTS = np.array([
@@ -68,31 +70,31 @@ class DriverMonitor:
         self.initialize_dlib()
 
         # --- Estado da Deteção ---
-        self.lock = threading.Lock() # Protege as configurações e o estado
+        self.lock = threading.Lock() # Protege as configurações e contadores
 
         # Contadores de frames
         self.drowsiness_counter = 0
         self.distraction_counter = 0
         self.yawn_counter = 0 # (NOVO) Contador para bocejo
 
-        # Cooldown de Alerta
+        # Lógica de Cooldown de Alerta
         self.drowsy_alert_active = False
         self.distraction_alert_active = False
         self.yawn_alert_active = False # (NOVO) Cooldown para bocejo
 
-        # --- Estado do Tracking ---
-        self.face_tracker = None
-        self.tracking_active = False
-        self.current_face_rect = None
-        self.frame_count_since_detection = 0
+        # --- (NOVO) Lógica de Tracking ---
+        self.face_tracker = None        # Objeto dlib.correlation_tracker
+        self.tracking_active = False    # Se estamos a rastrear uma face
+        self.tracked_rect = None        # O retângulo (dlib.rectangle) da face rastreada
+        self.frame_since_detection = 0  # Contador de frames desde a última deteção
 
         # --- Configurações de Calibração (Valores Padrão) ---
         self.ear_threshold = 0.25      # Limite do Eye Aspect Ratio
         self.ear_frames = 15           # Nº de frames consecutivos para alarme de sonolência
+        self.mar_threshold = 0.60      # (NOVO) Limite do Mouth Aspect Ratio
+        self.mar_frames = 20           # (NOVO) Nº de frames consecutivos para alarme de bocejo
         self.distraction_angle = 30.0  # Ângulo (graus) para alarme de distração
         self.distraction_frames = 25   # Nº de frames consecutivos para alarme de distração
-        self.mar_threshold = 0.60      # (NOVO) Limite do Mouth Aspect Ratio para bocejo
-        self.mar_frames = 20           # (NOVO) Nº de frames consecutivos para alarme de bocejo
 
     def initialize_dlib(self):
         """Carrega o detetor de face e o preditor de landmarks do Dlib."""
@@ -107,8 +109,8 @@ class DriverMonitor:
             logging.info(">>> Modelos Dlib carregados com sucesso.")
         except Exception as e:
             logging.error(f"!!! ERRO FATAL ao carregar modelos Dlib ({model_path}): {e}", exc_info=True)
-            # Considerar usar sys.exit(1) se os modelos forem essenciais
-            raise RuntimeError(f"Falha ao carregar modelos Dlib: {e}")
+            # Considerar usar sys.exit(1) ou levantar a exceção
+            raise RuntimeError(f"Não foi possível carregar modelos Dlib: {e}")
 
 
     # --- Métodos de Deteção Auxiliares ---
@@ -121,290 +123,332 @@ class DriverMonitor:
         return coords
 
     def _eye_aspect_ratio(self, eye):
-        """Calcula o EAR."""
+        """Calcula a distância euclidiana entre os pontos verticais e horizontais do olho."""
+        # Pontos verticais
         A = dist.euclidean(eye[1], eye[5])
         B = dist.euclidean(eye[2], eye[4])
+        # Ponto horizontal
         C = dist.euclidean(eye[0], eye[3])
-        if C == 0: return 0.3
+
+        if C < 1e-6: return 0.3 # Evita divisão por zero ou valores muito pequenos
         ear = (A + B) / (2.0 * C)
         return ear
 
+    # (NOVO) Função para calcular o MAR
     def _mouth_aspect_ratio(self, mouth):
-        """(NOVO) Calcula o MAR (Mouth Aspect Ratio)."""
-        # Pontos verticais (lábio interno)
-        A = dist.euclidean(mouth[1], mouth[7]) # 61 -> 67
-        B = dist.euclidean(mouth[2], mouth[6]) # 62 -> 66
-        C = dist.euclidean(mouth[3], mouth[5]) # 63 -> 65
-        # Pontos horizontais (lábio interno)
-        D = dist.euclidean(mouth[0], mouth[4]) # 60 -> 64
+        """Calcula o Mouth Aspect Ratio (MAR)."""
+        # Distâncias verticais (lábio superior ao inferior)
+        A = dist.euclidean(mouth[2], mouth[10]) # 62, 68 (índices 0-based) -> 61, 67 (pontos 1-based)
+        B = dist.euclidean(mouth[4], mouth[8])  # 64, 66 -> 63, 65
 
-        if D == 0: return 0.2 # Valor baixo se a boca estiver fechada horizontalmente
-        mar = (A + B + C) / (3.0 * D) # Média das verticais / horizontal
+        # Distância horizontal (canto a canto)
+        C = dist.euclidean(mouth[0], mouth[6])  # 60, 64 -> 60, 64 (pontos 1-based)
+
+        if C < 1e-6: return 0.0 # Evita divisão por zero
+
+        mar = (A + B) / (2.0 * C)
         return mar
 
 
     def _estimate_head_pose(self, shape_np):
         """Estima a pose da cabeça (para onde o motorista está a olhar)."""
+        logging.debug("DMSCore: A estimar pose da cabeça...") # NOVO
+        start_time_pose = time.time() # NOVO
+
+        # Pontos 2D correspondentes do Dlib
         image_points = np.array([shape_np[i] for i in self.HEAD_IMAGE_POINTS_IDX], dtype="double")
 
         try:
+            # Resolve a pose da cabeça (PnP)
             (success, rotation_vector, translation_vector) = cv2.solvePnP(
                 self.HEAD_MODEL_POINTS,
                 image_points,
                 self.camera_matrix,
                 self.dist_coeffs,
-                flags=cv2.SOLVEPNP_ITERATIVE # Pode experimentar SOLVEPNP_EPNP ou outros
+                flags=cv2.SOLVEPNP_ITERATIVE # (ou SOLVEPNP_IPPE para alternativas)
             )
+
             if not success:
-                logging.debug("solvePnP falhou.")
-                return 0, 0, 0
+                 logging.debug("DMSCore: cv2.solvePnP falhou.") # NOVO
+                 return 0, 0, 0
 
+            # Converte o vetor de rotação em ângulos de Euler (pitch, yaw, roll)
             (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
-            # Tenta decompor a matriz de rotação
-            try:
-                angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
-                yaw = angles[1]
-                pitch = angles[0]
-                roll = angles[2]
-                return yaw, pitch, roll
-            except Exception as decomp_e:
-                logging.debug(f"Erro na decomposição RQDecomp3x3: {decomp_e}")
-                return 0,0,0
+            # decompõe a matriz de rotação
+            angles, mtxR, mtxQ, Qx, Qy, Qz = cv2.RQDecomp3x3(rotation_matrix)
 
+            # Ângulos em graus (Yaw é o mais importante para distração lateral)
+            # A ordem pode depender da convenção (X, Y, Z)
+            # Geralmente: pitch (X), yaw (Y), roll (Z)
+            yaw = angles[1]
+            pitch = angles[0]
+            roll = angles[2]
 
-        except Exception as e:
-            # Captura exceções mais específicas se necessário (ex: cv2.error)
-            logging.debug(f"Erro ao calcular pose da cabeça: {e}")
+            logging.debug(f"DMSCore: Pose estimada (Yaw={yaw:.1f}, Pitch={pitch:.1f}, Roll={roll:.1f}) em {time.time() - start_time_pose:.4f}s.") # NOVO
+            return yaw, pitch, roll
+        except cv2.error as cv_err: # (NOVO) Captura erros OpenCV específicos
+            logging.warning(f"DMSCore: Erro OpenCV em solvePnP/RQDecomp3x3: {cv_err}")
             return 0, 0, 0
+        except Exception as e:
+            logging.error(f"DMSCore: Erro inesperado ao calcular pose da cabeça: {e}", exc_info=True) # NOVO: Adiciona exc_info
+            return 0, 0, 0
+
+    # (NOVO) Função para reiniciar contadores e cooldowns
+    def _reset_counters_and_cooldowns(self):
+        """Reinicia todos os contadores de frames e flags de cooldown."""
+        logging.debug("DMSCore: A reiniciar contadores e cooldowns.") # NOVO
+        self.drowsiness_counter = 0
+        self.distraction_counter = 0
+        self.yawn_counter = 0
+        self.drowsy_alert_active = False
+        self.distraction_alert_active = False
+        self.yawn_alert_active = False
+
 
     # --- Métodos Principais (Processamento e Configuração) ---
 
     def process_frame(self, frame, gray):
         """
         Função principal de processamento. Analisa um frame e retorna o
-        frame processado, eventos de alerta e dados de status.
+        frame processado, quaisquer eventos de alerta e dados de status.
+        (Otimizado com Tracking)
         """
+        logging.debug("DMSCore: process_frame iniciado.") # NOVO
+        start_time_total = time.time() # NOVO
+
         events_list = []
-        status_data = {}
-        processed_frame = frame.copy() # Começa com uma cópia
+        status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"} # Padrão
+        face_found_this_frame = False # NOVO
 
         # Aplica equalização de histograma
         gray_processed = cv2.equalizeHist(gray)
+        logging.debug("DMSCore: Histograma equalizado.") # NOVO
 
-        # --- Lógica de Tracking/Redeteção ---
-        rect_to_process = None
-        perform_detection = False
+        # --- Lógica de Deteção/Tracking ---
+        current_rect = None # O retângulo da face neste frame
 
-        with self.lock: # Protege o estado do tracker
-            if not self.tracking_active or self.frame_count_since_detection >= self.FRAMES_FOR_REDETECTION:
-                perform_detection = True
-                self.frame_count_since_detection = 0 # Reinicia contador
-            else:
-                self.frame_count_since_detection += 1
+        # Verifica se deve fazer deteção completa ou tracking
+        # NOVO: Lock para proteger estado de tracking
+        logging.debug("DMSCore: A adquirir lock para tracking...") # NOVO
+        with self.lock:
+             logging.debug("DMSCore: Lock de tracking adquirido.") # NOVO
+             needs_detection = (not self.tracking_active) or (self.frame_since_detection >= FRAMES_FOR_REDETECTION)
+             logging.debug(f"DMSCore: Tracking ativo={self.tracking_active}, Frames desde deteção={self.frame_since_detection}, Precisa deteção={needs_detection}") # NOVO
 
-            if perform_detection:
-                self.tracking_active = False # Desativa antes de tentar detetar
-                self.face_tracker = None
-                self.current_face_rect = None
+             if needs_detection:
+                 logging.debug("DMSCore: A executar deteção completa de face...") # NOVO
+                 start_time_detect = time.time() # NOVO
+                 rects = self.detector(gray_processed, 0)
+                 logging.debug(f"DMSCore: Deteção encontrou {len(rects)} faces em {time.time() - start_time_detect:.4f}s.") # NOVO
 
-                rects = self.detector(gray_processed, 0)
-                if rects:
-                    # Assume a maior face como sendo a do condutor
-                    rect = max(rects, key=lambda r: r.width() * r.height())
-                    self.current_face_rect = rect
-                    rect_to_process = rect # Guarda para processar landmarks
+                 if rects:
+                     # Assume a maior face como sendo a do condutor
+                     current_rect = max(rects, key=lambda r: r.width() * r.height())
+                     # Inicia ou reinicia o tracker
+                     if self.face_tracker is None:
+                          self.face_tracker = dlib.correlation_tracker()
+                     logging.debug("DMSCore: A iniciar/reiniciar tracker...") # NOVO
+                     self.face_tracker.start_track(frame, current_rect) # Usa o frame original (colorido) para tracking
+                     self.tracking_active = True
+                     self.tracked_rect = current_rect
+                     self.frame_since_detection = 0 # Reinicia contador
+                     face_found_this_frame = True
+                 else:
+                     # Nenhuma face detetada, desativa tracking e reinicia contadores
+                     logging.debug("DMSCore: Nenhuma face detetada na deteção completa.") # NOVO
+                     self.tracking_active = False
+                     self.tracked_rect = None
+                     self._reset_counters_and_cooldowns() # Reinicia tudo se a face for perdida
 
-                    # Inicializa o tracker
-                    self.face_tracker = dlib.correlation_tracker()
-                    self.face_tracker.start_track(gray_processed, rect)
-                    self.tracking_active = True
-                    logging.debug("DETEÇÃO: Face encontrada e tracker iniciado.")
-                else:
-                    logging.debug("DETEÇÃO: Nenhuma face encontrada.")
-                    # Reinicia contadores e cooldowns se nenhuma face for detetada
-                    self._reset_counters_and_cooldowns()
+             elif self.tracking_active:
+                 # Faz apenas tracking (mais leve)
+                 logging.debug("DMSCore: A executar tracking...") # NOVO
+                 start_time_track = time.time() # NOVO
+                 # Atualiza o tracker e obtém a confiança
+                 # Nota: O update deve usar o frame no qual start_track foi chamado (frame colorido)
+                 confidence = self.face_tracker.update(frame)
+                 logging.debug(f"DMSCore: Tracking atualizado (confiança={confidence:.2f}) em {time.time() - start_time_track:.4f}s.") # NOVO
 
-            elif self.tracking_active and self.face_tracker:
-                # --- Faz o Tracking ---
-                confidence = self.face_tracker.update(gray_processed)
-                if confidence > 7.0: # Limiar de confiança (ajustável)
-                    tracked_pos = self.face_tracker.get_position()
-                    rect = dlib.rectangle(int(tracked_pos.left()), int(tracked_pos.top()),
-                                          int(tracked_pos.right()), int(tracked_pos.bottom()))
-                    self.current_face_rect = rect # Atualiza a posição atual
-                    rect_to_process = rect # Guarda para processar landmarks
-                    logging.debug(f"TRACKING: Posição atualizada (Conf: {confidence:.2f})")
-                else:
-                    # Tracker perdeu a face
-                    self.tracking_active = False
-                    self.face_tracker = None
-                    self.current_face_rect = None
-                    logging.debug(f"TRACKING: Perdido (Conf: {confidence:.2f}). Próxima frame fará redeteção.")
-                    # Reinicia contadores e cooldowns se a face for perdida
-                    self._reset_counters_and_cooldowns()
+                 if confidence > 7.0: # Limite de confiança (experimental)
+                     self.tracked_rect = self.face_tracker.get_position()
+                     current_rect = dlib.rectangle(
+                         int(self.tracked_rect.left()), int(self.tracked_rect.top()),
+                         int(self.tracked_rect.right()), int(self.tracked_rect.bottom())
+                     )
+                     self.frame_since_detection += 1
+                     face_found_this_frame = True
+                 else:
+                     # Tracker perdeu a face (confiança baixa)
+                     logging.debug("DMSCore: Tracker perdeu a face (confiança baixa).") # NOVO
+                     self.tracking_active = False
+                     self.tracked_rect = None
+                     self._reset_counters_and_cooldowns() # Reinicia tudo
 
-        # --- Processamento de Landmarks (Só se tivermos uma face) ---
-        if rect_to_process:
-            try:
-                shape = self.predictor(gray, rect_to_process) # Usa 'gray' original para landmarks
-                shape_np = self._shape_to_np(shape)
+             # Se tracking estava inativo e não detetamos nada, reinicia (redundante mas seguro)
+             if not face_found_this_frame and not self.tracking_active:
+                  self._reset_counters_and_cooldowns()
 
-                # Desenha o retângulo da face (debug visual)
-                pt1 = (rect_to_process.left(), rect_to_process.top())
-                pt2 = (rect_to_process.right(), rect_to_process.bottom())
-                cv2.rectangle(processed_frame, pt1, pt2, (255, 255, 0), 1) # Ciano para tracking
+        logging.debug("DMSCore: Lock de tracking libertado.") # NOVO
 
-                # --- 1. Verificação de Sonolência (EAR) ---
-                leftEye = shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]
-                rightEye = shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
-                leftEAR = self._eye_aspect_ratio(leftEye)
-                rightEAR = self._eye_aspect_ratio(rightEye)
-                ear = (leftEAR + rightEAR) / 2.0
 
-                # Desenha contornos dos olhos
+        # --- Processamento dos Landmarks (APENAS se uma face foi encontrada/rastreada) ---
+        if face_found_this_frame and current_rect is not None:
+            logging.debug("DMSCore: A prever landmarks...") # NOVO
+            start_time_predict = time.time() # NOVO
+            # Usa o frame cinzento para predição de landmarks (geralmente mais robusto)
+            shape = self.predictor(gray, current_rect)
+            shape_np = self._shape_to_np(shape)
+            logging.debug(f"DMSCore: Landmarks previstos em {time.time() - start_time_predict:.4f}s.") # NOVO
+
+            # --- 1. Verificação de Sonolência (EAR) ---
+            leftEye = shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]
+            rightEye = shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
+            leftEAR = self._eye_aspect_ratio(leftEye)
+            rightEAR = self._eye_aspect_ratio(rightEye)
+            ear = (leftEAR + rightEAR) / 2.0
+            logging.debug(f"DMSCore: EAR calculado: {ear:.3f}") # NOVO
+
+            # --- 2. Verificação de Bocejo (MAR) ---
+            mouth = shape_np[MOUTH_AR_START:MOUTH_AR_END]
+            mar = self._mouth_aspect_ratio(mouth)
+            logging.debug(f"DMSCore: MAR calculado: {mar:.3f}") # NOVO
+
+            # --- 3. Verificação de Distração (Pose da Cabeça) ---
+            yaw, pitch, roll = self._estimate_head_pose(shape_np)
+            # Log já está dentro da função _estimate_head_pose
+
+
+            # Desenha os contornos dos olhos e boca (debug visual)
+            try: # NOVO: Adiciona try/except para desenho
                 leftEyeHull = cv2.convexHull(leftEye)
                 rightEyeHull = cv2.convexHull(rightEye)
-                cv2.drawContours(processed_frame, [leftEyeHull], -1, (0, 255, 0), 1)
-                cv2.drawContours(processed_frame, [rightEyeHull], -1, (0, 255, 0), 1)
-
-                # --- (NOVO) 2. Verificação de Bocejo (MAR) ---
-                mouth = shape_np[self.MOUTH_AR_START:self.MOUTH_AR_END]
-                mar = self._mouth_aspect_ratio(mouth)
-
-                # Desenha contorno da boca (lábios internos)
                 mouthHull = cv2.convexHull(mouth)
-                cv2.drawContours(processed_frame, [mouthHull], -1, (255, 0, 255), 1) # Magenta
-
-                # --- 3. Verificação de Distração (Pose da Cabeça) ---
-                yaw, pitch, roll = self._estimate_head_pose(shape_np)
-
-                # --- Lógica de Alerta (com Cooldown, dentro do lock) ---
-                with self.lock:
-                    # Sonolência (EAR)
-                    if ear < self.ear_threshold:
-                        self.drowsiness_counter += 1
-                        if self.drowsiness_counter >= self.ear_frames and not self.drowsy_alert_active:
-                            self.drowsy_alert_active = True
-                            events_list.append({
-                                "type": "SONOLENCIA",
-                                "value": f"EAR: {ear:.2f}",
-                                "timestamp": datetime.now().isoformat() + "Z"
-                            })
-                    else:
-                        self.drowsiness_counter = 0
-                        self.drowsy_alert_active = False
-
-                    # (NOVO) Bocejo (MAR)
-                    if mar > self.mar_threshold:
-                        self.yawn_counter += 1
-                        if self.yawn_counter >= self.mar_frames and not self.yawn_alert_active:
-                            self.yawn_alert_active = True
-                            events_list.append({
-                                "type": "BOCEJO",
-                                "value": f"MAR: {mar:.2f}",
-                                "timestamp": datetime.now().isoformat() + "Z"
-                            })
-                    else:
-                        self.yawn_counter = 0
-                        self.yawn_alert_active = False
-
-                    # Distração (Pose)
-                    # (Ajuste: Considera Pitch positivo alto como olhar para baixo)
-                    if abs(yaw) > self.distraction_angle or pitch > (self.distraction_angle + 5): # Pitch mais sensível
-                        self.distraction_counter += 1
-                        if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
-                            self.distraction_alert_active = True
-                            events_list.append({
-                                "type": "DISTRACAO",
-                                "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}",
-                                "timestamp": datetime.now().isoformat() + "Z"
-                            })
-                    else:
-                        self.distraction_counter = 0
-                        self.distraction_alert_active = False
-
-                # --- Desenha Alertas Visuais Finais ---
-                # (O alerta VISUAL permanece ativo enquanto a condição persistir)
-                alert_y_pos = 30
-                if self.drowsy_alert_active:
-                    cv2.putText(processed_frame, "ALERTA: SONOLENCIA!", (10, alert_y_pos),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    alert_y_pos += 25
-                if self.yawn_alert_active: # (NOVO)
-                    cv2.putText(processed_frame, "ALERTA: BOCEJO!", (10, alert_y_pos),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    alert_y_pos += 25
-                if self.distraction_alert_active:
-                    cv2.putText(processed_frame, "ALERTA: DISTRACAO!", (10, alert_y_pos),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.drawContours(frame, [leftEyeHull], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [rightEyeHull], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [mouthHull], -1, (0, 255, 255), 1) # Ciano para boca
+                # Desenha o retângulo da face (rastreado ou detetado)
+                pt1 = (int(current_rect.left()), int(current_rect.top()))
+                pt2 = (int(current_rect.right()), int(current_rect.bottom()))
+                cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2) # Azul claro
+            except Exception as draw_err:
+                 logging.warning(f"DMSCore: Erro ao desenhar contornos: {draw_err}")
 
 
-                # Atualiza dados de status para a UI
-                status_data = {
-                    "ear": f"{ear:.2f}",
-                    "mar": f"{mar:.2f}", # (NOVO)
-                    "yaw": f"{yaw:.1f}",
-                    "pitch": f"{pitch:.1f}",
-                    "roll": f"{roll:.1f}"
-                }
-            except Exception as landmark_error:
-                 # Erro ao processar landmarks (ex: face muito perto da borda)
-                 logging.warning(f"Erro ao processar landmarks/pose: {landmark_error}")
-                 # Se falhar aqui, não atualiza status nem dispara alertas
-                 # Mantém o retângulo desenhado se foi detetado/trackeado
-                 if self.current_face_rect:
-                    pt1 = (self.current_face_rect.left(), self.current_face_rect.top())
-                    pt2 = (self.current_face_rect.right(), self.current_face_rect.bottom())
-                    cv2.rectangle(processed_frame, pt1, pt2, (0, 255, 255), 1) # Amarelo para erro
+            # --- Lógica de Alerta (com Lock e Cooldown) ---
+            logging.debug("DMSCore: A adquirir lock para lógica de alerta...") # NOVO
+            with self.lock:
+                logging.debug("DMSCore: Lock de alerta adquirido.") # NOVO
+                # Sonolência
+                if ear < self.ear_threshold:
+                    self.drowsiness_counter += 1
+                    logging.debug(f"DMSCore: EAR baixo ({ear:.3f} < {self.ear_threshold}), contador={self.drowsiness_counter}/{self.ear_frames}") # NOVO
+                    if self.drowsiness_counter >= self.ear_frames and not self.drowsy_alert_active:
+                        self.drowsy_alert_active = True
+                        events_list.append({
+                            "type": "SONOLENCIA", "value": f"EAR: {ear:.2f}",
+                            "timestamp": datetime.now().isoformat() + "Z"
+                        })
+                        logging.warning("DMSCore: EVENTO SONOLENCIA disparado.") # NOVO
+                else:
+                    if self.drowsy_alert_active: # Log apenas se estava ativo
+                        logging.debug("DMSCore: Condição de sonolência terminada.") # NOVO
+                    self.drowsiness_counter = 0
+                    self.drowsy_alert_active = False
+
+                # Bocejo
+                if mar > self.mar_threshold:
+                    self.yawn_counter += 1
+                    logging.debug(f"DMSCore: MAR alto ({mar:.3f} > {self.mar_threshold}), contador={self.yawn_counter}/{self.mar_frames}") # NOVO
+                    if self.yawn_counter >= self.mar_frames and not self.yawn_alert_active:
+                        self.yawn_alert_active = True
+                        events_list.append({
+                            "type": "BOCEJO", "value": f"MAR: {mar:.2f}",
+                            "timestamp": datetime.now().isoformat() + "Z"
+                        })
+                        logging.warning("DMSCore: EVENTO BOCEJO disparado.") # NOVO
+                else:
+                    if self.yawn_alert_active:
+                         logging.debug("DMSCore: Condição de bocejo terminada.") # NOVO
+                    self.yawn_counter = 0
+                    self.yawn_alert_active = False
+
+                # Distração
+                # (NOVO) Lógica mais clara para distração (qualquer um dos ângulos fora do limite)
+                is_distracted_angle = abs(yaw) > self.distraction_angle or \
+                                      abs(pitch) > self.distraction_angle # Usamos o mesmo ângulo para yaw e pitch agora
+                if is_distracted_angle:
+                    self.distraction_counter += 1
+                    logging.debug(f"DMSCore: Ângulo fora ({yaw=:.1f}, {pitch=:.1f} > {self.distraction_angle}), contador={self.distraction_counter}/{self.distraction_frames}") # NOVO
+                    if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
+                        self.distraction_alert_active = True
+                        events_list.append({
+                            "type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}",
+                            "timestamp": datetime.now().isoformat() + "Z"
+                        })
+                        logging.warning("DMSCore: EVENTO DISTRACAO disparado.") # NOVO
+                else:
+                    if self.distraction_alert_active:
+                         logging.debug("DMSCore: Condição de distração terminada.") # NOVO
+                    self.distraction_counter = 0
+                    self.distraction_alert_active = False
+
+            logging.debug("DMSCore: Lock de alerta libertado.") # NOVO
+
+            # --- Atualiza dados de status para a UI ---
+            status_data = { "ear": f"{ear:.2f}", "mar": f"{mar:.2f}", "yaw": f"{yaw:.1f}", "pitch": f"{pitch:.1f}", "roll": f"{roll:.1f}" }
+
+            # --- Desenha Alertas Visuais Finais ---
+            # (O alerta VISUAL permanece ativo enquanto a condição persistir)
+            # A leitura do estado 'active' não precisa de lock se só for escrita dentro do lock
+            if self.drowsy_alert_active:
+                cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if self.yawn_alert_active:
+                cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2) # Ciano
+            if self.distraction_alert_active:
+                cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2) # Laranja
 
 
-        # Se não houve deteção nem tracking, processed_frame é a cópia original
-        # e status_data está vazio.
+        else: # Nenhuma face encontrada/rastreada neste frame
+             logging.debug("DMSCore: Nenhuma face encontrada/rastreada neste frame.")
+             # Mantém status_data com "-"
 
-        return processed_frame, events_list, status_data
+        total_time = time.time() - start_time_total
+        logging.debug(f"DMSCore: process_frame concluído em {total_time:.4f}s.") # NOVO
 
-    def _reset_counters_and_cooldowns(self):
-        """Reinicia contadores e flags de cooldown (chamado quando face é perdida)."""
-        with self.lock:
-            self.drowsiness_counter = 0
-            self.distraction_counter = 0
-            self.yawn_counter = 0
-            self.drowsy_alert_active = False
-            self.distraction_alert_active = False
-            self.yawn_alert_active = False
+        return frame, events_list, status_data
 
     def update_settings(self, settings):
         """Atualiza as configurações de calibração de forma segura (thread-safe)."""
+        logging.debug(f"DMSCore: Tentando atualizar configurações: {settings}") # NOVO
         with self.lock:
             try:
-                # Usa .get() com o valor atual como padrão para evitar erros se a chave não existir
+                # Usa .get com o valor atual como padrão para evitar sobrescrever se a chave não existir
                 self.ear_threshold = float(settings.get('ear_threshold', self.ear_threshold))
                 self.ear_frames = int(settings.get('ear_frames', self.ear_frames))
+                self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold)) # (NOVO)
+                self.mar_frames = int(settings.get('mar_frames', self.mar_frames))       # (NOVO)
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle))
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
-                # (NOVO) Parâmetros de Bocejo
-                self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold))
-                self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
-                logging.info(f"Configurações do DMS atualizadas: EAR Thr={self.ear_threshold}, Frames={self.ear_frames}; "
-                             f"Dist Angle={self.distraction_angle}, Frames={self.distraction_frames}; "
-                             f"MAR Thr={self.mar_threshold}, Frames={self.mar_frames}") # Log mais detalhado
+                logging.info(f"Configurações do DMS Core atualizadas para: EAR<{self.ear_threshold} ({self.ear_frames}f), MAR>{self.mar_threshold} ({self.mar_frames}f), Angle>{self.distraction_angle} ({self.distraction_frames}f)") # (NOVO) Log mais claro
                 return True
-            except (ValueError, TypeError) as e: # Captura erros de conversão
-                logging.error(f"Erro ao atualizar configurações do DMS (valor inválido?): {e} - Settings recebidas: {settings}")
+            except (ValueError, TypeError) as e: # (NOVO) Captura erros de conversão
+                logging.error(f"Erro ao atualizar configurações do DMS Core (valor inválido?): {e}")
                 return False
             except Exception as e:
-                logging.error(f"Erro inesperado ao atualizar configurações do DMS: {e}")
+                logging.error(f"Erro inesperado ao atualizar configurações do DMS Core: {e}", exc_info=True)
                 return False
 
     def get_settings(self):
         """Obtém as configurações atuais de forma segura (thread-safe)."""
+        logging.debug("DMSCore: get_settings chamado.") # NOVO
         with self.lock:
+            # (NOVO) Inclui MAR
             return {
                 "ear_threshold": self.ear_threshold,
                 "ear_frames": self.ear_frames,
+                "mar_threshold": self.mar_threshold,
+                "mar_frames": self.mar_frames,
                 "distraction_angle": self.distraction_angle,
-                "distraction_frames": self.distraction_frames,
-                "mar_threshold": self.mar_threshold, # (NOVO)
-                "mar_frames": self.mar_frames       # (NOVO)
+                "distraction_frames": self.distraction_frames
             }
 
