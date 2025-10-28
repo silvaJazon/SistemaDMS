@@ -43,10 +43,13 @@ ENV PATH="/usr/local/bin:${PATH}"
 # Isto TEM de mostrar 3.27.7 agora.
 RUN which cmake && cmake --version
 
-# (NOVO) Passo 4: Instala o resto das dependências.
+# (NOVO) Passo 4: Instala o resto das dependências (SEM O DLIB)
 # O 'cmake' no requirements.txt será "ignorado" (Requirement already satisfied)
-# porque o pip vai executar `cmake --version` e ver que a 3.27.7 já existe.
 RUN pip install --no-cache-dir -r requirements.txt
+
+# (NOVO) Passo 5: Instala o 'dlib' SEPARADAMENTE
+# Forçamos o processo de build do pip a usar o executável correto do cmake
+RUN CMAKE_EXECUTABLE=/usr/local/bin/cmake pip install --no-cache-dir dlib==19.24.2
 
 # --- Estágio de Download do Modelo (Dlib) ---
 # Descarrega o modelo de 68 pontos de referência faciais
