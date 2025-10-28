@@ -68,7 +68,7 @@
             margin-bottom: 5px;
             color: #ccc;
         }
-        /* (NOVO) Estilo para o ícone de informação */
+        /* Estilo para o ícone de informação */
         .info-icon {
             display: inline-block;
             margin-left: 5px;
@@ -129,6 +129,15 @@
             color: #ddd;
             margin: 0 5px; /* Adiciona espaçamento entre os valores */
         }
+        /* (NOVO) Estilo para o status da fila */
+        .queue-status {
+             margin-top: 5px;
+             font-size: 0.8em;
+        }
+        .queue-status-ok { color: #8f8; } /* Verde */
+        .queue-status-warn { color: #ff8; } /* Amarelo */
+        .queue-status-full { color: #f88; font-weight: bold;} /* Vermelho */
+
 
         /* Responsividade: Empilha em ecrãs pequenos */
         @media (max-width: 768px) {
@@ -163,6 +172,8 @@
                 Yaw: <span id="status-yaw">-</span> |
                 Pitch: <span id="status-pitch">-</span> |
                 Roll: <span id="status-roll">-</span>
+                <!-- (NOVO) Status da fila de eventos -->
+                <div class="queue-status">Fila Eventos: <span id="status-queue-depth">-</span></div>
             </div>
         </div>
 
@@ -255,6 +266,8 @@
         const statusYaw = document.getElementById('status-yaw');
         const statusPitch = document.getElementById('status-pitch');
         const statusRoll = document.getElementById('status-roll');
+        // (NOVO) Elemento para status da fila
+        const statusQueueDepth = document.getElementById('status-queue-depth');
 
         // Função auxiliar para atualizar um slider e o seu span
         function updateSliderAndValue(sliderId, value) {
@@ -289,6 +302,7 @@
                 if (Object.keys(defaultSettings).length === 0 && data && !data.error) {
                     defaultSettings = { ...data };
                     delete defaultSettings.status;
+                    delete defaultSettings.queue_depth; // Remove queue_depth dos padrões
                     console.log("Valores padrão guardados:", defaultSettings);
                 }
 
@@ -323,6 +337,25 @@
                     statusRoll.textContent = '-';
                 }
 
+                 // (NOVO) Atualiza status da fila
+                if (data.hasOwnProperty('queue_depth')) {
+                    const depth = data.queue_depth;
+                    const queueSize = data.queue_max_size || 100; // Usa 100 se não vier da API
+                    statusQueueDepth.textContent = `${depth} / ${queueSize}`;
+                    // Muda a cor com base na profundidade
+                    if (depth > queueSize * 0.9) {
+                        statusQueueDepth.className = 'queue-status-full'; // Quase cheia
+                    } else if (depth > queueSize * 0.6) {
+                        statusQueueDepth.className = 'queue-status-warn'; // Meio cheia
+                    } else {
+                         statusQueueDepth.className = 'queue-status-ok'; // OK
+                    }
+                } else {
+                    statusQueueDepth.textContent = '-';
+                    statusQueueDepth.className = ''; // Remove classe de cor
+                }
+
+
             } catch (error) {
                 console.error("Erro ao buscar configurações:", error);
                 saveStatus.textContent = "Erro ao carregar.";
@@ -332,6 +365,8 @@
                 statusYaw.textContent = 'Erro';
                 statusPitch.textContent = 'Erro';
                 statusRoll.textContent = 'Erro';
+                statusQueueDepth.textContent = 'Erro'; // (NOVO)
+                statusQueueDepth.className = 'queue-status-full'; // (NOVO)
             }
         }
 
@@ -339,6 +374,7 @@
         async function postSettings() {
             const currentSettings = {};
             sliders.forEach(slider => {
+                // Converte para número (float ou int) com base no 'step'
                 currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
             });
             currentSettings.rotation = parseInt(rotationSelect.value);
@@ -375,6 +411,7 @@
                 saveStatus.textContent = `Erro: ${error.message}`;
                 saveStatus.style.color = "#f44336"; // Vermelho
             }
+            // Limpa a mensagem após 3 segundos apenas se for sucesso ou erro
             setTimeout(() => {
                  if (saveStatus.style.color === 'rgb(76, 175, 80)' || saveStatus.style.color === 'rgb(244, 67, 54)') {
                      saveStatus.textContent = "";
@@ -386,10 +423,13 @@
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
+                // Atualiza o span visualmente ENQUANTO arrasta
                 slider.addEventListener('input', () => {
                      const numericValue = Number(slider.value);
-                     valueSpan.textContent = Number.isInteger(numericValue) ? numericValue : numericValue.toFixed(2);
+                     // Formata com base no step (int ou float com 2 casas)
+                     valueSpan.textContent = slider.step.includes('.') ? numericValue.toFixed(2) : numericValue;
                 });
+                // Envia para a API SÓ QUANDO solta o slider
                 slider.addEventListener('change', postSettings);
             } else {
                  console.warn(`Span de valor não encontrado para ${slider.id}`);
@@ -402,23 +442,28 @@
             if (Object.keys(defaultSettings).length > 0) {
                 console.log("A restaurar para:", defaultSettings);
                 sliders.forEach(slider => {
+                    // Restaura valor no slider e no span
                     if (defaultSettings.hasOwnProperty(slider.name)) {
                         updateSliderAndValue(slider.id, defaultSettings[slider.name]);
                     }
                 });
+                 // Restaura valor no select
                  if (defaultSettings.hasOwnProperty('rotation')) {
                     rotationSelect.value = defaultSettings.rotation;
                  }
+                // Envia os valores restaurados para a API
                 postSettings();
             } else {
                 alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
             }
         });
 
-        // --- Atualização periódica do status ---
-        setInterval(fetchAndUpdateSettings, 2000);
+        // --- Atualização periódica do status (incluindo fila) ---
+        // A função fetchAndUpdateSettings já busca tudo
+        setInterval(fetchAndUpdateSettings, 2000); // A cada 2 segundos
 
-        // Busca as configurações iniciais
+        // Busca as configurações iniciais um pouco depois do load
+        // para dar tempo ao backend de iniciar completamente
         setTimeout(fetchAndUpdateSettings, 500);
 
 
@@ -429,11 +474,12 @@
         function reloadStream() {
              clearTimeout(reloadTimeout);
              console.log("Erro no stream, a tentar recarregar em 5s...");
-             stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Imagem transparente
+             stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; // Imagem transparente para limpar
              reloadTimeout = setTimeout(function() {
-                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
+                 stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime(); // Adiciona timestamp para evitar cache
              }, 5000);
         }
+        // Associa a função ao evento onerror
         stream.onerror = reloadStream;
 
     </script>
