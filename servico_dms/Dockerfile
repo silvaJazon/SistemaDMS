@@ -15,7 +15,7 @@ COPY requirements.txt .
 # (NOVO) 'cmake' foi removido daqui. Ele agora será instalado via 'pip'
 #          pelo 'requirements.txt', o que garante a versão correta.
 RUN apt-get update && \
-    apt-get remove -y cmake && \
+    apt-get purge -y cmake cmake-data && \
     apt-get install -y --no-install-recommends \
         libgl1-mesa-glx \
         libglib2.0-0 \
@@ -32,7 +32,11 @@ RUN apt-get update && \
 # Isto é crucial para garantir que ele esteja disponível para o build do dlib.
 RUN pip install --no-cache-dir "cmake==3.27.7"
 
-# (NOVO) Passo 2: Instala o resto das dependências.
+# (NOVO) Passo 2: Verifica a versão do CMake
+# Este passo vai mostrar-nos no log qual 'cmake' está no PATH e a sua versão.
+RUN which cmake && cmake --version
+
+# (NOVO) Passo 3: Instala o resto das dependências.
 # 'cmake' já está instalado (do passo anterior), então o pip vai saltá-lo
 # e prosseguir para compilar o 'dlib' usando a versão correta.
 RUN pip install --no-cache-dir -r requirements.txt
