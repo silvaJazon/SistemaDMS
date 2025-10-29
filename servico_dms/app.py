@@ -329,7 +329,8 @@ def api_alerts():
     logging.debug("Rota /api/alerts acedida.")
     if not event_handler: logging.warning("/api/alerts: Gestor eventos não init."); return jsonify({"error": "Event handler not initialized"}), 503
     try:
-        alerts_list = event_handler.get_alerts(limit=50)
+        # (ALTERADO) Busca TODOS os alertas para paginação no frontend
+        alerts_list = event_handler.get_alerts(limit=None) 
         logging.debug(f"/api/alerts: Retornando {len(alerts_list)} alertas.")
         return jsonify(alerts_list)
     except Exception as e: logging.error(f"Erro ler alertas SQLite: {e}", exc_info=True); return jsonify({"error": "Failed to read alerts from database"}), 500

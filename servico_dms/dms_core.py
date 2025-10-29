@@ -66,7 +66,9 @@ class DlibMonitor(BaseMonitor):
 
         # Configurações (Padrão)
         self.ear_threshold = 0.25; self.ear_frames = 15
-        self.mar_threshold = 0.60; self.mar_frames = 20
+        # ================== ALTERAÇÃO ==================
+        self.mar_threshold = 0.60; self.mar_frames = 12 # Valor padrão reduzido de 20 para 12
+        # ===============================================
         # (CORRIGIDO) Garante que o padrão é False
         self.distraction_detection_enabled = False
         self.distraction_angle = 40.0 # Yaw
@@ -341,4 +343,3 @@ class DlibMonitor(BaseMonitor):
                     "yaw_center_offset": self.yaw_center_offset,
                     "pitch_center_offset": self.pitch_center_offset
                    }
-

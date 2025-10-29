@@ -62,7 +62,9 @@ class MediaPipeMonitor(BaseMonitor):
 
         # Configurações (Padrão) - Mantém a estrutura completa
         self.ear_threshold = 0.25; self.ear_frames = 15
-        self.mar_threshold = 0.60; self.mar_frames = 20
+        # ================== ALTERAÇÃO ==================
+        self.mar_threshold = 0.60; self.mar_frames = 12 # Valor padrão reduzido de 20 para 12
+        # ===============================================
         # A distração está desativada por *implementação*
         self.distraction_detection_enabled = False
         self.distraction_angle = 40.0
