@@ -20,6 +20,14 @@ from camera_thread import CameraThread
 # (ALTERADO) Importa a implementação específica (DlibMonitor) e a base
 from dms_base import BaseMonitor
 from dms_core import DlibMonitor 
+# (NOVO) Importa a implementação MediaPipe
+try:
+    from dms_mediapipe import MediaPipeMonitor
+    HAS_MEDIAPIPE = True
+except ImportError as e:
+    logging.warning(f"Não foi possível importar MediaPipeMonitor: {e}. MediaPipe não estará disponível.")
+    HAS_MEDIAPIPE = False
+    
 from event_handler import EventHandler
 
 # Tenta importar o Waitress
@@ -49,9 +57,9 @@ TARGET_FPS = 5
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
-# (NOVO) Variável para escolher o backend (futuramente)
-# Por agora, está fixo em 'DLIB'
-DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper()
+
+# (CORRIGIDO) Adiciona .strip() para remover espaços em branco
+DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper().strip()
 
 
 # --- Variáveis Globais ---
@@ -173,8 +181,10 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
 def index():
     """Serve a página de calibração."""
     cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
+    # (NOVO) Passa o backend ativo para o template
     return render_template("index.html", source_desc=cam_source_desc,
-                           width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY)
+                           width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY,
+                           active_backend=DETECTION_BACKEND)
 
 @app.route("/alerts")
 def alerts_page():
@@ -264,6 +274,9 @@ def api_config():
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
+            
+            # (NOVO) Adiciona o backend ativo
+            current_settings['active_backend'] = DETECTION_BACKEND
 
             logging.debug("api_config GET: Lock status...")
             with status_data_lock:
@@ -358,14 +371,20 @@ if __name__ == '__main__':
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
         # (ALTERADO) Lógica para escolher o backend
-        # Por agora, só temos Dlib, mas a lógica está pronta.
-        if DETECTION_BACKEND == 'DLIB':
+        if DETECTION_BACKEND == 'MEDIAPIPE':
+            if HAS_MEDIAPIPE:
+                dms_monitor = MediaPipeMonitor(frame_size=frame_size)
+            else:
+                logging.error("!!! DETECTION_BACKEND='MEDIAPIPE' mas a importação falhou. A usar DLIB.")
+                DETECTION_BACKEND = 'DLIB' # Corrige a variável global
+                dms_monitor = DlibMonitor(frame_size=frame_size)
+        
+        elif DETECTION_BACKEND == 'DLIB':
             dms_monitor = DlibMonitor(frame_size=frame_size)
-        # elif DETECTION_BACKEND == 'MEDIAPIPE':
-        #    from dms_mediapipe import MediaPipeMonitor
-        #    dms_monitor = MediaPipeMonitor(frame_size=frame_size)
+        
         else:
             logging.error(f"!!! DETECTION_BACKEND '{DETECTION_BACKEND}' desconhecido. A usar DLIB.")
+            DETECTION_BACKEND = 'DLIB' # Corrige a variável global
             dms_monitor = DlibMonitor(frame_size=frame_size)
 
         cam_thread = CameraThread(
@@ -456,3 +475,4 @@ if __name__ == '__main__':
 
         logging.info(">>> Serviço DMS terminado.")
         os._exit(0)  # Força a saída
+
