@@ -55,7 +55,6 @@
             <div class="status-info">
                 <span>EAR: <span id="status-ear">-</span></span> |
                 <span>MAR: <span id="status-mar">-</span></span> |
-                <!-- (ALTERADO) Mostra Yaw, Pitch, Roll -->
                 <span>Yaw: <span id="status-yaw">-</span></span> |
                 <span>Pitch: <span id="status-pitch">-</span></span> |
                 <span>Roll: <span id="status-roll">-</span></span>
@@ -87,29 +86,31 @@
                 <input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="mar_frames_value">20</span>
             </div>
-
-            <!-- (ALTERADO) Volta para Distração por Ângulo -->
+            <!-- Distração por Ângulo -->
             <div>
                 <label for="distraction_angle">Ângulo Yaw Distração (°): <span class="info-icon" title="Ângulo LATERAL (Yaw) para distração.">ⓘ</span></label>
                 <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
-                <span class="slider-value" id="distraction_angle_value">35</span>
+                <!-- (AJUSTADO) Novo padrão -->
+                <span class="slider-value" id="distraction_angle_value">40</span>
             </div>
              <div>
                 <label for="pitch_up_threshold">Limite Pitch Acima (°): <span class="info-icon" title="Ângulo VERTICAL (Pitch) para distração (olhar p/ CIMA). Valores mais negativos são menos sensíveis.">ⓘ</span></label>
                 <input type="range" id="pitch_up_threshold" name="pitch_up_threshold" min="-40" max="0" step="1">
-                <span class="slider-value" id="pitch_up_threshold_value">-10</span>
+                 <!-- (AJUSTADO) Novo padrão -->
+                <span class="slider-value" id="pitch_up_threshold_value">-15</span>
             </div>
             <div>
                 <label for="pitch_down_offset">Offset Pitch Abaixo (°): <span class="info-icon" title="Quanto MAIS para baixo (além do Ângulo Yaw) para distração (olhar p/ BAIXO). Maior = menos sensível.">ⓘ</span></label>
                 <input type="range" id="pitch_down_offset" name="pitch_down_offset" min="0" max="40" step="1">
-                <span class="slider-value" id="pitch_down_offset_value">15</span>
+                 <!-- (AJUSTADO) Novo padrão -->
+                <span class="slider-value" id="pitch_down_offset_value">20</span>
             </div>
              <div>
                 <label for="distraction_frames">Frames Distração: <span class="info-icon" title="Nº frames com cabeça virada (Yaw ou Pitch) para alerta.">ⓘ</span></label>
                 <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
-                <span class="slider-value" id="distraction_frames_value">25</span>
+                 <!-- (AJUSTADO) Novo padrão -->
+                <span class="slider-value" id="distraction_frames_value">35</span>
             </div>
-            <!-- Sliders de Posição Relativa Removidos -->
 
             <h2>Configurações da Câmara</h2>
             <div>
@@ -159,25 +160,23 @@
 
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
 
-        // (ALTERADO) Perfil Padrão volta a ter ângulos
+        // (AJUSTADO) Perfil Padrão com novos valores de distração
         const defaultProfile = {
             ear_threshold: 0.25, ear_frames: 15,
             mar_threshold: 0.60, mar_frames: 20,
-            distraction_angle: 35.0, // Yaw
-            pitch_up_threshold: -10.0,
-            pitch_down_offset: 15.0,
-            distraction_frames: 25,
+            distraction_angle: 40.0, // Yaw
+            pitch_up_threshold: -15.0,
+            pitch_down_offset: 20.0,
+            distraction_frames: 35,
             brightness: 0,
             rotation: 0
         };
-        let initialApiSettings = {}; // Guarda a primeira resposta da API
+        let initialApiSettings = {};
 
-        // (ALTERADO) Status volta a ter yaw, pitch, roll
         const statusElements = {
             ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
             yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
             roll: document.getElementById('status-roll')
-            // Removido eye_x, eye_y
         };
         const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
@@ -217,8 +216,7 @@
                 // Atualiza Status (Yaw, Pitch, Roll)
                 if (data.status) {
                     for (const key in statusElements) {
-                         // EAR/MAR com 2 casas, ângulos com 1
-                        const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
+                         const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
                         statusElements[key].textContent = formatNumber(data.status[key], decimals);
                     }
                 } else {
@@ -277,7 +275,7 @@
         }
 
         // --- Funções de Gestão de Perfis (do utilizador) ---
-        function getSavedProfiles() { /* ... (igual a antes) ... */
+        function getSavedProfiles() {
              const profiles = {};
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
@@ -290,7 +288,7 @@
             }
             return profiles;
         }
-        function populateProfileDropdown() { /* ... (igual a antes) ... */
+        function populateProfileDropdown() {
              const profiles = getSavedProfiles();
             profileSelect.innerHTML = '';
             const defaultOption = document.createElement('option');
@@ -304,7 +302,7 @@
             });
              console.debug("Dropdown perfis populado.");
          }
-        function saveProfile() { /* ... (igual a antes) ... */
+        function saveProfile() {
              const profileName = profileNameInput.value.trim();
             if (!profileName || profileName === "Padrão" || profileName === "__default__") {
                 saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado.";
@@ -322,7 +320,7 @@
             } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
-        function loadProfile() { /* ... (igual a antes) ... */
+        function loadProfile() {
              const selectedName = profileSelect.value;
             let settingsToLoad = null;
             if (selectedName === "__default__") {
@@ -341,11 +339,13 @@
                  setTimeout(() => { saveStatus.textContent = ""; }, 3000);
             }
          }
-        function deleteProfile() { /* ... (igual a antes) ... */
+        function deleteProfile() {
              const selectedName = profileSelect.value;
             if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
             if (localStorage.getItem(storageKey)) {
+                // REMOVIDO CONFIRM para evitar problemas em iframes
+                // if (!confirm(`Tem a certeza que deseja apagar o perfil '${selectedName}'?`)) { return; }
                 try {
                     localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50";
                     populateProfileDropdown(); loadProfile(); // Carrega Padrão
@@ -363,11 +363,8 @@
                     valueSpan.textContent = formatNumber(slider.value, decimals);
                 });
                 // Envia para a API SÓ quando o utilizador carrega/salva um perfil ou clica em Reset
-                // slider.addEventListener('change', postSettings); // REMOVIDO
             }
         });
-        // Envia para a API SÓ quando o utilizador carrega/salva um perfil ou clica em Reset
-        // rotationSelect.addEventListener('change', postSettings); // REMOVIDO
 
         resetButton.addEventListener('click', () => { // Carrega e envia o perfil Padrão
             console.debug("Restaurando Padrão...");

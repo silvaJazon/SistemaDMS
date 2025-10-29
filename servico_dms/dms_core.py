@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
-# (VERSÃO FINAL CANDIDATA: Híbrido Tracking+Predict + Pose 3D Suavizada)
+# (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada + Frames Distração Aumentados)
 
 import cv2
 import dlib
@@ -22,58 +22,52 @@ MOUTH_AR_END = 68
 FRAMES_FOR_REDETECTION = 10
 TRACKER_CONFIDENCE_THRESHOLD = 7.0
 # Constante de Suavização
-ANGLE_SMOOTHING_FRAMES = 5
+ANGLE_SMOOTHING_FRAMES = 7
 
 class DriverMonitor:
     """
     Classe principal para a deteção de sonolência e distração.
-    (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada)
+    (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada Aumentada)
     """
     EYE_AR_LEFT_START = 42; EYE_AR_LEFT_END = 48
     EYE_AR_RIGHT_START = 36; EYE_AR_RIGHT_END = 42
 
-    # (REINTRODUZIDO) Modelo 3D da Cabeça
     HEAD_MODEL_POINTS = np.array([
         (0.0, 0.0, 0.0), (0.0, -330.0, -65.0), (-225.0, 170.0, -135.0),
         (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
     ])
-    HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54] # Nariz, Queixo, OlhoEsq, OlhoDir, BocaEsq, BocaDir
+    HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54]
 
     def __init__(self, frame_size):
-        logging.info("A inicializar o DriverMonitor Core (Modo: Pose 3D Suavizada)...")
+        logging.info("A inicializar o DriverMonitor Core (Modo: Pose 3D Suavizada Aumentada)...")
         self.frame_height, self.frame_width = frame_size
-        # (REINTRODUZIDO) Parâmetros da Câmara para SolvePnP
         self.focal_length = self.frame_width
         self.camera_center = (self.frame_width / 2, self.frame_height / 2)
         self.camera_matrix = np.array([[self.focal_length, 0, self.camera_center[0]],
                                        [0, self.focal_length, self.camera_center[1]],
                                        [0, 0, 1]], dtype="double")
-        self.dist_coeffs = np.zeros((4,1)) # Assume sem distorção
+        self.dist_coeffs = np.zeros((4,1))
 
         self.detector = None
         self.predictor = None
         self.initialize_dlib()
 
         self.lock = threading.Lock()
-        # Contadores e Cooldowns (igual)
         self.drowsiness_counter = 0; self.distraction_counter = 0; self.yawn_counter = 0
         self.drowsy_alert_active = False; self.distraction_alert_active = False; self.yawn_alert_active = False
-
-        # Tracking (igual)
         self.face_tracker = None; self.tracking_active = False; self.tracked_rect = None; self.frame_since_detection = 0
-
-        # (REINTRODUZIDO) Deques para suavização dos ângulos
         self.yaw_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
         self.pitch_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
 
-        # Configurações (Padrão) - Mantém Pitch configurável
+        # Configurações (Padrão)
         self.ear_threshold = 0.25; self.ear_frames = 15
         self.mar_threshold = 0.60; self.mar_frames = 20
-        self.distraction_angle = 35.0 # Limite Yaw
-        self.distraction_frames = 25
-        self.pitch_down_offset = 15.0 # Offset para limite inferior de Pitch
-        self.pitch_up_threshold = -10.0 # Limite superior de Pitch
+        self.distraction_angle = 40.0 # Yaw
+        self.distraction_frames = 35 # (AJUSTADO) Aumentado de 25 para 35
+        self.pitch_down_offset = 20.0
+        self.pitch_up_threshold = -15.0
 
+    # ... (resto das funções _initialize_dlib, _shape_to_np, _eye_aspect_ratio, _mouth_aspect_ratio, _estimate_head_pose, _reset_counters_and_cooldowns são iguais à versão anterior) ...
     def initialize_dlib(self):
         """Carrega modelos Dlib."""
         try:
@@ -103,7 +97,6 @@ class DriverMonitor:
         A=dist.euclidean(mouth[1],mouth[7]); B=dist.euclidean(mouth[3],mouth[5]); C=dist.euclidean(mouth[0],mouth[4])
         return 0.0 if C < 1e-6 else (A + B) / (2.0 * C)
 
-    # (REINTRODUZIDO) Estimativa de Pose 3D
     def _estimate_head_pose(self, shape_np):
         """Estima pose da cabeça (Yaw, Pitch, Roll)."""
         logging.debug("DMSCore: Estimando pose...")
@@ -112,12 +105,10 @@ class DriverMonitor:
         try:
             (success, rotation_vector, _) = cv2.solvePnP(self.HEAD_MODEL_POINTS, image_points,
                                                           self.camera_matrix, self.dist_coeffs,
-                                                          flags=cv2.SOLVEPNP_ITERATIVE) # ou cv2.SOLVEPNP_EPNP
+                                                          flags=cv2.SOLVEPNP_ITERATIVE)
             if not success: logging.debug("DMSCore: solvePnP falhou."); return None, None, None
             (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
             angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
-            # Ordem comum: Pitch (X), Yaw (Y), Roll (Z)
-            # Pode precisar ajustar sinais dependendo da orientação da câmara/OpenCV
             yaw = angles[1]; pitch = angles[0]; roll = angles[2]
             logging.debug(f"DMSCore: Pose RAW (Y={yaw:.1f}, P={pitch:.1f}, R={roll:.1f}) {time.time()-start_time_pose:.4f}s.")
             return yaw, pitch, roll
@@ -131,12 +122,12 @@ class DriverMonitor:
         self.drowsy_alert_active=False; self.distraction_alert_active=False; self.yawn_alert_active=False
         self.yaw_history.clear(); self.pitch_history.clear()
 
+
     def process_frame(self, frame, gray):
-        """Analisa um frame (Híbrido + Pose 3D Suavizada)."""
-        logging.debug("DMSCore: process_frame (HÍBRIDO + POSE SUAVE) iniciado.")
+        """Analisa um frame (Híbrido + Pose 3D Suavizada Aumentada)."""
+        logging.debug("DMSCore: process_frame (HÍBRIDO + POSE SUAVE AUMENTADA) iniciado.")
         start_time_total = time.time()
         events_list = []
-        # (ALTERADO) Status volta a ter Yaw, Pitch, Roll
         status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
         face_found_this_frame = False
         gray_processed = cv2.equalizeHist(gray) # Para deteção
@@ -186,48 +177,37 @@ class DriverMonitor:
             shape_np = self._shape_to_np(shape)
             logging.debug(f"DMSCore: Landmarks {time.time()-start_time_predict:.4f}s.")
 
-            # Cálculos EAR, MAR
             leftEye=shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]; rightEye=shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
             ear = (self._eye_aspect_ratio(leftEye) + self._eye_aspect_ratio(rightEye)) / 2.0; logging.debug(f"DMSCore: EAR={ear:.3f}")
             mouth = shape_np[MOUTH_AR_START:MOUTH_AR_END]; mar = self._mouth_aspect_ratio(mouth); logging.debug(f"DMSCore: MAR={mar:.3f}")
-
-            # (REINTRODUZIDO) Cálculo Pose 3D
             yaw, pitch, roll = self._estimate_head_pose(shape_np)
 
             # --- Suavização dos Ângulos ---
-            avg_yaw, avg_pitch = None, None # Padrão se não houver histórico suficiente
-            # Só calcula/usa a média se a pose foi estimada com sucesso
+            avg_yaw, avg_pitch = None, None
             if yaw is not None and pitch is not None:
-                with self.lock: # Protege acesso aos deques
+                with self.lock:
                     self.yaw_history.append(yaw); self.pitch_history.append(pitch)
-                    if len(self.yaw_history) == ANGLE_SMOOTHING_FRAMES: # Calcula média só se tiver N frames
+                    if len(self.yaw_history) == ANGLE_SMOOTHING_FRAMES:
                         avg_yaw = np.mean(self.yaw_history)
                         avg_pitch = np.mean(self.pitch_history)
                         logging.debug(f"DMSCore: Ângulos Suaves (Y={avg_yaw:.1f}, P={avg_pitch:.1f})")
-                    else:
-                        logging.debug(f"DMSCore: Aguardando histórico ângulos ({len(self.yaw_history)}/{ANGLE_SMOOTHING_FRAMES})")
-            else: # Se a estimativa de pose falhou, limpa o histórico para não usar valores antigos
-                 with self.lock:
-                      self.yaw_history.clear(); self.pitch_history.clear()
-            # ------------------------------------
+                    else: logging.debug(f"DMSCore: Aguardando histórico ({len(self.yaw_history)}/{ANGLE_SMOOTHING_FRAMES})")
+            else:
+                 with self.lock: self.yaw_history.clear(); self.pitch_history.clear()
 
             # Desenho (igual)
             try:
-                cv2.drawContours(frame, [cv2.convexHull(leftEye)], -1, (0, 255, 0), 1)
-                cv2.drawContours(frame, [cv2.convexHull(rightEye)], -1, (0, 255, 0), 1)
+                cv2.drawContours(frame, [cv2.convexHull(leftEye)], -1, (0, 255, 0), 1); cv2.drawContours(frame, [cv2.convexHull(rightEye)], -1, (0, 255, 0), 1)
                 cv2.drawContours(frame, [cv2.convexHull(mouth)], -1, (0, 255, 255), 1)
                 pt1=(int(current_rect.left()), int(current_rect.top())); pt2=(int(current_rect.right()), int(current_rect.bottom()))
                 cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2)
-                # Opcional: Desenhar eixos de pose
-                # if yaw is not None: # Desenha se a pose foi calculada
-                #     # (código para desenhar eixos usando rotation_vector, translation_vector omitido por brevidade)
             except Exception as e: logging.warning(f"DMSCore: Erro desenho: {e}")
 
-            # --- Lógica de Alerta (com Lock) ---
+            # --- Lógica de Alerta ---
             logging.debug("DMSCore: Lock alerta...")
             with self.lock:
                 logging.debug("DMSCore: Lock alerta OK.")
-                # Sonolência (usa EAR instantâneo)
+                # Sonolência
                 if ear < self.ear_threshold:
                     self.drowsiness_counter += 1; logging.debug(f"DMSCore: EAR baixo ({ear:.3f}<{self.ear_threshold}), cont={self.drowsiness_counter}/{self.ear_frames}")
                     if self.drowsiness_counter >= self.ear_frames and not self.drowsy_alert_active:
@@ -235,7 +215,7 @@ class DriverMonitor:
                 else:
                     if self.drowsiness_counter > 0: logging.debug("DMSCore: Sonolência reset.")
                     self.drowsiness_counter=0; self.drowsy_alert_active=False
-                # Bocejo (usa MAR instantâneo)
+                # Bocejo
                 if mar > self.mar_threshold:
                     self.yawn_counter += 1; logging.debug(f"DMSCore: MAR alto ({mar:.3f}>{self.mar_threshold}), cont={self.yawn_counter}/{self.mar_frames}")
                     if self.yawn_counter >= self.mar_frames and not self.yawn_alert_active:
@@ -243,43 +223,38 @@ class DriverMonitor:
                 else:
                     if self.yawn_counter > 0: logging.debug("DMSCore: Bocejo reset.")
                     self.yawn_counter=0; self.yawn_alert_active=False
-
                 # Distração (usa ângulos MÉDIOS/SUAVIZADOS)
-                # Só verifica se avg_yaw e avg_pitch foram calculados (histórico cheio)
-                is_distracted_angle = False
-                details = "-"
+                is_distracted_angle = False; details = "-"
                 if avg_yaw is not None and avg_pitch is not None:
+                    # Usa os limites ATUALIZADOS da classe
                     pitch_down_limit = self.distraction_angle + self.pitch_down_offset
                     is_distracted_angle = (abs(avg_yaw) > self.distraction_angle) or \
                                           (avg_pitch < self.pitch_up_threshold) or \
                                           (avg_pitch > pitch_down_limit)
-                    # Detalhes usam ângulos médios
                     details = f"Yaw(avg): {avg_yaw:.1f}, Pitch(avg): {avg_pitch:.1f}"
-
                     if is_distracted_angle:
                         self.distraction_counter += 1
+                        # (AJUSTADO) Usa distraction_frames da classe no log
                         logging.debug(f"DMSCore: Ângulo MÉDIO fora ({details} vs Yaw>{self.distraction_angle}, Pitch<({self.pitch_up_threshold})>({pitch_down_limit})), cont={self.distraction_counter}/{self.distraction_frames}")
+                        # (AJUSTADO) Usa distraction_frames da classe na condição
                         if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
                             self.distraction_alert_active = True
-                            # Evento guarda ângulos RAW para info, mas decisão foi pela média
                             events_list.append({"type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}", "timestamp": datetime.now().isoformat() + "Z"})
                             logging.warning("DMSCore: EVENTO DISTRACAO.")
-                    else: # Ângulo médio está dentro dos limites
+                    else: # Ângulo médio dentro dos limites
                         if self.distraction_counter > 0: logging.debug("DMSCore: Distração (média) reset.")
                         self.distraction_counter = 0; self.distraction_alert_active = False
-                else: # Se não temos ângulos médios ainda, não podemos avaliar distração por ângulo
+                else: # Histórico incompleto
                      if self.distraction_counter > 0: logging.debug("DMSCore: Distração reset (histórico incompleto).")
-                     self.distraction_counter = 0; self.distraction_alert_active = False # Garante reset
-
+                     self.distraction_counter = 0; self.distraction_alert_active = False
             logging.debug("DMSCore: Lock alerta libertado.")
 
-            # Status usa ângulos RAW (instantâneos) para feedback na UI
+            # Status usa ângulos RAW
             status_data = {"ear": f"{ear:.2f}", "mar": f"{mar:.2f}",
                            "yaw": f"{yaw:.1f}" if yaw is not None else "-",
                            "pitch": f"{pitch:.1f}" if pitch is not None else "-",
                            "roll": f"{roll:.1f}" if roll is not None else "-"}
-
-            # Desenha alertas (igual)
+            # Desenha alertas
             if self.drowsy_alert_active: cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if self.yawn_alert_active: cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             if self.distraction_alert_active: cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
@@ -288,12 +263,11 @@ class DriverMonitor:
              # Reset já feito dentro do lock de tracking
 
         total_time = time.time() - start_time_total
-        logging.debug(f"DMSCore: process_frame (HÍBRIDO + POSE SUAVE) {total_time:.4f}s.")
+        logging.debug(f"DMSCore: process_frame (HÍBRIDO + POSE SUAVE AUM.) {total_time:.4f}s.")
         return frame, events_list, status_data
 
     def update_settings(self, settings):
         """Atualiza configurações."""
-        # (ALTERADO) Volta a usar os parâmetros de ângulo
         logging.debug(f"DMSCore: Tentando atualizar conf: {settings}")
         with self.lock:
             try:
@@ -302,6 +276,7 @@ class DriverMonitor:
                 self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold))
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle)) # Yaw
+                # (AJUSTADO) Usa o valor atualizado da classe no log
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
                 self.pitch_up_threshold = float(settings.get('pitch_up_threshold', self.pitch_up_threshold))
                 self.pitch_down_offset = float(settings.get('pitch_down_offset', self.pitch_down_offset))
@@ -312,7 +287,6 @@ class DriverMonitor:
 
     def get_settings(self):
         """Obtém configurações."""
-        # (ALTERADO) Retorna os parâmetros de ângulo
         logging.debug("DMSCore: get_settings.")
         with self.lock:
             return {"ear_threshold": self.ear_threshold, "ear_frames": self.ear_frames,
