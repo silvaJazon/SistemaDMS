@@ -1,30 +1,48 @@
 # Documentação: Dockerfile para o Serviço DMS
-# Versão focada apenas em Dlib (Sonolência/Distração)
-# NOVO: Adiciona a pasta de templates e a pasta de alertas
+# Usando "bookworm" (Debian 12) para ter acesso a um 'cmake' moderno.
 
 # --- Estágio Base ---
-FROM python:3.9-slim-bullseye AS base
+FROM python:3.9-slim-bookworm AS base
 WORKDIR /app
 
 # --- Estágio de Dependências ---
 COPY requirements.txt .
 
-# Instala dependências de sistema
-# Essencial: cmake e g++ são necessários para COMPILAR o 'dlib' via pip
-# Essencial: bzip2 é necessário para descompactar o modelo de landmarks
+# Instala dependências de sistema (incluindo cmake 3.25.1)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx \
-        libglib2.0-0 \
         cmake \
         g++ \
         build-essential \
         curl \
         bzip2 \
-    && rm -rf /var/lib/apt/lists/*
+        pkg-config \
+        libx11-dev \
+        libboost-dev \
+        libboost-python-dev \
+        libopenblas-dev \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+    && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
-# Instala dependências Python (agora inclui o dlib)
+# Verifica a versão do CMake (deve ser 3.25.1)
+RUN which cmake && cmake --version
+
+# (NOVO) Atualiza pip e setuptools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Instala as dependências do requirements.txt (SEM dlib, SEM cmake)
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Instala o pybind11 (dependência de build do dlib)
+# Nota: Adicionamos --no-build-isolation aqui também por segurança
+RUN pip install --no-cache-dir --no-build-isolation pybind11
+
+# Instala o 'dlib' separadamente
+# (NOVO) Usamos --no-build-isolation para forçar o uso do cmake do sistema
+# Mantemos CMAKE_ARGS por precaução, embora possa não ser necessário agora.
+RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" pip install --no-cache-dir --no-build-isolation dlib==19.24.2
 
 # --- Estágio de Download do Modelo (Dlib) ---
 # Descarrega o modelo de 68 pontos de referência faciais
@@ -33,21 +51,12 @@ RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
 
 # --- Estágio Final ---
-
-# NOVO: Cria a pasta para guardar os alertas
 RUN mkdir /app/alerts
-
-# NOVO: Copia a pasta de templates HTML
 COPY templates/ ./templates/
-
-# Copia os scripts Python da aplicação
 COPY app.py .
 COPY dms_core.py .
 COPY camera_thread.py .
 COPY event_handler.py .
-# Expõe a porta do Flask
 EXPOSE 5000
-
-# Comando de execução
 CMD ["python", "app.py"]
 

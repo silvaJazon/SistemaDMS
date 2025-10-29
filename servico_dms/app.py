@@ -1,6 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# Orquestra a captura de vídeo, processamento de IA e a interface web.
-# (Atualizado com Visualizador de Alertas, Refatoração HTML, APIs, Rotação Dinâmica, Correção Unpack)
+# (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
 
 import cv2
 import time
@@ -10,319 +9,432 @@ import threading
 import logging
 import sys
 from flask import Flask, Response, render_template, jsonify, request, send_from_directory
-from queue import Queue
+import queue
 import json
 from datetime import datetime
+import signal
 
 # Importa os nossos módulos
 from camera_thread import CameraThread
-from dms_core import DriverMonitor
-from event_handler import EventHandler # A nossa "Central"
+from dms_core import DriverMonitor # Importa a versão com Distração Opcional
+from event_handler import EventHandler
 
-# Habilita otimizações do OpenCV
+# Tenta importar o Waitress
+try:
+    from waitress import serve
+    HAS_WAITRESS = True
+except ImportError:
+    HAS_WAITRESS = False
+
 cv2.setUseOptimized(True)
 
 # --- Configuração do Logging ---
 default_log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
-logging.basicConfig(level=default_log_level,
+log_level = logging.DEBUG if default_log_level == 'DEBUG' else logging.INFO
+logging.basicConfig(level=log_level,
                     format='%(asctime)s - DMS - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
-log = logging.getLogger('werkzeug') # Silencia logs HTTP do Flask
+log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
-logging.info(f"Nível de log definido para: {default_log_level}")
 
 # --- Configurações da Aplicação ---
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
 FRAME_WIDTH_DISPLAY = 640
 FRAME_HEIGHT_DISPLAY = 480
-JPEG_QUALITY = 75 # Aumenta um pouco a qualidade para a UI
-TARGET_FPS = 5 # Alvo de FPS mais realista para o RPi (5 FPS = 0.2s por frame)
+JPEG_QUALITY = 75
+TARGET_FPS = 5
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
-
-# (NOVO) Rotação inicial (lida do ambiente, 0 por padrão)
+EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 
 # --- Variáveis Globais ---
-output_frame_display = None # O último frame processado para o stream
-output_frame_lock = threading.Lock() # Protege o acesso ao output_frame_display
-status_data_global = {} # (NOVO) Últimos dados de status (EAR, Yaw) para a API
+output_frame_display = None
+output_frame_lock = threading.Lock()
+status_data_global = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
 status_data_lock = threading.Lock()
+stop_event = threading.Event()
+
+cam_thread = None
+detection_thread = None
+event_handler = None
+event_queue = None
+dms_monitor = None
 
 app = Flask(__name__)
 
 # --- Funções Auxiliares ---
-
 def create_placeholder_frame(text="Aguardando camera..."):
-    """Cria um frame preto com texto para usar quando a câmara não está disponível."""
+    """Cria um frame preto com texto."""
     frame = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
-    cv2.putText(frame, text, (30, FRAME_HEIGHT_DISPLAY // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    try:
+        cv2.putText(frame, text, (30, FRAME_HEIGHT_DISPLAY // 2), font, 1, (255, 255, 255), 2)
+    except cv2.error as e:
+         logging.warning(f"Erro ao desenhar texto no placeholder: {e}")
+         cv2.rectangle(frame, (10, FRAME_HEIGHT_DISPLAY//2 - 20), (FRAME_WIDTH_DISPLAY-10, FRAME_HEIGHT_DISPLAY//2 + 20), (50, 50, 50), -1)
     return frame
 
 # --- Threads Principais ---
-
-# 1. Thread de Deteção (Processamento de IA)
-def detection_loop(cam_thread, dms_monitor, event_queue):
-    """
-    Loop principal executado em background para obter frames da câmara,
-    processá-los com o dms_monitor e atualizar o output_frame.
-    """
+def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
+    """Loop principal de deteção (Híbrido + Pose 3D Suavizada)."""
     global output_frame_display, status_data_global
-
-    logging.info(f">>> Loop de deteção iniciado (Alvo: {TARGET_FPS} FPS).")
-
+    logging.info(f">>> Loop de deteção (HÍBRIDO + POSE SUAVE + OFFSETS + DIST_OPCIONAL) iniciado (Alvo: {TARGET_FPS} FPS).")
     last_process_time = time.time()
+    frame_count = 0
 
-    while cam_thread.is_alive():
+    while not stop_event.is_set():
         start_time = time.time()
+        logging.debug("DetectionLoop: Topo do loop.")
 
-        # Obtém o frame mais recente da thread da câmara
-        frame = cam_thread.get_frame()
+        if not cam_thread_ref or not cam_thread_ref.is_alive():
+             logging.error("!!! Thread da câmara não ativa. A parar.")
+             break
+
+        logging.debug("DetectionLoop: A chamar get_frame()...")
+        frame = cam_thread_ref.get_frame()
 
         if frame is None:
-            logging.warning("Frame não recebido da câmara. A aguardar...")
-            time.sleep(0.5)
+            if not stop_event.is_set(): logging.debug("Frame não recebido.")
+            stop_event.wait(timeout=0.1)
             continue
+        logging.debug("DetectionLoop: get_frame() retornou frame.")
 
         try:
-            # Converte para tons de cinza (necessário para Dlib)
+            logging.debug("DetectionLoop: A converter p/ cinzento...")
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # --- Processamento Principal ---
-            # (NOVO) Recebe 3 valores
-            processed_frame, events, status_data = dms_monitor.process_frame(frame.copy(), gray)
-            # -------------------------------
+            logging.debug("DetectionLoop: A chamar process_frame()...")
+            if dms_monitor_ref is None:
+                logging.error("!!! dms_monitor_ref não inicializado!")
+                stop_event.wait(timeout=1.0)
+                continue
 
-            # Atualiza o frame de saída para o servidor web (thread-safe)
+            processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
+            logging.debug("DetectionLoop: process_frame() retornou.")
+
+            logging.debug("DetectionLoop: A adquirir output_frame_lock...")
             with output_frame_lock:
+                logging.debug("DetectionLoop: output_frame_lock adquirido.")
                 output_frame_display = processed_frame.copy()
-            
-            # (NOVO) Atualiza os dados de status globais (thread-safe)
+            logging.debug("DetectionLoop: output_frame_lock libertado.")
+
+            frame_count += 1
+            if frame_count % 100 == 0: logging.debug(f"Loop deteção: Frame {frame_count}.")
+
+            logging.debug("DetectionLoop: A adquirir status_data_lock...")
             with status_data_lock:
+                logging.debug("DetectionLoop: status_data_lock adquirido.")
                 status_data_global = status_data.copy()
+            logging.debug("DetectionLoop: status_data_lock libertado.")
 
-            # (NOVO) Envia eventos para a fila do EventHandler (se houver)
             if events:
+                logging.debug(f"DetectionLoop: A processar {len(events)} eventos...")
                 for event in events:
-                    # Envia o evento E o frame ORIGINAL (sem desenhos) para ser guardado
                     try:
-                        event_queue.put({"event_data": event, "frame": frame.copy()}, block=False)
-                    except queue.Full:
-                        logging.warning("Fila de eventos cheia. Evento descartado.")
+                        event_queue_ref.put({"event_data": event, "frame": frame.copy()}, block=False, timeout=0.1)
+                    except queue.Full: logging.warning("!!! Fila cheia.")
+                    except Exception as q_err: logging.error(f"Erro fila: {q_err}")
 
+        except cv2.error as cv_err:
+             logging.error(f"Erro OpenCV (shape: {frame.shape if frame is not None else 'None'}): {cv_err}", exc_info=True)
+             stop_event.wait(timeout=1.0)
         except Exception as e:
-            logging.error(f"!!! Erro fatal no process_frame: {e}", exc_info=True)
-            # Em caso de erro grave no processamento, para evitar spam,
-            # podemos parar a thread ou apenas logar e continuar
-            time.sleep(1) # Pausa para evitar spam de logs
+            logging.error(f"!!! Erro no process_frame: {e}", exc_info=True)
+            stop_event.wait(timeout=1.0)
 
-        # --- Controlo de FPS ---
         processing_time = time.time() - start_time
         wait_time = TARGET_FRAME_TIME - processing_time
+        logging.debug(f"Tempo: {processing_time:.3f}s, Espera: {max(0, wait_time):.3f}s")
 
         if wait_time > 0:
-            time.sleep(wait_time)
+            logging.debug(f"DetectionLoop: A esperar {wait_time:.3f}s...")
+            stop_event.wait(timeout=wait_time)
         else:
-            # Loga se o processamento estiver consistentemente lento
-            # Evita spam logando apenas se a última vez foi há mais de 5s
             current_time = time.time()
             if current_time - last_process_time > 5.0:
-                 logging.warning(f"!!! LOOP LENTO. Processamento demorou {processing_time:.2f}s (Alvo era {TARGET_FRAME_TIME:.2f}s)")
+                 logging.warning(f"!!! LOOP LENTO. Demorou {processing_time:.2f}s (Alvo {TARGET_FRAME_TIME:.2f}s)")
                  last_process_time = current_time
+            logging.debug("DetectionLoop: Loop lento, pausa (0.01s).")
+            stop_event.wait(timeout=0.01)
 
     logging.info(">>> Loop de deteção terminado.")
 
 
 # --- Servidor Web Flask ---
-
 @app.route("/")
 def index():
-    """Rota principal que serve a página de calibração."""
-    cam_source_desc = cam_thread.source_description if 'cam_thread' in globals() else "Indisponível"
-    return render_template("index.html",
-                           source_desc=cam_source_desc, # (NOVO) Renomeado para evitar conflito
-                           width=FRAME_WIDTH_DISPLAY,
-                           height=FRAME_HEIGHT_DISPLAY)
+    """Serve a página de calibração."""
+    cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
+    return render_template("index.html", source_desc=cam_source_desc,
+                           width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY)
 
 @app.route("/alerts")
 def alerts_page():
-    """(NOVO) Rota que serve a página de histórico de alertas."""
+    """Serve a página de histórico."""
     return render_template("alerts.html")
 
-
 def generate_video_stream():
-    """Gera frames de vídeo para o stream HTTP (usado por /video_feed)."""
+    """Gera frames de vídeo para o stream HTTP."""
     global output_frame_display
-    
     placeholder = create_placeholder_frame()
-    
-    while True:
+    last_frame_time = time.time()
+    frame_yield_count = 0
+    logging.debug("generate_video_stream: Iniciando.")
+
+    while not stop_event.is_set():
         frame_to_encode = None
-        
-        # Obtém o último frame processado de forma segura
+        use_placeholder = False
+        logging.debug("generate_video_stream: A adquirir output_frame_lock...")
         with output_frame_lock:
+            logging.debug("generate_video_stream: output_frame_lock adquirido.")
             if output_frame_display is not None:
                 frame_to_encode = output_frame_display.copy()
+                logging.debug("generate_video_stream: Usando frame processado.")
             else:
-                frame_to_encode = placeholder.copy() # Usa placeholder se nada foi processado ainda
+                frame_to_encode = placeholder.copy()
+                use_placeholder = True
+                logging.debug("generate_video_stream: Usando placeholder.")
+        logging.debug("generate_video_stream: output_frame_lock libertado.")
 
-        # Codifica o frame como JPEG
-        (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode,
-                                             [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+        if frame_to_encode is None:
+             logging.warning("generate_video_stream: frame_to_encode é None, usando placeholder.")
+             frame_to_encode = placeholder.copy(); use_placeholder = True
+        try:
+            if not isinstance(frame_to_encode, np.ndarray) or frame_to_encode.size == 0:
+                 logging.error(f"generate_video_stream: Frame inválido (tipo: {type(frame_to_encode)}). Usando placeholder.")
+                 frame_to_encode = placeholder.copy(); use_placeholder = True
 
-        if not flag:
-            logging.warning("Falha ao codificar frame para JPEG.")
-            # Se a codificação falhar, envia o placeholder
-            (flag, encodedImage) = cv2.imencode(".jpg", placeholder,
-                                                 [int(cv2.IMWRITE_JPEG_QUALITY), 50])
-            if not flag: continue # Se até o placeholder falhar, ignora
+            logging.debug("generate_video_stream: A codificar frame...")
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
+            (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, encode_param)
+            logging.debug(f"generate_video_stream: Codificação {'bem-sucedida' if flag else 'falhou'}.")
 
-        frame_bytes = bytearray(encodedImage)
+            if not flag:
+                logging.warning(f"generate_video_stream: Falha codificar (ph={use_placeholder}). Tentando placeholder.")
+                (flag, encodedImage) = cv2.imencode(".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                if not flag:
+                     logging.error("generate_video_stream: Falha codificar placeholder. Saltando frame.")
+                     stop_event.wait(timeout=0.1); continue
+            frame_bytes = bytearray(encodedImage)
+            logging.debug(f"generate_video_stream: A enviar frame {frame_yield_count} ({len(frame_bytes)} bytes).")
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            frame_yield_count += 1
+        except GeneratorExit: logging.info("generate_video_stream: Cliente desconectou."); break
+        except cv2.error as e: logging.error(f"generate_video_stream: Erro OpenCV codificar (ph={use_placeholder}, shape={frame_to_encode.shape}): {e}", exc_info=True); stop_event.wait(timeout=0.5)
+        except Exception as e: logging.error(f"generate_video_stream: Erro inesperado: {e}", exc_info=True); break
 
-        # Envia o frame no formato multipart
-        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
-               frame_bytes + b'\r\n')
+        target_stream_time = 1/20
+        current_time = time.time()
+        sleep_time = target_stream_time - (current_time - last_frame_time)
+        if sleep_time > 0: stop_event.wait(timeout=sleep_time)
+        last_frame_time = time.time()
 
-        # Controla o FPS do *stream* (não precisa ser igual ao da deteção)
-        time.sleep(1/20) # Stream a 20 FPS para a UI
+    logging.info(f"generate_video_stream: Terminado após {frame_yield_count} frames.")
 
 @app.route("/video_feed")
 def video_feed():
-    """Rota que serve o stream de vídeo."""
-    return Response(generate_video_stream(),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
+    """Serve o stream de vídeo."""
+    logging.debug("Rota /video_feed acedida.")
+    if not cam_thread or not cam_thread.is_alive():
+         logging.error("Rota /video_feed: Thread câmara não ativa.")
+         return "Camera thread not running", 503
+    return Response(generate_video_stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# --- (NOVO) Rotas da API ---
-
+# --- Rotas da API ---
 @app.route("/api/config", methods=['GET', 'POST'])
 def api_config():
-    """API para ler e atualizar as configurações de calibração."""
+    """API para ler/atualizar configurações (Distração Opcional)."""
+    global dms_monitor
+    logging.debug(f"Rota /api/config (Método: {request.method})")
+    if dms_monitor is None or not cam_thread or not event_queue:
+         logging.warning("/api/config: Serviço não inicializado.")
+         return jsonify({"error": "Service not fully initialized"}), 503
+
     if request.method == 'GET':
-        # Combina configurações do DMS e da Câmara
-        current_settings = dms_monitor.get_settings()
-        current_settings['brightness'] = cam_thread.get_brightness()
-        current_settings['rotation'] = cam_thread.get_rotation() # Adiciona rotação
-        # (NOVO) Adiciona os dados de status
-        with status_data_lock:
-            current_settings['status'] = status_data_global.copy()
-        return jsonify(current_settings)
-        
+        try:
+            # get_settings() agora retorna distraction_detection_enabled
+            current_settings = dms_monitor.get_settings()
+            current_settings['brightness'] = cam_thread.get_brightness()
+            current_settings['rotation'] = cam_thread.get_rotation()
+
+            logging.debug("api_config GET: Lock status...")
+            with status_data_lock:
+                logging.debug("api_config GET: Lock status OK.")
+                current_settings['status'] = status_data_global.copy()
+            logging.debug("api_config GET: Lock status libertado.")
+
+            try: # Fila
+                current_settings['queue_depth'] = event_queue.qsize()
+                current_settings['queue_max_size'] = event_queue.maxsize
+            except Exception as e:
+                 logging.warning(f"Erro obter tamanho fila: {e}")
+                 current_settings['queue_depth'] = -1; current_settings['queue_max_size'] = EVENT_QUEUE_MAX_SIZE
+
+            logging.debug(f"/api/config GET: Retornando {current_settings}")
+            return jsonify(current_settings)
+        except Exception as e:
+             logging.error(f"Erro inesperado /api/config GET: {e}", exc_info=True)
+             return jsonify({"error": "Internal server error reading config"}), 500
+
     elif request.method == 'POST':
-        new_settings = request.json
-        if not new_settings:
-            return jsonify({"success": False, "error": "No data received"}), 400
-            
-        # Atualiza configurações do DMS Core
-        dms_success = dms_monitor.update_settings(new_settings)
-        
-        # Atualiza configurações da Câmara (Brilho e Rotação)
-        cam_success = True
-        if 'brightness' in new_settings:
-            cam_thread.update_brightness(new_settings['brightness'])
-        if 'rotation' in new_settings:
-            cam_thread.update_rotation(new_settings['rotation'])
-            
-        if dms_success and cam_success:
-            return jsonify({"success": True})
-        else:
-            return jsonify({"success": False, "error": "Failed to apply settings"}), 500
+        try:
+            new_settings = request.json
+            logging.debug(f"/api/config POST: Recebido {new_settings}")
+            if not new_settings: return jsonify({"success": False, "error": "No data received"}), 400
+
+            # update_settings() agora espera distraction_detection_enabled
+            dms_success = dms_monitor.update_settings(new_settings)
+
+            cam_success = True # Câmara
+            try:
+                if 'brightness' in new_settings: cam_thread.update_brightness(new_settings['brightness'])
+                if 'rotation' in new_settings: cam_thread.update_rotation(new_settings['rotation'])
+            except Exception as e: logging.error(f"Erro atualizar conf câmara: {e}"); cam_success = False
+
+            if dms_success and cam_success:
+                logging.info(f"/api/config POST: Configurações atualizadas.")
+                return jsonify({"success": True})
+            else:
+                error_msg = "Failed settings"+(" (DMS)" if not dms_success else "")+(" (Cam)" if not cam_success else "")
+                logging.warning(f"/api/config POST: Falha: {error_msg}")
+                return jsonify({"success": False, "error": error_msg}), 500
+        except Exception as e:
+             logging.error(f"Erro inesperado /api/config POST: {e}", exc_info=True)
+             return jsonify({"error": "Internal server error updating config"}), 500
 
 @app.route("/api/alerts", methods=['GET'])
 def api_alerts():
-    """(NOVO) API para obter a lista de alertas do ficheiro JSONL."""
-    alerts_list = []
-    log_path = event_handler.log_file_path # Obtém o caminho do ficheiro do handler
+    """API para obter alertas."""
+    logging.debug("Rota /api/alerts acedida.")
+    if not event_handler: logging.warning("/api/alerts: Gestor eventos não init."); return jsonify({"error": "Event handler not initialized"}), 503
     try:
-        if os.path.exists(log_path):
-            with open(log_path, 'r') as f:
-                for line in f:
-                    try:
-                        alerts_list.append(json.loads(line.strip()))
-                    except json.JSONDecodeError:
-                        logging.warning(f"Linha mal formada no log de alertas: {line.strip()}")
-        # Retorna os alertas ordenados do mais recente para o mais antigo
-        return jsonify(sorted(alerts_list, key=lambda x: x.get('timestamp', ''), reverse=True))
-    except Exception as e:
-        logging.error(f"Erro ao ler log de alertas: {e}")
-        return jsonify({"error": "Failed to read alerts log"}), 500
+        alerts_list = event_handler.get_alerts(limit=50)
+        logging.debug(f"/api/alerts: Retornando {len(alerts_list)} alertas.")
+        return jsonify(alerts_list)
+    except Exception as e: logging.error(f"Erro ler alertas SQLite: {e}", exc_info=True); return jsonify({"error": "Failed to read alerts from database"}), 500
 
-@app.route('/alerts/images/<path:filename>')
-def serve_alert_image(filename):
-    """(NOVO) Rota para servir as imagens JPG dos alertas."""
-    try:
-        return send_from_directory(event_handler.save_path, filename)
-    except FileNotFoundError:
-        return "Image not found", 404
-    except Exception as e:
-        logging.error(f"Erro ao servir imagem de alerta '{filename}': {e}")
-        return "Internal server error", 500
+@app.route('/alerts/images/<path:filepath>')
+def serve_alert_image(filepath):
+    """Serve imagens de alerta."""
+    logging.debug(f"Rota /alerts/images: {filepath}")
+    if not event_handler: logging.warning(f"/alerts/images: Gestor eventos não init ({filepath})."); return "Event handler not initialized", 503
+    image_base_path = os.path.join(event_handler.save_path, "images"); safe_path = os.path.abspath(os.path.join(image_base_path, filepath))
+    if not safe_path.startswith(image_base_path): logging.warning(f"Acesso inválido /alerts/images: {filepath}"); return "Invalid path", 400
+    if not os.path.isfile(safe_path): logging.warning(f"Imagem não encontrada /alerts/images: {safe_path}"); return "Image not found", 404
+    try: logging.debug(f"A servir imagem: {safe_path}"); return send_from_directory(os.path.dirname(safe_path), os.path.basename(safe_path))
+    except Exception as e: logging.error(f"Erro servir imagem '{filepath}': {e}", exc_info=True); return "Internal server error", 500
+
+# --- Encerramento Gracioso ---
+def shutdown_handler(signum, frame):
+    """Lida com SIGINT/SIGTERM."""
+    if not stop_event.is_set():
+        logging.info(f">>> Sinal {signal.Signals(signum).name} recebido. A encerrar...")
+        stop_event.set()
+
 
 # --- Ponto de Entrada Principal ---
-
 if __name__ == '__main__':
-    
-    detection_thread = None
-    
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
     try:
-        # --- Inicialização ---
-        logging.info(">>> Serviço DMS (Refatorado) a iniciar...")
+        logging.info(
+            f">>> Serviço DMS (Híbrido + Pose Suave + Offsets + Dist Opcional) a iniciar... "
+            f"(Log: {logging.getLevelName(logging.getLogger().level)})"
+        )
 
-        # (NOVO) Cria a fila para comunicação entre threads
-        event_queue = Queue(maxsize=50) # Limita a fila para evitar consumo excessivo de memória
+        event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
+        event_handler = EventHandler(queue=event_queue, stop_event=stop_event)
+        event_handler.start()
 
-        # (NOVO) Inicializa o Gestor de Eventos (Central)
-        event_handler = EventHandler(queue=event_queue) # Usa argumento nomeado
-        event_handler.start() # Inicia a thread do gestor
-
-        # Inicializa o Núcleo DMS (IA)
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
-        dms_monitor = DriverMonitor(frame_size=frame_size)
+        dms_monitor = DriverMonitor(frame_size=frame_size)  # Inicializa aqui
 
-        # Inicializa e inicia a Thread da Câmara
-        cam_thread = CameraThread(VIDEO_SOURCE,
-                                  frame_width=FRAME_WIDTH_DISPLAY,
-                                  frame_height=FRAME_HEIGHT_DISPLAY,
-                                  rotation_degrees=INITIAL_ROTATION) # Passa rotação inicial
+        cam_thread = CameraThread(
+            VIDEO_SOURCE,
+            frame_width=FRAME_WIDTH_DISPLAY,
+            frame_height=FRAME_HEIGHT_DISPLAY,
+            rotation_degrees=INITIAL_ROTATION,
+            stop_event=stop_event
+        )
         cam_thread.start()
-        
-        # Aguarda a câmara conectar e obter o primeiro frame
-        logging.info("A aguardar o primeiro frame da câmara...")
-        while cam_thread.get_frame() is None:
-            if not cam_thread.is_alive():
-                 logging.error("!!! Thread da câmara terminou inesperadamente durante a inicialização.")
-                 sys.exit(1)
-            time.sleep(0.5)
+
+        logging.info("A aguardar o primeiro frame...")
+        start_wait_cam = time.time()
+
+        while cam_thread.get_frame() is None and cam_thread.is_alive():
+            if stop_event.wait(timeout=0.2):
+                raise SystemExit("Encerrado init câmara.")
+            if time.time() - start_wait_cam > 15:
+                raise RuntimeError("Timeout câmara.")
+
+        if not cam_thread.is_alive():
+            raise RuntimeError("Thread câmara terminou.")
+
         logging.info(">>> Primeiro frame recebido!")
 
-        # Inicializa e inicia a Thread de Deteção
-        detection_thread = threading.Thread(target=detection_loop, args=(cam_thread, dms_monitor, event_queue))
+        detection_thread = threading.Thread(
+            target=detection_loop,
+            args=(cam_thread, dms_monitor, event_queue),
+            name="DetectionThread"
+        )
         detection_thread.daemon = True
         detection_thread.start()
 
-        # --- Inicia o Servidor Flask ---
-        logging.info(f">>> A iniciar servidor Flask na porta 5000...")
-        # Nota: O debug=False e use_reloader=False são importantes para produção
-        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
+        logging.info(">>> A iniciar servidor web porta 5000...")
 
-    except KeyboardInterrupt:
-        logging.info(">>> Interrupção de teclado recebida. A encerrar...")
+        if HAS_WAITRESS:
+            logging.info("A usar Waitress.")
+            serve(app, host='0.0.0.0', port=5000, threads=8)
+        else:
+            logging.warning("Waitress não encontrado.")
+            logging.warning("A usar Flask dev server.")
+            try:
+                app.run(
+                    host='0.0.0.0',
+                    port=5000,
+                    debug=False,
+                    threaded=True,
+                    use_reloader=False
+                )
+            except OSError as e:
+                logging.error(f"!!! ERRO FATAL Flask: {e}", exc_info=True)
+                stop_event.set()
+            except Exception as e:
+                logging.error(f"!!! ERRO FATAL Flask: {e}", exc_info=True)
+                stop_event.set()
+
+    except (KeyboardInterrupt, SystemExit) as e:
+        logging.info(f">>> {type(e).__name__} recebido. A encerrar...")
+    except RuntimeError as e:
+        logging.error(f"!!! ERRO FATAL init: {e}")
     except Exception as e:
-        logging.error(f"!!! ERRO FATAL ao iniciar o serviço: {e}", exc_info=True)
+        logging.error(f"!!! ERRO FATAL não capturado: {e}", exc_info=True)
     finally:
-        logging.info(">>> A iniciar encerramento do serviço...")
-        
-        # Sinaliza às threads para pararem #
-        if 'cam_thread' in locals() and cam_thread.is_alive():
-            cam_thread.stop()
-            cam_thread.join(timeout=2) # Espera um pouco pela thread
-            
-        # A thread de deteção é daemon, termina automaticamente, mas podemos sinalizar
-        # (Se tivéssemos um loop com `while running:`, chamaríamos stop() aqui)
+        # Garante que stop_event é definido antes de tentar juntar threads
+        if not stop_event.is_set():
+            logging.warning("stop_event não estava definido no finally, definindo agora.")
+            stop_event.set()
 
-        if 'event_handler' in locals() and event_handler.is_alive():
-            event_handler.stop()
-            event_handler.join(timeout=5) # Espera mais tempo para guardar eventos pendentes
+        logging.info(">>> A iniciar encerramento final...")
+        threads_to_join = []
+
+        # Verifica se as variáveis existem antes de aceder
+        if 'detection_thread' in locals() and detection_thread and detection_thread.is_alive():
+            threads_to_join.append(detection_thread)
+        if 'cam_thread' in locals() and cam_thread and cam_thread.is_alive():
+            threads_to_join.append(cam_thread)
+        if 'event_handler' in locals() and event_handler and event_handler.is_alive():
+            threads_to_join.append(event_handler)
+
+        for t in threads_to_join:
+            logging.info(f"A aguardar thread '{t.name}'...")
+            timeout = 2 if getattr(t, 'daemon', False) else 5  # getattr para segurança
+            t.join(timeout=timeout)
+
+            # Verifica se alguma thread ficou presa
+            if t.is_alive():
+                logging.warning(f"!!! Timeout ao esperar thread '{t.name}'.")
 
         logging.info(">>> Serviço DMS terminado.")
-        sys.exit(0) # Garante que o container termina
-
+        os._exit(0)  # Força a saída

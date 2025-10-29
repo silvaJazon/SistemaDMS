@@ -4,347 +4,457 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Calibração</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body {
-            font-family: sans-serif;
-            background-color: #222;
-            color: #eee;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-        .container {
-            display: flex;
-            flex-wrap: wrap; /* Permite quebrar linha em ecrãs pequenos */
-            gap: 20px;
-            flex-grow: 1;
-        }
-        .video-container {
-            flex: 2; /* Ocupa mais espaço */
-            min-width: 320px; /* Largura mínima */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .controls-container {
-            flex: 1; /* Ocupa menos espaço */
-            min-width: 280px; /* Largura mínima */
-            background-color: #333;
-            padding: 20px;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        h1, h2 {
-            color: #eee;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        nav {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        nav a {
-            color: #7fadf7;
-            text-decoration: none;
-            margin: 0 15px;
-            font-size: 1.1em;
-        }
-        nav a:hover {
-            text-decoration: underline;
-        }
-        img#stream {
-            border: 1px solid #555;
-            background-color: #000;
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #ccc;
-        }
+        /* Estilos CSS (Tailwind overrides, etc.) */
         input[type="range"] {
-            width: 100%;
-            cursor: pointer;
+            -webkit-appearance: none; appearance: none; width: 100%; height: 8px;
+            background: #4a5568; border-radius: 9999px; outline: none; opacity: 0.9; transition: opacity .2s;
         }
-        select {
-            width: 100%;
-            padding: 8px;
-            border-radius: 4px;
-            background-color: #444;
-            color: #eee;
-            border: 1px solid #555;
+        input[type="range"]:hover:not(:disabled) { opacity: 1; }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none; width: 20px; height: 20px;
+            background: #4299e1; border-radius: 50%; cursor: pointer;
         }
-        .slider-value {
-            font-weight: bold;
-            color: #fff;
-            margin-left: 10px;
+        input[type="range"]::-moz-range-thumb {
+            width: 20px; height: 20px; background: #4299e1; border-radius: 50%; cursor: pointer;
         }
-        button {
-            padding: 10px 15px;
-            background-color: #555;
-            color: #eee;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            margin-top: 10px;
-        }
-        button:hover {
-            background-color: #666;
-        }
-        .status-info {
-            margin-top: 15px;
-            font-size: 0.9em;
-            color: #bbb;
-        }
-        .status-info span {
-            font-weight: bold;
-            color: #ddd;
-        }
-
-        /* Responsividade: Empilha em ecrãs pequenos */
-        @media (max-width: 768px) {
-            .container {
-                flex-direction: column;
-            }
-            .video-container, .controls-container {
-                min-width: 100%;
-            }
+        input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
+        input[type="range"]:disabled::-webkit-slider-thumb { background: #718096; cursor: not-allowed; }
+        input[type="range"]:disabled::-moz-range-thumb { background: #718096; cursor: not-allowed; }
+        details > summary { cursor: pointer; font-weight: 600; font-size: 1.125rem; padding: 0.5rem; background-color: #2d3748; border-radius: 0.5rem; transition: background-color 0.2s; }
+        details > summary:hover { background-color: #4a5568; }
+        details[open] > summary { background-color: #4a5568; }
+        .details-content { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+        /* (NOVO) Estilo para grupo desabilitado */
+        .disabled-group label, .disabled-group .info-icon, .disabled-group .slider-value {
+             opacity: 0.5; cursor: not-allowed;
         }
     </style>
 </head>
-<body>
-    <h1>SistemaDMS - Calibração ao Vivo</h1>
-    <nav>
-        <a href="/">Calibração</a> |
-        <a href="/alerts">Histórico de Alertas</a>
-    </nav>
+<body class="bg-gray-800 text-gray-200 font-sans min-h-screen">
 
-    <div class="container">
-        <div class="video-container">
-            <img id="stream" src="{{ url_for('video_feed') }}" width="{{ width }}" height="{{ height }}">
-            <p>Fonte: {{ source_desc }}</p>
-             <!-- (NOVO) Área para mostrar status EAR/Yaw/etc -->
-            <div class="status-info">
-                EAR: <span id="status-ear">-</span> |
-                Yaw: <span id="status-yaw">-</span> |
-                Pitch: <span id="status-pitch">-</span> |
-                Roll: <span id="status-roll">-</span>
-            </div>
-        </div>
+    <!-- Cabeçalho -->
+    <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg">
+        <h1 class="text-3xl font-bold text-center text-white">SistemaDMS - Calibração ao Vivo</h1>
+        <nav class="flex justify-center gap-6 mt-4">
+            <a href="/" class="text-lg text-blue-400 hover:text-blue-300 font-medium border-b-2 border-blue-400 pb-1">Calibração</a>
+            <a href="/alerts" class="text-lg text-gray-400 hover:text-blue-300 font-medium">Histórico de Alertas</a>
+        </nav>
+    </header>
 
-        <div class="controls-container">
-            <h2>Parâmetros de Deteção</h2>
+    <!-- Container Principal (Grid) -->
+    <main class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 flex-grow">
 
-            <div>
-                <label for="ear_threshold">Limite EAR Sonolência:</label>
-                <input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01">
-                <span class="slider-value" id="ear_threshold_value">0.25</span>
+        <!-- Coluna de Vídeo -->
+        <section class="lg:col-span-2 bg-gray-900 p-6 rounded-lg shadow-2xl flex flex-col items-center justify-center">
+            <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
+            <p class="mt-4 text-gray-400">Fonte: {{ source_desc }}</p>
+            <div class="status-info mt-4 flex flex-wrap gap-x-4 gap-y-2 justify-center text-sm">
+                <span>EAR: <span id="status-ear" class="font-mono text-lg text-blue-300">-</span></span> |
+                <span>MAR: <span id="status-mar" class="font-mono text-lg text-blue-300">-</span></span> |
+                <span>Yaw: <span id="status-yaw" class="font-mono text-lg text-green-300">-</span></span> |
+                <span>Pitch: <span id="status-pitch" class="font-mono text-lg text-green-300">-</span></span> |
+                <span>Roll: <span id="status-roll" class="font-mono text-lg text-green-300">-</span></span> |
+                <span id="status-queue" class="queue-status queue-status-unknown font-mono text-lg">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
-            <div>
-                <label for="ear_frames">Frames Sonolência:</label>
-                <input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1">
-                <span class="slider-value" id="ear_frames_value">15</span>
-            </div>
-            <div>
-                <label for="distraction_angle">Ângulo Distração (°):</label>
-                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
-                <span class="slider-value" id="distraction_angle_value">30</span>
-            </div>
-            <div>
-                <label for="distraction_frames">Frames Distração:</label>
-                <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
-                <span class="slider-value" id="distraction_frames_value">25</span>
-            </div>
+        </section>
 
-            <h2>Configurações da Câmara</h2>
-             <div>
-                <label for="brightness">Brilho:</label>
-                <input type="range" id="brightness" name="brightness" min="-64" max="64" step="1">
-                <span class="slider-value" id="brightness_value">0</span>
-            </div>
-            <div>
-                <label for="rotation">Rotação:</label>
-                <select id="rotation" name="rotation">
-                    <option value="0">0°</option>
-                    <option value="90">90°</option>
-                    <option value="180">180°</option>
-                    <option value="270">270°</option>
-                </select>
-            </div>
+        <!-- Coluna de Controles -->
+        <aside class="lg:col-span-1 bg-gray-900 p-6 rounded-lg shadow-2xl space-y-6 overflow-y-auto">
 
-            <button id="reset_button">Restaurar Padrões</button>
-            <p id="save_status" style="color: #4CAF50; text-align: center;"></p>
-        </div>
-    </div>
+            <!-- Sonolência -->
+            <details open>
+                <summary>Deteção de Sonolência</summary>
+                <div class="details-content">
+                    <div>
+                        <label for="ear_threshold" class="flex justify-between">Limite EAR <span class="info-icon" title="EAR abaixo indica olhos fechando.">ⓘ</span></label>
+                        <div class="flex items-center gap-3"><input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01"><span class="slider-value" id="ear_threshold_value">0.25</span></div>
+                    </div>
+                    <div>
+                        <label for="ear_frames" class="flex justify-between">Frames Sonolência <span class="info-icon" title="Nº frames com EAR baixo.">ⓘ</span></label>
+                        <div class="flex items-center gap-3"><input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1"><span class="slider-value" id="ear_frames_value">15</span></div>
+                    </div>
+                    <div>
+                        <label for="mar_threshold" class="flex justify-between">Limite MAR Bocejo <span class="info-icon" title="MAR acima indica bocejo.">ⓘ</span></label>
+                        <div class="flex items-center gap-3"><input type="range" id="mar_threshold" name="mar_threshold" min="0.4" max="1.0" step="0.01"><span class="slider-value" id="mar_threshold_value">0.60</span></div>
+                    </div>
+                    <div>
+                        <label for="mar_frames" class="flex justify-between">Frames Bocejo <span class="info-icon" title="Nº frames com MAR alto.">ⓘ</span></label>
+                        <div class="flex items-center gap-3"><input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1"><span class="slider-value" id="mar_frames_value">20</span></div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Distração -->
+            <details open>
+                <summary>Deteção de Distração</summary>
+                <div class="details-content">
+                    <!-- (NOVO) Checkbox Ativar/Desativar -->
+                    <div class="flex items-center mb-2">
+                        <input type="checkbox" id="distraction_detection_enabled" name="distraction_detection_enabled" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
+                        <label for="distraction_detection_enabled" class="ml-2 text-sm font-medium text-gray-300">Ativar Deteção de Distração</label>
+                    </div>
+
+                    <!-- (NOVO) Grupo de controlos de distração -->
+                    <div id="distraction-controls-group" class="space-y-4 transition-opacity duration-300">
+                        <div>
+                            <label for="distraction_angle" class="flex justify-between">Ângulo Yaw (°) <span class="info-icon" title="Ângulo LATERAL relativo ao centro.">ⓘ</span></label>
+                            <div class="flex items-center gap-3"><input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1"><span class="slider-value" id="distraction_angle_value">40</span></div>
+                        </div>
+                        <div>
+                            <label for="pitch_up_threshold" class="flex justify-between">Limite Pitch Acima (°) <span class="info-icon" title="Ângulo VERTICAL relativo ao centro (olhar p/ CIMA).">ⓘ</span></label>
+                            <div class="flex items-center gap-3"><input type="range" id="pitch_up_threshold" name="pitch_up_threshold" min="-40" max="0" step="1"><span class="slider-value" id="pitch_up_threshold_value">-15</span></div>
+                        </div>
+                        <div>
+                            <label for="pitch_down_offset" class="flex justify-between">Offset Pitch Abaixo (°) <span class="info-icon" title="Ângulo VERTICAL relativo ao centro (olhar p/ BAIXO).">ⓘ</span></label>
+                            <div class="flex items-center gap-3"><input type="range" id="pitch_down_offset" name="pitch_down_offset" min="0" max="40" step="1"><span class="slider-value" id="pitch_down_offset_value">20</span></div>
+                        </div>
+                        <div>
+                            <label for="distraction_frames" class="flex justify-between">Frames Distração <span class="info-icon" title="Nº frames com cabeça fora dos limites.">ⓘ</span></label>
+                            <div class="flex items-center gap-3"><input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1"><span class="slider-value" id="distraction_frames_value">35</span></div>
+                        </div>
+                         <!-- Calibração Central (Movido para dentro do grupo) -->
+                        <div class="calibration-section border-t border-gray-600 pt-4 mt-4">
+                            <h3 class="text-base font-semibold mb-2">Calibração Central</h3>
+                            <div>
+                                <label for="yaw_center_offset" class="flex justify-between">Offset Yaw (°) <span class="info-icon" title="Ajuste Yaw '0'.">ⓘ</span></label>
+                                <div class="flex items-center gap-3"><input type="range" id="yaw_center_offset" name="yaw_center_offset" min="-45" max="45" step="0.5"><span class="slider-value" id="yaw_center_offset_value">0.0</span></div>
+                            </div>
+                            <div>
+                                <label for="pitch_center_offset" class="flex justify-between">Offset Pitch (°) <span class="info-icon" title="Ajuste Pitch '0'.">ⓘ</span></label>
+                                <div class="flex items-center gap-3"><input type="range" id="pitch_center_offset" name="pitch_center_offset" min="-45" max="45" step="0.5"><span class="slider-value" id="pitch_center_offset_value">0.0</span></div>
+                            </div>
+                            <button id="start_calibration_button" class="bg-blue-500 hover:bg-blue-600 text-white font-bold disabled:bg-gray-600 disabled:text-gray-400">Iniciar Calibração (3s)</button>
+                            <p id="calibration_status" class="text-center font-semibold min-h-[1.2em]"></p>
+                        </div>
+                    </div> <!-- Fim #distraction-controls-group -->
+                </div>
+            </details>
+
+            <!-- Câmara -->
+            <details>
+                <summary>Configurações da Câmara</summary>
+                <div class="details-content">
+                    <div>
+                        <label for="brightness" class="flex justify-between">Brilho <span class="info-icon" title="Ajusta brilho.">ⓘ</span></label>
+                        <div class="flex items-center gap-3"><input type="range" id="brightness" name="brightness" min="-64" max="64" step="1"><span class="slider-value" id="brightness_value">0</span></div>
+                    </div>
+                    <div>
+                        <label for="rotation" class="flex justify-between">Rotação <span class="info-icon" title="Gira imagem.">ⓘ</span></label>
+                        <select id="rotation" name="rotation" class="bg-gray-700 border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500">
+                            <option value="0">0°</option> <option value="90">90°</option>
+                            <option value="180">180°</option> <option value="270">270°</option>
+                        </select>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Perfis -->
+            <details open class="profile-section">
+                <summary>Perfis de Configuração</summary>
+                <div class="details-content">
+                    <div>
+                        <label for="profile_select">Carregar Perfil:</label>
+                        <select id="profile_select" class="bg-gray-700 border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500"></select>
+                    </div>
+                    <button id="load_profile_button" class="bg-green-600 hover:bg-green-700 text-white font-bold">Carregar Selecionado</button>
+                    <button id="update_profile_button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold disabled:bg-gray-600 disabled:text-gray-400" disabled>Atualizar Selecionado</button>
+                    <div class="profile-actions flex flex-col md:flex-row gap-2">
+                        <input type="text" id="profile_name" placeholder="Nome do novo perfil" class="bg-gray-700 border-gray-600 rounded-md focus:ring-blue-500 focus:border-blue-500">
+                        <button id="save_profile_button" class="bg-gray-600 hover:bg-gray-700 text-white font-bold whitespace-nowrap">Salvar como Novo</button>
+                    </div>
+                     <button id="delete_profile_button" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold disabled:bg-gray-600 disabled:text-gray-400" disabled>Apagar Selecionado</button>
+                     <button id="reset_button" class="bg-red-600 hover:bg-red-700 text-white font-bold">Restaurar Padrões</button>
+                </div>
+            </details>
+
+            <p id="save_status" class="text-center font-semibold min-h-[1.2em]"></p>
+        </aside>
+    </main>
 
     <script>
+        // --- Seletores ---
         const sliders = document.querySelectorAll('input[type="range"]');
+        const allDetectionSliders = document.querySelectorAll('details:not(:last-of-type) input[type="range"]'); // Sliders de deteção + calibração
+        const distractionControlsGroup = document.getElementById('distraction-controls-group'); // Grupo de controlos de distração
+        const distractionCheckbox = document.getElementById('distraction_detection_enabled'); // Checkbox
         const rotationSelect = document.getElementById('rotation');
+        const brightnessSlider = document.getElementById('brightness');
         const saveStatus = document.getElementById('save_status');
         const resetButton = document.getElementById('reset_button');
-        let defaultSettings = {}; // Para guardar os valores padrão
+        const profileSelect = document.getElementById('profile_select');
+        const profileNameInput = document.getElementById('profile_name');
+        const saveProfileButton = document.getElementById('save_profile_button');
+        const loadProfileButton = document.getElementById('load_profile_button');
+        const deleteProfileButton = document.getElementById('delete_profile_button');
+        const updateProfileButton = document.getElementById('update_profile_button');
+        const startCalibrationButton = document.getElementById('start_calibration_button');
+        const calibrationStatus = document.getElementById('calibration_status');
+        const yawOffsetSlider = document.getElementById('yaw_center_offset');
+        const pitchOffsetSlider = document.getElementById('pitch_center_offset');
 
-        // Elementos de status (EAR, Yaw, etc.)
-        const statusEar = document.getElementById('status-ear');
-        const statusYaw = document.getElementById('status-yaw');
-        const statusPitch = document.getElementById('status-pitch');
-        const statusRoll = document.getElementById('status-roll');
+        const PROFILE_STORAGE_PREFIX = 'dms_profile_';
 
-        // Função para buscar e atualizar as configurações e status da API
-        async function fetchAndUpdateSettings() {
-            try {
-                const response = await fetch('/api/config');
-                if (!response.ok) {
-                    throw new Error(`Erro HTTP: ${response.status}`);
-                }
-                const data = await response.json();
-                console.log("Configurações recebidas:", data); // Debug
-                
-                // Guarda como padrão na primeira vez
-                if (Object.keys(defaultSettings).length === 0) {
-                    defaultSettings = { ...data }; // Clona os dados
-                    // Remove 'status' dos padrões, se existir
-                    delete defaultSettings.status; 
-                }
+        const defaultProfile = {
+            ear_threshold: 0.25, ear_frames: 15,
+            mar_threshold: 0.60, mar_frames: 20,
+            distraction_detection_enabled: true, // Habilitado por padrão
+            distraction_angle: 40.0, pitch_up_threshold: -15.0,
+            pitch_down_offset: 20.0, distraction_frames: 35,
+            yaw_center_offset: 0.0, pitch_center_offset: 0.0,
+            brightness: 0, rotation: 0
+        };
+        let initialApiSettings = {};
+        let currentYawPitch = { yaw: null, pitch: null };
+        let isCalibrating = false;
 
-                // Atualiza sliders e dropdown
-                sliders.forEach(slider => {
-                    const valueSpan = document.getElementById(`${slider.id}_value`);
-                    if (data.hasOwnProperty(slider.name)) {
-                        slider.value = data[slider.name]; // Define o valor do input
-                        if (valueSpan) {
-                            valueSpan.textContent = data[slider.name]; // Define o texto do span
-                        }
-                    } else {
-                        console.warn(`Configuração '${slider.name}' não encontrada na resposta da API.`);
-                    }
-                });
-                if (data.hasOwnProperty('rotation')) {
-                     rotationSelect.value = data.rotation;
-                } else {
-                     console.warn("Configuração 'rotation' não encontrada.");
-                }
+        const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
+                                 yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
+                                 roll: document.getElementById('status-roll') };
+        const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
-                // (NOVO) Atualiza os dados de status
-                if (data.status) {
-                    statusEar.textContent = data.status.ear || '-';
-                    statusYaw.textContent = data.status.yaw || '-';
-                    statusPitch.textContent = data.status.pitch || '-';
-                    statusRoll.textContent = data.status.roll || '-';
-                } else {
-                    statusEar.textContent = '-';
-                    statusYaw.textContent = '-';
-                    statusPitch.textContent = '-';
-                    statusRoll.textContent = '-';
-                }
-
-
-            } catch (error) {
-                console.error("Erro ao buscar configurações:", error);
-                saveStatus.textContent = "Erro ao carregar conf.";
-                saveStatus.style.color = "#f44336"; // Vermelho
-                 // Limpa os dados de status em caso de erro
-                statusEar.textContent = 'Erro';
-                statusYaw.textContent = 'Erro';
-                statusPitch.textContent = 'Erro';
-                statusRoll.textContent = 'Erro';
-            }
+        // --- Funções Auxiliares ---
+        function formatNumber(value, decimalPlaces = 2) {
+            const num = parseFloat(value);
+            return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
 
-        // Função para enviar as configurações atualizadas
-        async function postSettings() {
-            const currentSettings = {};
-            sliders.forEach(slider => {
-                currentSettings[slider.name] = parseFloat(slider.value); // Usa parseFloat para EAR
-                // Garante que valores inteiros sejam enviados como inteiros
-                if (slider.step === '1') {
-                    currentSettings[slider.name] = parseInt(slider.value);
-                }
-            });
-            currentSettings.rotation = parseInt(rotationSelect.value);
+        // (ALTERADO) Controla estado dos controlos (sliders de deteção + checkbox + botões de perfil/calibração)
+        function updateControlStates() {
+            const isDefaultProfile = (profileSelect.value === "__default__");
+            const isDistractionEnabled = distractionCheckbox.checked;
+            console.debug(`updateControlStates: Default=${isDefaultProfile}, DistEnabled=${isDistractionEnabled}`);
 
-            try {
-                saveStatus.textContent = "A guardar...";
-                saveStatus.style.color = "#ffeb3b"; // Amarelo
-                const response = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(currentSettings)
-                });
-                const result = await response.json();
-                if (result.success) {
-                    saveStatus.textContent = "Guardado!";
-                    saveStatus.style.color = "#4CAF50"; // Verde
-                } else {
-                    throw new Error(result.error || "Falha ao guardar.");
-                }
-            } catch (error) {
-                console.error("Erro ao guardar configurações:", error);
-                saveStatus.textContent = `Erro ao guardar: ${error.message}`;
-                saveStatus.style.color = "#f44336"; // Vermelho
+            // Sliders de deteção (EAR, MAR, Distração) - Ativos só no perfil Padrão
+            allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
+            // Checkbox de distração - Ativo só no perfil Padrão
+            distractionCheckbox.disabled = !isDefaultProfile;
+
+            // Grupo de controlos de distração - Habilita/desabilita visualmente e sliders
+            const distractionSliders = distractionControlsGroup.querySelectorAll('input[type="range"]');
+            if (isDefaultProfile && isDistractionEnabled) {
+                distractionControlsGroup.classList.remove('opacity-50', 'disabled-group');
+                distractionSliders.forEach(s => s.disabled = false);
+                startCalibrationButton.disabled = isCalibrating; // Calibração só ativa se distração ativa
+            } else {
+                distractionControlsGroup.classList.add('opacity-50', 'disabled-group');
+                distractionSliders.forEach(s => s.disabled = true);
+                startCalibrationButton.disabled = true; // Calibração sempre desativada se distração desligada ou perfil salvo
             }
-            // Limpa a mensagem após alguns segundos
+
+            // Sliders da câmara (sempre ativos)
+            brightnessSlider.disabled = false;
+            rotationSelect.disabled = false;
+
+            // Botões de Perfil
+            updateProfileButton.disabled = isDefaultProfile; // Só atualiza salvos
+            deleteProfileButton.disabled = isDefaultProfile; // Só apaga salvos
+            saveProfileButton.disabled = false; // Pode sempre salvar como novo
+        }
+
+
+        // Aplica settings aos controlos (sliders, select, checkbox)
+        function applySettingsToControls(settings) {
+            sliders.forEach(slider => {
+                const valueSpan = document.getElementById(`${slider.id}_value`);
+                if (settings.hasOwnProperty(slider.name)) {
+                    slider.value = settings[slider.name];
+                    if (valueSpan) {
+                        const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                        valueSpan.textContent = formatNumber(settings[slider.name], decimals);
+                    }
+                } else console.warn(`Apply: Setting '${slider.name}' não encontrado.`);
+            });
+            if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
+            else console.warn("Apply: Setting 'rotation' não encontrado.");
+            // (NOVO) Aplica estado da checkbox
+            if (settings.hasOwnProperty('distraction_detection_enabled')) {
+                 distractionCheckbox.checked = settings.distraction_detection_enabled;
+            } else {
+                 distractionCheckbox.checked = true; // Assume true se não existir no perfil
+                 console.warn("Apply: Setting 'distraction_detection_enabled' não encontrado.")
+            }
+
+            // Atualiza estado visual (bloqueado/desbloqueado)
+            updateControlStates();
+        }
+
+        // Retorna objeto com valores atuais dos controlos (incluindo checkbox)
+        function getCurrentControlSettings() {
+             const currentSettings = {};
+             sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
+             currentSettings.rotation = parseInt(rotationSelect.value);
+             // (NOVO) Inclui estado da checkbox
+             currentSettings.distraction_detection_enabled = distractionCheckbox.checked;
+             return currentSettings;
+        }
+
+        // --- Comunicação API (Backend) ---
+        async function fetchAndUpdateSettings() {
+             if (isCalibrating) { /* ... (igual, busca só status) ... */
+                 try { const response = await fetch('/api/config'); if (!response.ok) return; const data = await response.json();
+                     if (data.status && !isNaN(parseFloat(data.status.yaw)) && !isNaN(parseFloat(data.status.pitch))) {
+                        currentYawPitch.yaw = parseFloat(data.status.yaw); currentYawPitch.pitch = parseFloat(data.status.pitch);
+                        for (const key in statusElements) { const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; statusElements[key].textContent = formatNumber(data.status[key], decimals); }
+                     }
+                 } catch(error) { console.warn("Erro status calibração:", error); } return;
+            }
+            try { /* ... (igual) ... */
+                const response = await fetch('/api/config'); if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json(); console.debug("Conf/Status recebido:", data);
+                if (Object.keys(initialApiSettings).length === 0 && data && !data.error) { initialApiSettings = { ...data }; delete initialApiSettings.status; delete initialApiSettings.queue_depth; delete initialApiSettings.queue_max_size; console.debug("Conf iniciais API:", initialApiSettings); }
+                if (data.status) { if(!isNaN(parseFloat(data.status.yaw))) currentYawPitch.yaw = parseFloat(data.status.yaw); if(!isNaN(parseFloat(data.status.pitch))) currentYawPitch.pitch = parseFloat(data.status.pitch);
+                    for (const key in statusElements) { const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; statusElements[key].textContent = formatNumber(data.status[key], decimals); }
+                } else { for (const key in statusElements) statusElements[key].textContent = '-'; currentYawPitch = { yaw: null, pitch: null }; }
+                if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
+                    const depth = data.queue_depth, max_size = data.queue_max_size; queueElements.depth.textContent = depth; queueElements.max.textContent = max_size;
+                    const occupancy = depth / max_size; let queueClass = occupancy < 0.5 ? 'ok' : (occupancy < 0.8 ? 'warn' : 'error'); queueElements.span.className = `queue-status queue-status-${queueClass}`;
+                } else { queueElements.depth.textContent = '?'; queueElements.max.textContent = '?'; queueElements.span.className = 'queue-status queue-status-unknown'; if(data.queue_depth === -1) console.warn("Erro status fila."); }
+            } catch (error) { /* ... (igual) ... */ console.error("Erro buscar conf/status:", error); for (const key in statusElements) statusElements[key].textContent = 'Erro'; queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?'; queueElements.span.className = 'queue-status queue-status-error'; currentYawPitch = { yaw: null, pitch: null }; }
+        }
+
+        async function postSettings(settingsToPost) {
+             if(isCalibrating) return;
+             if (!settingsToPost) settingsToPost = getCurrentControlSettings();
+            console.debug("A enviar conf:", settingsToPost);
+            try { /* ... (igual) ... */
+                saveStatus.textContent = "A guardar..."; saveStatus.style.color = "#ffeb3b";
+                const response = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsToPost) });
+                if (!response.ok) { let errorMsg = `HTTP ${response.status}`; try { errorMsg = (await response.json()).error || errorMsg; } catch (e) {} throw new Error(errorMsg); }
+                const result = await response.json();
+                if (result.success) { saveStatus.textContent = "Guardado!"; saveStatus.style.color = "#4CAF50"; } else { throw new Error(result.error || "Falha API."); }
+            } catch (error) { console.error("Erro guardar conf:", error); saveStatus.textContent = `Erro: ${error.message}`; saveStatus.style.color = "#f44336"; }
             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-        // Adiciona listeners aos sliders e select
+        // --- Funções de Gestão de Perfis ---
+        function getSavedProfiles() {
+            const profiles = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
+                    try { const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
+                        // Garante que todos os parâmetros (incluindo checkbox) existem
+                        profiles[profileName] = { ...defaultProfile, ...JSON.parse(localStorage.getItem(key)) };
+                    } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
+                }
+            } return profiles;
+        }
+        function populateProfileDropdown() { /* ... (igual) ... */
+             const profiles = getSavedProfiles(); profileSelect.innerHTML = ''; const defaultOption = document.createElement('option');
+             defaultOption.value = "__default__"; defaultOption.textContent = "Padrão (Editável)"; profileSelect.appendChild(defaultOption);
+             const sortedNames = Object.keys(profiles).sort(); sortedNames.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; profileSelect.appendChild(option); });
+             console.debug("Dropdown perfis populado.");
+         }
+
+        function saveProfile() { /* ... (igual, já pega checkbox de getCurrentControlSettings) ... */
+             const profileName = profileNameInput.value.trim();
+            if (!profileName || profileName === "Padrão" || profileName === "__default__") { saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            if (getSavedProfiles()[profileName]) { saveStatus.textContent = "Perfil já existe. Use 'Atualizar'."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            const currentSettings = getCurrentControlSettings();
+            try { const storageKey = PROFILE_STORAGE_PREFIX + profileName; localStorage.setItem(storageKey, JSON.stringify(currentSettings));
+                saveStatus.textContent = `Perfil '${profileName}' guardado!`; saveStatus.style.color = "#4CAF50"; profileNameInput.value = ''; populateProfileDropdown(); profileSelect.value = profileName;
+                updateControlStates(); // Bloqueia controlos
+            } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
+             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+         }
+
+        function updateProfile() { /* ... (igual, já pega checkbox de getCurrentControlSettings) ... */
+            const selectedName = profileSelect.value;
+            if (selectedName === "__default__") { saveStatus.textContent = "Selecione perfil salvo."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            const currentSettings = getCurrentControlSettings();
+             try { const storageKey = PROFILE_STORAGE_PREFIX + selectedName; localStorage.setItem(storageKey, JSON.stringify(currentSettings));
+                saveStatus.textContent = `Perfil '${selectedName}' atualizado!`; saveStatus.style.color = "#4CAF50"; updateControlStates(); // Mantém bloqueado
+            } catch (e) { console.error(`Erro atualizar '${selectedName}':`, e); saveStatus.textContent = "Erro atualizar."; saveStatus.style.color = "#f44336"; }
+             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+        }
+
+        function loadProfile() { /* ... (igual, já trata checkbox de getSavedProfiles) ... */
+             const selectedName = profileSelect.value; let settingsToLoad = null;
+            if (selectedName === "__default__") { settingsToLoad = defaultProfile; console.debug("Carregando Padrão."); }
+            else { const profiles = getSavedProfiles(); settingsToLoad = profiles[selectedName];
+                if(settingsToLoad) { console.debug(`Carregando '${selectedName}'.`); }
+                else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            }
+            if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
+         }
+        function deleteProfile() { /* ... (igual) ... */
+             const selectedName = profileSelect.value; if (selectedName === "__default__") { /* ... */ return; }
+             const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { /* ... */ } } else { /* ... */ } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+        }
+
+        // --- Calibração ---
+        function startCalibration() { /* ... (igual) ... */
+            if (isCalibrating) return; isCalibrating = true; startCalibrationButton.disabled = true; calibrationStatus.textContent = "Olhe em FRENTE por 3 segundos..."; calibrationStatus.style.color = "#ffeb3b"; const yawSamples = []; const pitchSamples = []; const calibrationDuration = 3000; const sampleInterval = 200; let samplesCollected = 0; const maxSamples = calibrationDuration / sampleInterval; const calibrationInterval = setInterval(() => { if (currentYawPitch.yaw !== null && currentYawPitch.pitch !== null) { yawSamples.push(currentYawPitch.yaw); pitchSamples.push(currentYawPitch.pitch); samplesCollected++; calibrationStatus.textContent = `Calibrando... (${samplesCollected}/${maxSamples})`; } else { console.warn("Calibração: Ângulo inválido."); } if (samplesCollected >= maxSamples) { clearInterval(calibrationInterval); finishCalibration(yawSamples, pitchSamples); } }, sampleInterval);
+        }
+        function finishCalibration(yawSamples, pitchSamples) { /* ... (igual) ... */
+            isCalibrating = false; if (profileSelect.value === "__default__") startCalibrationButton.disabled = false; if (yawSamples.length === 0 || pitchSamples.length === 0) { calibrationStatus.textContent = "Calibração falhou."; calibrationStatus.style.color = "#f44336"; setTimeout(() => { calibrationStatus.textContent = ""; }, 3000); return; } const avgYaw = yawSamples.reduce((a, b) => a + b, 0) / yawSamples.length; const avgPitch = pitchSamples.reduce((a, b) => a + b, 0) / pitchSamples.length; console.log(`Calibração: Yaw Médio=${avgYaw.toFixed(1)}, Pitch Médio=${avgPitch.toFixed(1)}`); yawOffsetSlider.value = avgYaw.toFixed(1); pitchOffsetSlider.value = avgPitch.toFixed(1); document.getElementById('yaw_center_offset_value').textContent = avgYaw.toFixed(1); document.getElementById('pitch_center_offset_value').textContent = avgPitch.toFixed(1); calibrationStatus.textContent = "Calibração Concluída!"; calibrationStatus.style.color = "#4CAF50"; setTimeout(() => { calibrationStatus.textContent = ""; }, 3000); postSettings();
+        }
+
+        // --- Event Listeners ---
+
+        // Listener GERAL para 'change' (quando solta o mouse ou muda select/checkbox)
+        document.querySelector('.controls-container').addEventListener('change', (e) => {
+            const target = e.target;
+            console.debug(`Change event on: ${target.name}, Value: ${target.type === 'checkbox' ? target.checked : target.value}`);
+
+            // Atualiza o estado visual dos controlos de distração se a checkbox mudou
+            if (target.id === 'distraction_detection_enabled') {
+                updateControlStates();
+            }
+
+            // Envia POST para API se:
+            // 1. O perfil Padrão está ativo (qualquer controlo)
+            // 2. OU se for um controlo da Câmara (Brilho/Rotação) - sempre ativo
+            if (profileSelect.value === "__default__" || target.name === 'brightness' || target.name === 'rotation') {
+                 // Atualiza o span do slider correspondente (se for range)
+                 if (target.type === 'range') {
+                     const valueSpan = document.getElementById(`${target.id}_value`);
+                     if(valueSpan) {
+                         const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
+                         valueSpan.textContent = formatNumber(target.value, decimals);
+                     }
+                 }
+                postSettings(); // Envia TODAS as configurações atuais
+            }
+        });
+
+        // Listener GERAL para 'input' (arrastar slider) - Apenas atualiza o texto do span
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                // Atualiza o span quando o slider muda
                 slider.addEventListener('input', () => {
-                    valueSpan.textContent = slider.value;
+                    const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                    valueSpan.textContent = formatNumber(slider.value, decimals);
                 });
-                // Envia para a API quando o utilizador solta o slider
-                slider.addEventListener('change', postSettings);
             }
         });
-        rotationSelect.addEventListener('change', postSettings);
 
-         // Listener para o botão Restaurar Padrões
-        resetButton.addEventListener('click', () => {
-            if (Object.keys(defaultSettings).length > 0) {
-                sliders.forEach(slider => {
-                    const valueSpan = document.getElementById(`${slider.id}_value`);
-                    if (defaultSettings.hasOwnProperty(slider.name)) {
-                        slider.value = defaultSettings[slider.name];
-                         if (valueSpan) {
-                            valueSpan.textContent = defaultSettings[slider.name];
-                         }
-                    }
-                });
-                 if (defaultSettings.hasOwnProperty('rotation')) {
-                    rotationSelect.value = defaultSettings.rotation;
-                 }
-                // Envia os valores restaurados para a API
-                postSettings();
-            } else {
-                alert("Valores padrão ainda não foram carregados. Tente novamente em breve.");
-            }
+        resetButton.addEventListener('click', () => { /* ... (igual) ... */
+            console.debug("Restaurando Padrão..."); profileSelect.value = "__default__"; applySettingsToControls(defaultProfile); postSettings(defaultProfile); saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         });
-        
-        // --- (NOVO) Atualização periódica do status ---
-        // Busca as configurações (e status) a cada 2 segundos
-        setInterval(fetchAndUpdateSettings, 2000); 
 
-        // Busca as configurações iniciais quando a página carrega
-        fetchAndUpdateSettings();
+        saveProfileButton.addEventListener('click', saveProfile);
+        updateProfileButton.addEventListener('click', updateProfile);
+        loadProfileButton.addEventListener('click', loadProfile);
+        deleteProfileButton.addEventListener('click', deleteProfile);
+        startCalibrationButton.addEventListener('click', startCalibration);
+        profileSelect.addEventListener('change', loadProfile); // (NOVO) Carrega perfil ao mudar dropdown
 
-        // Tratamento de erro do stream de vídeo
-        var stream = document.getElementById("stream");
-        stream.onerror = function() {
-            console.log("Erro no stream, a tentar recarregar em 5s...");
-            setTimeout(function() {
-                stream.src = "{{ url_for('video_feed') }}?" + new Date().getTime();
-            }, 5000);
-        };
+        // --- Inicialização ---
+        const statusInterval = setInterval(fetchAndUpdateSettings, 200);
+        populateProfileDropdown(); // 1. Popula
+        profileSelect.value = "__default__"; // 2. Define Padrão
+        applySettingsToControls(defaultProfile); // 3. Aplica Padrão à UI (e habilita controlos)
+        postSettings(defaultProfile); // 4. Envia Padrão para API
+
+        // Stream Error Handling (igual)
+        var stream = document.getElementById("stream"); let errorTimeout = null;
+        stream.onerror = function(event) { console.error("Erro stream (onerror). Evento:", event); stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; if (!errorTimeout) { console.warn("Tentando recarregar stream em 5s..."); errorTimeout = setTimeout(function() { var timestamp = new Date().getTime(); var newSrc = "{{ url_for('video_feed') }}?" + timestamp; console.log("Tentando src:", newSrc); stream.src = newSrc; errorTimeout = null; }, 5000); } else console.log("Timeout recarga ativo."); };
+        stream.onload = function() { console.debug("Stream carregado (onload). Limpando timeout erro."); if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; } }
+        window.addEventListener('beforeunload', () => { clearInterval(statusInterval); if (errorTimeout) clearTimeout(errorTimeout); });
+
     </script>
 </body>
 </html>

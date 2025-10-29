@@ -1,7 +1,7 @@
-# Documentação: Gestor de Eventos (Central de Alertas)
+# Documentação: Gestor de Eventos (Central de Alertas - SQLite)
 # Responsável por receber eventos (com frames) de uma fila e guardá-los
-# de forma assíncrona (imagem JPG + linha JSONL).
-# (Atualizado com correção para 'NoneType' em event_data)
+# de forma assíncrona (imagem JPG + linha SQLite).
+# (Atualizado para ser Thread-Safe com SQLite)
 
 import threading
 import queue
@@ -10,105 +10,175 @@ import os
 import cv2
 import json
 from datetime import datetime
+import sqlite3
+import time # Para o retry
 
 class EventHandler(threading.Thread):
     """
     Processa eventos de alerta numa thread separada para guardar
-    informações e imagens sem bloquear a thread principal.
+    informações (SQLite) e imagens (JPG) sem bloquear a thread principal.
+    Gere as ligações SQLite de forma segura para threads.
     """
-    def __init__(self, queue, save_path="/app/alerts"):
-        threading.Thread.__init__(self)
-        self.daemon = True # Permite que a thread termine quando a app principal fechar
+    def __init__(self, queue, stop_event, save_path="/app/alerts", db_name="alerts.db"):
+        threading.Thread.__init__(self, name="EventHandlerThread") # Nome da thread
+        self.daemon = True
         self.queue = queue
+        self.stop_event = stop_event
         self.save_path = save_path
-        self.running = False
-        
-        # Cria a pasta de alertas se não existir
-        os.makedirs(self.save_path, exist_ok=True)
-        
-        # Caminho para o ficheiro de log JSONL
-        self.log_file_path = os.path.join(self.save_path, "alerts_log.jsonl")
-        
-        logging.info(f"Gestor de Eventos inicializado. Alertas serão guardados em: {self.save_path}")
+        self.image_save_path = os.path.join(self.save_path, "images")
+        self.db_path = os.path.join(self.save_path, db_name)
+        # (REMOVIDO) self.conn = None # Ligação será criada por função/thread
+
+        os.makedirs(self.image_save_path, exist_ok=True)
+
+        logging.info(f"Gestor de Eventos inicializado. Base de dados: {self.db_path}, Imagens em: {self.image_save_path}")
+        self._init_db()
+
+    def _init_db(self):
+        """Inicializa a base de dados SQLite e cria a tabela se não existir."""
+        conn = None # (NOVO) Ligação local para esta função
+        try:
+            # check_same_thread=False é geralmente desencorajado, mas pode ser
+            # necessário se a inicialização for chamada de threads diferentes.
+            # No entanto, a abordagem mais segura é criar ligações por thread.
+            # Vamos manter check_same_thread=True (padrão) e criar ligações locais.
+            conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10.0)
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    details TEXT,
+                    image_file TEXT
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON alerts (timestamp)
+            ''')
+            logging.info(f"Base de dados SQLite '{self.db_path}' verificada/inicializada com sucesso.")
+        except sqlite3.Error as e:
+            logging.error(f"!!! Erro ao inicializar a base de dados SQLite: {e}", exc_info=True)
+            # Considerar lançar exceção ou sinalizar erro crítico
+        finally:
+            if conn:
+                conn.close() # (NOVO) Fecha a ligação local
+
+    # (REMOVIDO) def _get_db_connection(self): # Já não é necessário
 
     def run(self):
         """Loop principal da thread: espera por eventos na fila e processa-os."""
-        self.running = True
-        logging.info("Thread do Gestor de Eventos iniciada.")
-        
-        while self.running:
+        logging.info("Thread do Gestor de Eventos (SQLite) iniciada.")
+
+        while not self.stop_event.is_set():
             try:
-                # Espera por um item na fila (com timeout para poder parar)
-                item = self.queue.get(timeout=1) 
-                
-                # Processa o evento (guardar JSONL e JPG)
+                item = self.queue.get(timeout=0.2)
+                if item is None: break
+
+                # (NOVO) Processa o evento DENTRO de um bloco 'with connection'
                 self.process_event(item)
-                
-                # Marca a tarefa como concluída na fila
                 self.queue.task_done()
-                
+
             except queue.Empty:
-                # Timeout - normal, apenas continua a esperar
                 continue
             except Exception as e:
-                # Loga qualquer outro erro inesperado na thread
-                logging.error(f"Erro na thread do EventHandler: {e}", exc_info=True)
-                # Decide se deve continuar ou parar em caso de erro
-                # Por agora, apenas loga e continua
-                
-        logging.info("Thread do Gestor de Eventos terminada.")
+                logging.error(f"Erro inesperado na thread do EventHandler: {e}", exc_info=True)
+                time.sleep(1)
+
+        logging.info("Thread do Gestor de Eventos (SQLite) terminada.")
 
     def process_event(self, item):
-        """Guarda os dados do evento em JSONL e a imagem em JPG."""
+        """Guarda os dados do evento em SQLite e a imagem em JPG. Cria a sua própria ligação DB."""
+        conn = None # (NOVO) Ligação local
         try:
+            # --- Extração de Dados (igual a antes) ---
             event_data = item.get("event_data")
             frame = item.get("frame")
-
-            # --- (NOVO) Verificação de Segurança ---
-            if event_data is None:
-                logging.warning("Evento recebido com event_data=None. Ignorando.")
-                return
-            # ----------------------------------------
-
-            if frame is None:
-                logging.warning("Evento recebido sem frame. Ignorando.")
+            if event_data is None or frame is None:
+                logging.warning(f"Evento inválido recebido (event_data={event_data is None}, frame={frame is None}). Ignorando.")
                 return
 
-            # Obtém dados do evento (com valores padrão seguros)
             event_type = event_data.get("type", "DESCONHECIDO")
+            details = event_data.get("value", None)
             timestamp_str = event_data.get("timestamp", datetime.now().isoformat() + "Z")
-            
-            # Cria um nome de ficheiro único para a imagem
-            # Ex: 2025-10-27T18-30-05.123456Z_SONOLENCIA.jpg
-            timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            filename_base = timestamp_dt.strftime("%Y-%m-%dT%H-%M-%S.%fZ") + f"_{event_type}"
+
+            try:
+                 timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            except ValueError:
+                 logging.warning(f"Timestamp inválido no evento: {timestamp_str}. Usando hora atual.")
+                 timestamp_dt = datetime.now()
+                 timestamp_str = timestamp_dt.isoformat() + "Z"
+
+            date_path = timestamp_dt.strftime("%Y/%m/%d")
+            image_dir = os.path.join(self.image_save_path, date_path)
+            os.makedirs(image_dir, exist_ok=True)
+
+            filename_base = timestamp_dt.strftime("%Y-%m-%dT%H-%M-%S.%f") + f"_{event_type}"
             image_filename = filename_base + ".jpg"
-            image_path = os.path.join(self.save_path, image_filename)
-            
-            # Guarda a imagem JPG
-            # Usamos uma qualidade JPEG ligeiramente mais alta para a imagem guardada
-            cv2.imwrite(image_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            
-            # Prepara os dados para guardar no JSONL
-            log_entry = event_data.copy() # Começa com os dados originais
-            log_entry["image_file"] = image_filename # Adiciona o nome do ficheiro da imagem
+            image_full_path = os.path.join(image_dir, image_filename)
 
-            # Guarda a entrada no ficheiro JSONL (modo 'a' para append)
-            # Usamos 'ensure_ascii=False' para suportar caracteres acentuados, se houver
-            with open(self.log_file_path, 'a', encoding='utf-8') as f:
-                json.dump(log_entry, f, ensure_ascii=False)
-                f.write('\n') # Adiciona nova linha para o formato JSONL
-                
-            logging.warning(f"*** ALERTA ARMAZENADO *** Tipo: {event_type}, Imagem: {image_filename}")
+            # --- Guardar Imagem (igual a antes) ---
+            quality = 90
+            success = cv2.imwrite(image_full_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            image_relative_path = None
+            if success:
+                 image_relative_path = os.path.join(date_path, image_filename).replace(os.path.sep, '/')
+            else:
+                 logging.error(f"Falha ao guardar imagem: {image_full_path}")
 
+
+            # --- Inserir na Base de Dados (com ligação local) ---
+            logging.debug(f"ProcessEvent: A conectar a {self.db_path}...") # NOVO DEBUG
+            conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10.0) # Cria ligação
+            cursor = conn.cursor()
+            logging.debug("ProcessEvent: Ligação criada, a executar INSERT...") # NOVO DEBUG
+            cursor.execute('''
+                INSERT INTO alerts (timestamp, event_type, details, image_file)
+                VALUES (?, ?, ?, ?)
+            ''', (timestamp_str, event_type, details, image_relative_path))
+            # conn.commit() # Não é necessário com isolation_level=None
+            logging.debug("ProcessEvent: INSERT executado.") # NOVO DEBUG
+
+            log_msg_img = f"Imagem: {image_relative_path}" if image_relative_path else "Imagem falhou"
+            logging.warning(f"*** ALERTA GUARDADO (SQLite) *** Tipo: {event_type}, {log_msg_img}")
+
+        except sqlite3.Error as db_err: # (NOVO) Captura erros DB especificamente
+            logging.error(f"Erro SQLite ao processar/gravar evento: {db_err}", exc_info=True)
         except Exception as e:
-            # Loga o erro específico do processamento/gravação
-            logging.error(f"Falha ao processar e guardar evento: {e}", exc_info=True)
+            logging.error(f"Falha inesperada ao processar/gravar evento: {e}", exc_info=True)
+        finally:
+            if conn:
+                logging.debug("ProcessEvent: A fechar ligação DB.") # NOVO DEBUG
+                conn.close() # (NOVO) Garante que fecha a ligação local
 
-    def stop(self):
-        """Sinaliza à thread para parar."""
-        logging.info("A sinalizar paragem para o Gestor de Eventos...")
-        self.running = False
-        # (Opcional) Poderia adicionar um item especial na fila para desbloquear get() imediatamente
-        # self.queue.put(None) 
+    def get_alerts(self, limit=50):
+        """Busca os últimos 'limit' alertas da base de dados. Cria a sua própria ligação DB."""
+        conn = None # (NOVO) Ligação local
+        alerts = []
+        try:
+            logging.debug(f"GetAlerts: A conectar a {self.db_path}...") # NOVO DEBUG
+            conn = sqlite3.connect(self.db_path, timeout=10.0) # Cria ligação (sem autocommit para leitura)
+            conn.row_factory = sqlite3.Row # Retorna como dicionários
+            cursor = conn.cursor()
+            logging.debug("GetAlerts: Ligação criada, a executar SELECT...") # NOVO DEBUG
+            cursor.execute('''
+                SELECT id, timestamp, event_type, details, image_file
+                FROM alerts
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (limit,))
+            alerts = [dict(row) for row in cursor.fetchall()]
+            logging.debug(f"GetAlerts: SELECT retornou {len(alerts)} alertas.") # NOVO DEBUG
+        except sqlite3.Error as e:
+            logging.error(f"Erro SQLite ao buscar alertas: {e}", exc_info=True)
+            alerts = [] # Retorna vazio em caso de erro
+        except Exception as e:
+             logging.error(f"Erro inesperado ao buscar alertas: {e}", exc_info=True)
+             alerts = []
+        finally:
+            if conn:
+                logging.debug("GetAlerts: A fechar ligação DB.") # NOVO DEBUG
+                conn.close() # (NOVO) Garante que fecha a ligação local
+
+        return alerts
 
