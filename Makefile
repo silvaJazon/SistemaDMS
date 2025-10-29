@@ -11,6 +11,8 @@ SERVICO := servico_dms   # Nome do serviço principal
 # Valores padrão (podem ser sobrescritos na linha de comando)
 LOG_LEVEL ?= INFO
 ROTATE_FRAME ?= 0
+# (NOVO) Adiciona o backend padrão
+DETECTION_BACKEND ?= DLIB
 
 # --- Variáveis Internas ---
 DOCKER_COMPOSE := docker compose -f $(COMPOSE_FILE)
@@ -24,8 +26,9 @@ build:
 
 .PHONY: up
 up:
-	@echo ">>> Iniciando os serviços... (Log: $(LOG_LEVEL), Rotação: $(ROTATE_FRAME))"
-	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d
+	@echo ">>> Iniciando os serviços... (Log: $(LOG_LEVEL), Rotação: $(ROTATE_FRAME), Backend: $(DETECTION_BACKEND))"
+	# (ALTERADO) Passa a variável DETECTION_BACKEND
+	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) DETECTION_BACKEND=$(DETECTION_BACKEND) $(DOCKER_COMPOSE) up -d
 
 .PHONY: down
 down:
@@ -35,7 +38,8 @@ down:
 .PHONY: prod-up-build
 prod-up-build: down
 	@echo ">>> Forçando a reconstrução e reiniciando os serviços..."
-	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d --build
+	# (ALTERADO) Passa a variável DETECTION_BACKEND
+	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) DETECTION_BACKEND=$(DETECTION_BACKEND) $(DOCKER_COMPOSE) up -d --build
 	@echo ">>> Imagem reconstruída e serviços reiniciados!"
 
 # --- Alvos Auxiliares ---
@@ -92,6 +96,7 @@ help:
 	@echo "Exemplos com parâmetros:"
 	@echo "  make prod-up-build ROTATE_FRAME=180"
 	@echo "  make up LOG_LEVEL=DEBUG ROTATE_FRAME=90"
+	@echo "  make prod-up-build DETECTION_BACKEND=MEDIAPIPE"
 	@echo ""
 	@echo "  make help                - Mostra esta ajuda."
 	@echo ""

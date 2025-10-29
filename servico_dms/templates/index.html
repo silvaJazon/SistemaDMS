@@ -233,17 +233,9 @@
 
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
 
-        // (CORRIGIDO) defaultProfile agora tem distraction_detection_enabled: false
-        const defaultProfile = {
-            ear_threshold: 0.25, ear_frames: 15,
-            mar_threshold: 0.60, mar_frames: 20,
-            distraction_detection_enabled: false, // <-- CORRIGIDO
-            distraction_angle: 40.0, pitch_up_threshold: -15.0,
-            pitch_down_offset: 20.0, distraction_frames: 35,
-            yaw_center_offset: 0.0, pitch_center_offset: 0.0,
-            brightness: 0, rotation: 0
-        };
-        let initialApiSettings = {};
+        // (REMOVIDO) defaultProfile - A "fonte da verdade" agora é a API
+        
+        let initialApiSettings = {}; // (ALTERADO) Será preenchido pela API
         let currentYawPitch = { yaw: null, pitch: null };
         let isCalibrating = false;
 
@@ -347,18 +339,10 @@
                 const response = await fetch('/api/config'); if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json(); console.debug("Conf/Status recebido:", data);
                 
-                // (MELHORIA) Guarda config inicial apenas na primeira vez (para o botão Resetar)
+                // (ALTERADO) Guarda config inicial apenas na primeira vez (para o botão Resetar)
                 if (Object.keys(initialApiSettings).length === 0 && data && !data.error) { 
-                    initialApiSettings = { ...data }; 
-                    delete initialApiSettings.status; 
-                    delete initialApiSettings.queue_depth; 
-                    delete initialApiSettings.queue_max_size; 
-                    console.debug("Conf iniciais API (para Reset):", initialApiSettings); 
-                    
-                    // (MELHORIA) Usa a config vinda da API (em vez do defaultProfile JS) para popular a UI na primeira vez
-                    // Isto garante que a UI reflete o estado real do backend no arranque.
-                    // applySettingsToControls(initialApiSettings);
-                    // (NOTA: Decidimos manter o postSettings(defaultProfile) no arranque para garantir consistência.)
+                    // Esta lógica só corre uma vez no arranque, dentro do initializeApp
+                    // Esta função (fetchAndUpdateSettings) é para atualizações de status
                 }
                 
                 // Atualiza Status (EAR/MAR/Yaw...)
@@ -417,8 +401,8 @@
                 const key = localStorage.key(i);
                 if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
                     try { const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
-                        // Garante que todos os parâmetros (incluindo checkbox) existem, herdando do defaultProfile
-                        profiles[profileName] = { ...defaultProfile, ...JSON.parse(localStorage.getItem(key)) };
+                        // (ALTERADO) Junta com initialApiSettings (os padrões da API) em vez de defaultProfile
+                        profiles[profileName] = { ...initialApiSettings, ...JSON.parse(localStorage.getItem(key)) };
                     } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
                 }
             } return profiles;
@@ -454,7 +438,11 @@
 
         function loadProfile() {
              const selectedName = profileSelect.value; let settingsToLoad = null;
-            if (selectedName === "__default__") { settingsToLoad = defaultProfile; console.debug("Carregando Padrão."); }
+            // (ALTERADO) Usa initialApiSettings em vez de defaultProfile
+            if (selectedName === "__default__") { 
+                settingsToLoad = initialApiSettings; 
+                console.debug("Carregando Padrão (da API)."); 
+            }
             else { const profiles = getSavedProfiles(); settingsToLoad = profiles[selectedName];
                 if(settingsToLoad) { console.debug(`Carregando '${selectedName}'.`); }
                 else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
@@ -517,12 +505,19 @@
         });
 
         resetButton.addEventListener('click', () => { 
-            console.debug("Restaurando Padrão..."); profileSelect.value = "__default__"; 
-            // (MELHORIA) Usa o 'initialApiSettings' se disponível, senão usa o 'defaultProfile' JS
-            const settingsToReset = Object.keys(initialApiSettings).length > 0 ? initialApiSettings : defaultProfile;
-            console.debug("A resetar para:", settingsToReset);
-            applySettingsToControls(settingsToReset); 
-            postSettings(settingsToReset); 
+            console.debug("Restaurando Padrão (da API)..."); 
+            profileSelect.value = "__default__"; 
+            
+            // (ALTERADO) Usa apenas initialApiSettings
+            if (Object.keys(initialApiSettings).length === 0) {
+                 console.error("initialApiSettings vazio! Não é possível resetar.");
+                 saveStatus.textContent = "Erro: Padrões não carregados."; saveStatus.style.color = "#f44336"; 
+                 setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+                 return;
+            }
+            console.debug("A resetar para:", initialApiSettings);
+            applySettingsToControls(initialApiSettings); 
+            postSettings(initialApiSettings); 
             saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50"; 
             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         });
@@ -536,22 +531,54 @@
         // O botão "Carregar" é mais explícito e evita posts desnecessários.
 
         // --- Inicialização ---
-        const statusInterval = setInterval(fetchAndUpdateSettings, 200);
-        populateProfileDropdown(); // 1. Popula
-        profileSelect.value = "__default__"; // 2. Define Padrão
         
-        // (CORRIGIDO) Aplica o defaultProfile (JS) à UI e envia para a API
-        // Isto garante que o backend e o frontend estão sincronizados com o padrão desejado (distração desativada)
-        // assim que a página carrega.
-        applySettingsToControls(defaultProfile); // 3. Aplica Padrão (JS) à UI
-        postSettings(defaultProfile); // 4. Envia Padrão (JS) para API
+        // (NOVO) Função de inicialização assíncrona
+        async function initializeApp() {
+            try {
+                // 1. Buscar a configuração padrão do backend
+                console.debug("Iniciando app, buscando config da API...");
+                const response = await fetch('/api/config');
+                if (!response.ok) throw new Error(`HTTP ${response.status} ao buscar config inicial`);
+                
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                // 2. Guardar como a "fonte da verdade"
+                initialApiSettings = { ...data };
+                delete initialApiSettings.status; 
+                delete initialApiSettings.queue_depth; 
+                delete initialApiSettings.queue_max_size; 
+                console.debug("Configuração inicial recebida da API:", initialApiSettings);
+
+                // 3. Popular o dropdown (agora pode usar initialApiSettings como base)
+                populateProfileDropdown(); 
+                profileSelect.value = "__default__"; 
+
+                // 4. Aplicar essa configuração à UI
+                applySettingsToControls(initialApiSettings); 
+                // (REMOVIDO) postSettings(defaultProfile); - Não é mais necessário enviar
+
+                // 5. Iniciar o loop de status
+                const statusInterval = setInterval(fetchAndUpdateSettings, 200);
+                window.addEventListener('beforeunload', () => { clearInterval(statusInterval); if (errorTimeout) clearTimeout(errorTimeout); });
+
+            } catch (error) {
+                console.error("!!! ERRO FATAL NA INICIALIZAÇÃO:", error);
+                saveStatus.textContent = "Erro ao carregar app. Recarregue.";
+                saveStatus.style.color = "#f44336";
+                // Tenta mesmo assim
+                populateProfileDropdown(); 
+                profileSelect.value = "__default__"; 
+            }
+        }
+
+        initializeApp();
 
         // Stream Error Handling
         var stream = document.getElementById("stream"); let errorTimeout = null;
         stream.onerror = function(event) { console.error("Erro stream (onerror). Evento:", event); stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; if (!errorTimeout) { console.warn("Tentando recarregar stream em 5s..."); errorTimeout = setTimeout(function() { var timestamp = new Date().getTime(); var newSrc = "{{ url_for('video_feed') }}?" + timestamp; console.log("Tentando src:", newSrc); stream.src = newSrc; errorTimeout = null; }, 5000); } else console.log("Timeout recarga ativo."); };
         stream.onload = function() { console.debug("Stream carregado (onload). Limpando timeout erro."); if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; } }
-        window.addEventListener('beforeunload', () => { clearInterval(statusInterval); if (errorTimeout) clearTimeout(errorTimeout); });
-
+        // (REMOVIDO) window.addEventListener('beforeunload', ...) - Movido para dentro do initializeApp
     </script>
 </body>
 </html>

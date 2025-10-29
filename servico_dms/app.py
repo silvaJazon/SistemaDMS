@@ -1,5 +1,6 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
 # (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
+# (ALTERADO) Refatorado para usar a classe base BaseMonitor
 
 import cv2
 import time
@@ -16,7 +17,17 @@ import signal
 
 # Importa os nossos módulos
 from camera_thread import CameraThread
-from dms_core import DriverMonitor # Importa a versão com Distração Opcional
+# (ALTERADO) Importa a implementação específica (DlibMonitor) e a base
+from dms_base import BaseMonitor
+from dms_core import DlibMonitor 
+# (NOVO) Importa a implementação MediaPipe
+try:
+    from dms_mediapipe import MediaPipeMonitor
+    HAS_MEDIAPIPE = True
+except ImportError as e:
+    logging.warning(f"Não foi possível importar MediaPipeMonitor: {e}. MediaPipe não estará disponível.")
+    HAS_MEDIAPIPE = False
+    
 from event_handler import EventHandler
 
 # Tenta importar o Waitress
@@ -47,6 +58,10 @@ TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 
+# (CORRIGIDO) Adiciona .strip() para remover espaços em branco
+DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper().strip()
+
+
 # --- Variáveis Globais ---
 output_frame_display = None
 output_frame_lock = threading.Lock()
@@ -58,7 +73,7 @@ cam_thread = None
 detection_thread = None
 event_handler = None
 event_queue = None
-dms_monitor = None
+dms_monitor: BaseMonitor = None # (ALTERADO) Tipo é a classe Base
 
 app = Flask(__name__)
 
@@ -75,10 +90,10 @@ def create_placeholder_frame(text="Aguardando camera..."):
     return frame
 
 # --- Threads Principais ---
-def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
-    """Loop principal de deteção (Híbrido + Pose 3D Suavizada)."""
+def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref): # (ALTERADO) Tipo da referência
+    """Loop principal de deteção (Usa a interface BaseMonitor)."""
     global output_frame_display, status_data_global
-    logging.info(f">>> Loop de deteção (HÍBRIDO + POSE SUAVE + OFFSETS + DIST_OPCIONAL) iniciado (Alvo: {TARGET_FPS} FPS).")
+    logging.info(f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) iniciado (Alvo: {TARGET_FPS} FPS).")
     last_process_time = time.time()
     frame_count = 0
 
@@ -105,10 +120,11 @@ def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
 
             logging.debug("DetectionLoop: A chamar process_frame()...")
             if dms_monitor_ref is None:
-                logging.error("!!! dms_monitor_ref não inicializado!")
+                logging.error("!!! dms_monitor_ref (BaseMonitor) não inicializado!")
                 stop_event.wait(timeout=1.0)
                 continue
 
+            # (SEM ALTERAÇÃO) Chama o método da interface, não importa a implementação
             processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -165,8 +181,10 @@ def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
 def index():
     """Serve a página de calibração."""
     cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
+    # (NOVO) Passa o backend ativo para o template
     return render_template("index.html", source_desc=cam_source_desc,
-                           width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY)
+                           width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY,
+                           active_backend=DETECTION_BACKEND)
 
 @app.route("/alerts")
 def alerts_page():
@@ -252,10 +270,13 @@ def api_config():
 
     if request.method == 'GET':
         try:
-            # get_settings() agora retorna distraction_detection_enabled
+            # (SEM ALTERAÇÃO) Chama o método da interface
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
+            
+            # (NOVO) Adiciona o backend ativo
+            current_settings['active_backend'] = DETECTION_BACKEND
 
             logging.debug("api_config GET: Lock status...")
             with status_data_lock:
@@ -282,7 +303,7 @@ def api_config():
             logging.debug(f"/api/config POST: Recebido {new_settings}")
             if not new_settings: return jsonify({"success": False, "error": "No data received"}), 400
 
-            # update_settings() agora espera distraction_detection_enabled
+            # (SEM ALTERAÇÃO) Chama o método da interface
             dms_success = dms_monitor.update_settings(new_settings)
 
             cam_success = True # Câmara
@@ -339,7 +360,7 @@ if __name__ == '__main__':
 
     try:
         logging.info(
-            f">>> Serviço DMS (Híbrido + Pose Suave + Offsets + Dist Opcional) a iniciar... "
+            f">>> Serviço DMS (Backend: {DETECTION_BACKEND}) a iniciar... "
             f"(Log: {logging.getLevelName(logging.getLogger().level)})"
         )
 
@@ -348,7 +369,23 @@ if __name__ == '__main__':
         event_handler.start()
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
-        dms_monitor = DriverMonitor(frame_size=frame_size)  # Inicializa aqui
+        
+        # (ALTERADO) Lógica para escolher o backend
+        if DETECTION_BACKEND == 'MEDIAPIPE':
+            if HAS_MEDIAPIPE:
+                dms_monitor = MediaPipeMonitor(frame_size=frame_size)
+            else:
+                logging.error("!!! DETECTION_BACKEND='MEDIAPIPE' mas a importação falhou. A usar DLIB.")
+                DETECTION_BACKEND = 'DLIB' # Corrige a variável global
+                dms_monitor = DlibMonitor(frame_size=frame_size)
+        
+        elif DETECTION_BACKEND == 'DLIB':
+            dms_monitor = DlibMonitor(frame_size=frame_size)
+        
+        else:
+            logging.error(f"!!! DETECTION_BACKEND '{DETECTION_BACKEND}' desconhecido. A usar DLIB.")
+            DETECTION_BACKEND = 'DLIB' # Corrige a variável global
+            dms_monitor = DlibMonitor(frame_size=frame_size)
 
         cam_thread = CameraThread(
             VIDEO_SOURCE,
@@ -438,3 +475,4 @@ if __name__ == '__main__':
 
         logging.info(">>> Serviço DMS terminado.")
         os._exit(0)  # Força a saída
+
