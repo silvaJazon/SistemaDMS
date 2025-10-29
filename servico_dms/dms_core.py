@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Driver Monitor System)
-# (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada + Frames Distração Aumentados)
+# (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada + Offsets + Confiança Tracker Reduzida)
 
 import cv2
 import dlib
@@ -11,7 +11,7 @@ from scipy.spatial import distance as dist
 from datetime import datetime
 import time
 import sys
-from collections import deque # Para suavização dos ângulos
+from collections import deque
 
 cv2.setUseOptimized(True)
 
@@ -20,14 +20,14 @@ MOUTH_AR_END = 68
 
 # Constantes de Tracking
 FRAMES_FOR_REDETECTION = 10
-TRACKER_CONFIDENCE_THRESHOLD = 7.0
+TRACKER_CONFIDENCE_THRESHOLD = 5.5 # (AJUSTADO) Reduzido de 7.0 para 5.5
 # Constante de Suavização
 ANGLE_SMOOTHING_FRAMES = 7
 
 class DriverMonitor:
     """
     Classe principal para a deteção de sonolência e distração.
-    (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada Aumentada)
+    (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada + Offsets + Confiança Tracker Reduzida)
     """
     EYE_AR_LEFT_START = 42; EYE_AR_LEFT_END = 48
     EYE_AR_RIGHT_START = 36; EYE_AR_RIGHT_END = 42
@@ -39,7 +39,7 @@ class DriverMonitor:
     HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54]
 
     def __init__(self, frame_size):
-        logging.info("A inicializar o DriverMonitor Core (Modo: Pose 3D Suavizada Aumentada)...")
+        logging.info("A inicializar o DriverMonitor Core (Modo: Pose 3D Suavizada + Offsets + Track Conf Reduzida)...") # Descrição
         self.frame_height, self.frame_width = frame_size
         self.focal_length = self.frame_width
         self.camera_center = (self.frame_width / 2, self.frame_height / 2)
@@ -63,11 +63,13 @@ class DriverMonitor:
         self.ear_threshold = 0.25; self.ear_frames = 15
         self.mar_threshold = 0.60; self.mar_frames = 20
         self.distraction_angle = 40.0 # Yaw
-        self.distraction_frames = 35 # (AJUSTADO) Aumentado de 25 para 35
+        self.distraction_frames = 35
         self.pitch_down_offset = 20.0
         self.pitch_up_threshold = -15.0
+        self.yaw_center_offset = 0.0
+        self.pitch_center_offset = 0.0
 
-    # ... (resto das funções _initialize_dlib, _shape_to_np, _eye_aspect_ratio, _mouth_aspect_ratio, _estimate_head_pose, _reset_counters_and_cooldowns são iguais à versão anterior) ...
+    # ... (initialize_dlib, _shape_to_np, _eye_aspect_ratio, _mouth_aspect_ratio, _estimate_head_pose, _reset_counters_and_cooldowns são iguais) ...
     def initialize_dlib(self):
         """Carrega modelos Dlib."""
         try:
@@ -124,8 +126,8 @@ class DriverMonitor:
 
 
     def process_frame(self, frame, gray):
-        """Analisa um frame (Híbrido + Pose 3D Suavizada Aumentada)."""
-        logging.debug("DMSCore: process_frame (HÍBRIDO + POSE SUAVE AUMENTADA) iniciado.")
+        """Analisa um frame (Híbrido + Pose 3D Suavizada + Offsets + Confiança Tracker Reduzida)."""
+        logging.debug("DMSCore: process_frame (HÍBRIDO + POSE SUAVE + OFFSETS + TRACK_CONF_REDUZIDA) iniciado.")
         start_time_total = time.time()
         events_list = []
         status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
@@ -142,30 +144,31 @@ class DriverMonitor:
             if needs_detection:
                 logging.debug("DMSCore: Detecção completa...")
                 start_time_detect = time.time()
-                rects = self.detector(gray_processed, 0) # Usa equalizado
+                rects = self.detector(gray_processed, 0)
                 logging.debug(f"DMSCore: Deteção {len(rects)} faces {time.time()-start_time_detect:.4f}s.")
                 if rects:
                     current_rect = max(rects, key=lambda r: r.width()*r.height())
                     if self.face_tracker is None: self.face_tracker = dlib.correlation_tracker()
                     logging.debug("DMSCore: Iniciando tracker...")
-                    self.face_tracker.start_track(frame, current_rect) # Usa original
+                    self.face_tracker.start_track(frame, current_rect)
                     self.tracking_active=True; self.tracked_rect=current_rect; self.frame_since_detection=0; face_found_this_frame=True
                 else:
                     logging.debug("DMSCore: Nenhuma face detetada.")
-                    if self.tracking_active: self._reset_counters_and_cooldowns() # Reset se perdeu
+                    if self.tracking_active: self._reset_counters_and_cooldowns()
                     self.tracking_active=False; self.tracked_rect=None
             elif self.tracking_active:
                 logging.debug("DMSCore: Tracking...")
                 start_time_track = time.time()
-                confidence = self.face_tracker.update(frame) # Usa original
+                confidence = self.face_tracker.update(frame)
                 logging.debug(f"DMSCore: Track conf={confidence:.2f} {time.time()-start_time_track:.4f}s.")
+                # (ALTERADO) Usa novo limite de confiança
                 if confidence > TRACKER_CONFIDENCE_THRESHOLD:
                     self.tracked_rect = self.face_tracker.get_position()
                     current_rect = dlib.rectangle(int(self.tracked_rect.left()), int(self.tracked_rect.top()),
                                                    int(self.tracked_rect.right()), int(self.tracked_rect.bottom()))
                     self.frame_since_detection += 1; face_found_this_frame = True
                 else:
-                    logging.debug(f"DMSCore: Tracker perdeu face (conf {confidence:.2f}).")
+                    logging.debug(f"DMSCore: Tracker perdeu face (conf {confidence:.2f} <= {TRACKER_CONFIDENCE_THRESHOLD}).")
                     self._reset_counters_and_cooldowns(); self.tracking_active=False; self.tracked_rect=None
         logging.debug("DMSCore: Lock tracking libertado.")
 
@@ -182,15 +185,16 @@ class DriverMonitor:
             mouth = shape_np[MOUTH_AR_START:MOUTH_AR_END]; mar = self._mouth_aspect_ratio(mouth); logging.debug(f"DMSCore: MAR={mar:.3f}")
             yaw, pitch, roll = self._estimate_head_pose(shape_np)
 
-            # --- Suavização dos Ângulos ---
-            avg_yaw, avg_pitch = None, None
+            # Suavização e Offsets (igual)
+            avg_yaw_centered, avg_pitch_centered = None, None
             if yaw is not None and pitch is not None:
                 with self.lock:
                     self.yaw_history.append(yaw); self.pitch_history.append(pitch)
                     if len(self.yaw_history) == ANGLE_SMOOTHING_FRAMES:
-                        avg_yaw = np.mean(self.yaw_history)
-                        avg_pitch = np.mean(self.pitch_history)
-                        logging.debug(f"DMSCore: Ângulos Suaves (Y={avg_yaw:.1f}, P={avg_pitch:.1f})")
+                        avg_yaw = np.mean(self.yaw_history); avg_pitch = np.mean(self.pitch_history)
+                        avg_yaw_centered = avg_yaw - self.yaw_center_offset
+                        avg_pitch_centered = avg_pitch - self.pitch_center_offset
+                        logging.debug(f"DMSCore: Ângulos Suaves (Y={avg_yaw:.1f}, P={avg_pitch:.1f}), Centrados (Yc={avg_yaw_centered:.1f}, Pc={avg_pitch_centered:.1f})")
                     else: logging.debug(f"DMSCore: Aguardando histórico ({len(self.yaw_history)}/{ANGLE_SMOOTHING_FRAMES})")
             else:
                  with self.lock: self.yaw_history.clear(); self.pitch_history.clear()
@@ -203,7 +207,7 @@ class DriverMonitor:
                 cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2)
             except Exception as e: logging.warning(f"DMSCore: Erro desenho: {e}")
 
-            # --- Lógica de Alerta ---
+            # Lógica de Alerta (igual)
             logging.debug("DMSCore: Lock alerta...")
             with self.lock:
                 logging.debug("DMSCore: Lock alerta OK.")
@@ -223,28 +227,26 @@ class DriverMonitor:
                 else:
                     if self.yawn_counter > 0: logging.debug("DMSCore: Bocejo reset.")
                     self.yawn_counter=0; self.yawn_alert_active=False
-                # Distração (usa ângulos MÉDIOS/SUAVIZADOS)
+                # Distração
                 is_distracted_angle = False; details = "-"
-                if avg_yaw is not None and avg_pitch is not None:
-                    # Usa os limites ATUALIZADOS da classe
-                    pitch_down_limit = self.distraction_angle + self.pitch_down_offset
-                    is_distracted_angle = (abs(avg_yaw) > self.distraction_angle) or \
-                                          (avg_pitch < self.pitch_up_threshold) or \
-                                          (avg_pitch > pitch_down_limit)
-                    details = f"Yaw(avg): {avg_yaw:.1f}, Pitch(avg): {avg_pitch:.1f}"
+                if avg_yaw_centered is not None and avg_pitch_centered is not None:
+                    pitch_down_limit_centered = self.pitch_down_offset
+                    pitch_up_limit_centered = self.pitch_up_threshold
+                    is_distracted_angle = (abs(avg_yaw_centered) > self.distraction_angle) or \
+                                          (avg_pitch_centered < pitch_up_limit_centered) or \
+                                          (avg_pitch_centered > pitch_down_limit_centered)
+                    details = f"Yaw(c): {avg_yaw_centered:.1f}, Pitch(c): {avg_pitch_centered:.1f}"
                     if is_distracted_angle:
                         self.distraction_counter += 1
-                        # (AJUSTADO) Usa distraction_frames da classe no log
-                        logging.debug(f"DMSCore: Ângulo MÉDIO fora ({details} vs Yaw>{self.distraction_angle}, Pitch<({self.pitch_up_threshold})>({pitch_down_limit})), cont={self.distraction_counter}/{self.distraction_frames}")
-                        # (AJUSTADO) Usa distraction_frames da classe na condição
+                        logging.debug(f"DMSCore: Ângulo CENTRADO fora ({details} vs Yaw>{self.distraction_angle}, Pitch<({pitch_up_limit_centered})>({pitch_down_limit_centered})), cont={self.distraction_counter}/{self.distraction_frames}")
                         if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
                             self.distraction_alert_active = True
                             events_list.append({"type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}", "timestamp": datetime.now().isoformat() + "Z"})
                             logging.warning("DMSCore: EVENTO DISTRACAO.")
-                    else: # Ângulo médio dentro dos limites
-                        if self.distraction_counter > 0: logging.debug("DMSCore: Distração (média) reset.")
+                    else:
+                        if self.distraction_counter > 0: logging.debug("DMSCore: Distração (centrada) reset.")
                         self.distraction_counter = 0; self.distraction_alert_active = False
-                else: # Histórico incompleto
+                else:
                      if self.distraction_counter > 0: logging.debug("DMSCore: Distração reset (histórico incompleto).")
                      self.distraction_counter = 0; self.distraction_alert_active = False
             logging.debug("DMSCore: Lock alerta libertado.")
@@ -263,11 +265,12 @@ class DriverMonitor:
              # Reset já feito dentro do lock de tracking
 
         total_time = time.time() - start_time_total
-        logging.debug(f"DMSCore: process_frame (HÍBRIDO + POSE SUAVE AUM.) {total_time:.4f}s.")
+        logging.debug(f"DMSCore: process_frame (HÍBRIDO + POSE SUAVE + OFFSETS + TR_CONF_RED) {total_time:.4f}s.") # Descrição atualizada
         return frame, events_list, status_data
 
     def update_settings(self, settings):
         """Atualiza configurações."""
+        # ... (igual à versão anterior - já aceita offsets) ...
         logging.debug(f"DMSCore: Tentando atualizar conf: {settings}")
         with self.lock:
             try:
@@ -276,17 +279,19 @@ class DriverMonitor:
                 self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold))
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle)) # Yaw
-                # (AJUSTADO) Usa o valor atualizado da classe no log
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
                 self.pitch_up_threshold = float(settings.get('pitch_up_threshold', self.pitch_up_threshold))
                 self.pitch_down_offset = float(settings.get('pitch_down_offset', self.pitch_down_offset))
-                logging.info(f"Conf DMS Core: EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Yaw>{self.distraction_angle}({self.distraction_frames}f), Pitch<({self.pitch_up_threshold})>({self.distraction_angle + self.pitch_down_offset})")
+                self.yaw_center_offset = float(settings.get('yaw_center_offset', self.yaw_center_offset))
+                self.pitch_center_offset = float(settings.get('pitch_center_offset', self.pitch_center_offset))
+                logging.info(f"Conf DMS Core: EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Yaw>{self.distraction_angle}({self.distraction_frames}f, Off:{self.yaw_center_offset:.1f}), Pitch<({self.pitch_up_threshold})>({self.pitch_down_offset})({self.distraction_frames}f, Off:{self.pitch_center_offset:.1f})")
                 return True
             except (ValueError, TypeError) as e: logging.error(f"Erro conf (valor inválido?): {e}"); return False
             except Exception as e: logging.error(f"Erro inesperado conf: {e}", exc_info=True); return False
 
     def get_settings(self):
         """Obtém configurações."""
+        # ... (igual à versão anterior - já retorna offsets) ...
         logging.debug("DMSCore: get_settings.")
         with self.lock:
             return {"ear_threshold": self.ear_threshold, "ear_frames": self.ear_frames,
@@ -294,6 +299,8 @@ class DriverMonitor:
                     "distraction_angle": self.distraction_angle, # Yaw
                     "distraction_frames": self.distraction_frames,
                     "pitch_up_threshold": self.pitch_up_threshold,
-                    "pitch_down_offset": self.pitch_down_offset
+                    "pitch_down_offset": self.pitch_down_offset,
+                    "yaw_center_offset": self.yaw_center_offset,
+                    "pitch_center_offset": self.pitch_center_offset
                    }
 
