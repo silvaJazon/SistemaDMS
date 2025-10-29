@@ -59,8 +59,10 @@ class DriverMonitor:
         # Configurações (Padrão)
         self.ear_threshold = 0.25; self.ear_frames = 15
         self.mar_threshold = 0.60; self.mar_frames = 20
-        # (NOVO) Flag para ativar/desativar deteção de distração
-        self.distraction_detection_enabled = True
+        
+        # (CORRIGIDO) Flag para ativar/desativar deteção de distração (padrão False)
+        self.distraction_detection_enabled = False # <-- CORRIGIDO
+        
         self.distraction_angle = 40.0 # Yaw
         self.distraction_frames = 35
         self.pitch_down_offset = 20.0
@@ -294,8 +296,10 @@ class DriverMonitor:
                 self.ear_frames = int(settings.get('ear_frames', self.ear_frames))
                 self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold))
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
+                
                 # (NOVO) Atualiza flag de ativação
                 self.distraction_detection_enabled = bool(settings.get('distraction_detection_enabled', self.distraction_detection_enabled))
+                
                 self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle)) # Yaw
                 self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
                 self.pitch_up_threshold = float(settings.get('pitch_up_threshold', self.pitch_up_threshold))
@@ -333,4 +337,3 @@ class DriverMonitor:
                     "yaw_center_offset": self.yaw_center_offset,
                     "pitch_center_offset": self.pitch_center_offset
                    }
-
