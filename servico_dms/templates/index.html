@@ -5,57 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Calibração</title>
     <style>
-        body {
-            font-family: sans-serif;
-            background-color: #222;
-            color: #eee;
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-        .container {
-            display: flex;
-            flex-wrap: wrap; /* Permite quebrar linha em ecrãs pequenos */
-            gap: 20px;
-            flex-grow: 1;
-        }
-        .video-container {
-            flex: 2; /* Ocupa mais espaço */
-            min-width: 320px; /* Largura mínima */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .controls-container {
-            flex: 1; /* Ocupa menos espaço */
-            min-width: 280px; /* Largura mínima */
-            background-color: #333;
-            padding: 20px;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        h1, h2 {
-            text-align: center;
-            margin-bottom: 20px;
-        }
+        body { font-family: sans-serif; background-color: #222; color: #eee; margin: 0; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; }
+        .container { display: flex; flex-wrap: wrap; gap: 20px; flex-grow: 1; }
+        .video-container { flex: 2; min-width: 320px; display: flex; flex-direction: column; align-items: center; }
+        .controls-container { flex: 1; min-width: 280px; background-color: #333; padding: 20px; border-radius: 8px; display: flex; flex-direction: column; gap: 15px; }
+        h1, h2 { text-align: center; margin-bottom: 20px; }
         nav { text-align: center; margin-bottom: 20px; }
         nav a { color: #7fadf7; text-decoration: none; margin: 0 15px; font-size: 1.1em; }
         nav a:hover { text-decoration: underline; }
-        img#stream {
-            border: 1px solid #555;
-            background-color: #000;
-            max-width: 100%;
-            height: auto;
-            border-radius: 8px;
-        }
+        img#stream { border: 1px solid #555; background-color: #000; max-width: 100%; height: auto; border-radius: 8px; }
         label { display: block; margin-bottom: 5px; color: #ccc; }
         input[type="range"] { width: 100%; cursor: pointer; }
         select { width: 100%; padding: 8px; border-radius: 4px; background-color: #444; color: #eee; border: 1px solid #555; }
-        /* Ajuste na largura mínima do valor do slider para acomodar negativos */
         .slider-value { font-weight: bold; color: #fff; margin-left: 10px; min-width: 40px; display: inline-block; text-align: right; }
         button { padding: 10px 15px; background-color: #555; color: #eee; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; }
         button:hover { background-color: #666; }
@@ -87,10 +48,9 @@
             <div class="status-info">
                 <span>EAR: <span id="status-ear">-</span></span> |
                 <span>MAR: <span id="status-mar">-</span></span> |
-                <span>Yaw: <span id="status-yaw">-</span></span> |
-                <span>Pitch: <span id="status-pitch">-</span></span> |
-                <span>Roll: <span id="status-roll">-</span></span>
-                <!-- Renomeado para "Fila" -->
+                <!-- (ALTERADO) Mostra Posição Relativa dos Olhos -->
+                <span>Olho X: <span id="status-eye_x">-</span></span> |
+                <span>Olho Y: <span id="status-eye_y">-</span></span>
                 <span class="queue-status queue-status-unknown" id="status-queue">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
         </div>
@@ -119,31 +79,34 @@
                 <input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="mar_frames_value">20</span>
             </div>
-            <!-- Distração Yaw -->
+
+            <!-- (NOVO) Distração por Posição Relativa dos Olhos -->
             <div>
-                <label for="distraction_angle">Ângulo Yaw Distração (°): <span class="info-icon" title="Ângulo LATERAL (Yaw) para distração. Maior = menos sensível.">ⓘ</span></label>
-                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
-                <span class="slider-value" id="distraction_angle_value">35</span>
+                <label for="eye_pos_h_threshold_min">Limite Olho Esq. (%): <span class="info-icon" title="Posição horizontal relativa dos olhos (0=esquerda, 1=direita). Abaixo disto = alerta de distração lateral.">ⓘ</span></label>
+                <input type="range" id="eye_pos_h_threshold_min" name="eye_pos_h_threshold_min" min="0.0" max="0.5" step="0.01">
+                <span class="slider-value" id="eye_pos_h_threshold_min_value">0.35</span>
             </div>
-            <!-- (NOVO) Distração Pitch Up -->
              <div>
-                <label for="pitch_up_threshold">Limite Pitch Acima (°): <span class="info-icon" title="Ângulo VERTICAL (Pitch) limite para olhar para CIMA. Valores mais NEGATIVOS são MENOS sensíveis (ex: -30 permite olhar mais para cima que -10).">ⓘ</span></label>
-                <input type="range" id="pitch_up_threshold" name="pitch_up_threshold" min="-40" max="0" step="1">
-                <span class="slider-value" id="pitch_up_threshold_value">-10</span>
+                <label for="eye_pos_h_threshold_max">Limite Olho Dir. (%): <span class="info-icon" title="Posição horizontal relativa dos olhos (0=esquerda, 1=direita). Acima disto = alerta de distração lateral.">ⓘ</span></label>
+                <input type="range" id="eye_pos_h_threshold_max" name="eye_pos_h_threshold_max" min="0.5" max="1.0" step="0.01">
+                <span class="slider-value" id="eye_pos_h_threshold_max_value">0.65</span>
             </div>
-            <!-- (NOVO) Distração Pitch Down -->
-            <div>
-                <!-- Nome do parâmetro corrigido para 'pitch_down_offset' -->
-                <label for="pitch_down_offset">Offset Pitch Abaixo (°): <span class="info-icon" title="Quanto MAIS para baixo (além do Ângulo Yaw) para distração (olhar p/ BAIXO). Maior = MENOS sensível.">ⓘ</span></label>
-                <input type="range" id="pitch_down_offset" name="pitch_down_offset" min="0" max="40" step="1">
-                <span class="slider-value" id="pitch_down_offset_value">15</span>
+             <div>
+                <label for="eye_pos_v_threshold_min">Limite Olho Acima (%): <span class="info-icon" title="Posição vertical relativa dos olhos (0=topo, 1=base). Abaixo disto = alerta de distração vertical (olhar p/ cima).">ⓘ</span></label>
+                <input type="range" id="eye_pos_v_threshold_min" name="eye_pos_v_threshold_min" min="0.0" max="0.5" step="0.01">
+                <span class="slider-value" id="eye_pos_v_threshold_min_value">0.30</span>
             </div>
-             <!-- Frames Distração (comum a Yaw/Pitch) -->
             <div>
-                <label for="distraction_frames">Frames Distração: <span class="info-icon" title="Nº frames com cabeça virada (Yaw ou Pitch fora dos limites) para alerta.">ⓘ</span></label>
+                <label for="eye_pos_v_threshold_max">Limite Olho Abaixo (%): <span class="info-icon" title="Posição vertical relativa dos olhos (0=topo, 1=base). Acima disto = alerta de distração vertical (olhar p/ baixo).">ⓘ</span></label>
+                <input type="range" id="eye_pos_v_threshold_max" name="eye_pos_v_threshold_max" min="0.5" max="1.0" step="0.01">
+                <span class="slider-value" id="eye_pos_v_threshold_max_value">0.60</span>
+            </div>
+            <div>
+                <label for="distraction_frames">Frames Distração: <span class="info-icon" title="Nº frames com olhos fora dos limites para alerta.">ⓘ</span></label>
                 <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
+            <!-- Sliders de Yaw/Pitch Removidos -->
 
             <h2>Configurações da Câmara</h2>
             <div>
@@ -171,24 +134,20 @@
         const resetButton = document.getElementById('reset_button');
         let defaultSettings = {};
 
-        // Mapeia nomes de status para elementos
+        // (ALTERADO) Referências para status eye_x e eye_y
         const statusElements = {
             ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
-            yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
-            roll: document.getElementById('status-roll')
+            eye_x: document.getElementById('status-eye_x'), eye_y: document.getElementById('status-eye_y')
+            // Removido yaw, pitch, roll
         };
-        // Mapeia nomes da fila para elementos
         const queueElements = {
             span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'),
             max: document.getElementById('status-queue-max')
         };
 
-        // Função auxiliar para formatar números (incluindo negativos)
         function formatNumber(value, decimalPlaces = 2) {
             const num = parseFloat(value);
-            // Verifica se é NaN ou se a string original era '-'
-            if (isNaN(num) || String(value).trim() === '-') return '-';
-            return num.toFixed(decimalPlaces);
+            return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
 
         async function fetchAndUpdateSettings() {
@@ -198,39 +157,37 @@
                 const data = await response.json();
                 console.debug("Conf recebida:", data);
 
-                // Guarda padrões na primeira vez
                 if (Object.keys(defaultSettings).length === 0 && data && !data.error) {
                     defaultSettings = { ...data };
                     delete defaultSettings.status; delete defaultSettings.queue_depth; delete defaultSettings.queue_max_size;
                     console.debug("Padrões guardados:", defaultSettings);
                 }
 
-                // Atualiza sliders e dropdown
+                // Atualiza sliders (incluindo os novos de posição relativa)
                 sliders.forEach(slider => {
                     const valueSpan = document.getElementById(`${slider.id}_value`);
                     if (data.hasOwnProperty(slider.name)) {
                         slider.value = data[slider.name];
                         if (valueSpan) {
                             const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
-                            valueSpan.textContent = formatNumber(data[slider.name], decimals); // Usa formatNumber
+                            valueSpan.textContent = formatNumber(data[slider.name], decimals);
                         }
                     } else console.warn(`Conf '${slider.name}' não encontrada.`);
                 });
                 if (data.hasOwnProperty('rotation')) rotationSelect.value = data.rotation;
                 else console.warn("Conf 'rotation' não encontrada.");
 
-                // Atualiza status EAR, MAR, etc.
+                // (ALTERADO) Atualiza status com eye_x, eye_y
                 if (data.status) {
                     for (const key in statusElements) {
-                        // Determina casas decimais com base na chave
-                        const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
-                        statusElements[key].textContent = formatNumber(data.status[key], decimals);
+                         // Formata com 2 casas decimais para ear, mar, eye_x, eye_y
+                        statusElements[key].textContent = formatNumber(data.status[key], 2);
                     }
                 } else {
                     for (const key in statusElements) statusElements[key].textContent = '-';
                 }
 
-                // Atualiza status da fila
+                // Atualiza fila (igual)
                 if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
                     const depth = data.queue_depth, max_size = data.queue_max_size;
                     queueElements.depth.textContent = depth; queueElements.max.textContent = max_size;
@@ -283,20 +240,18 @@
             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-        // Listeners para sliders e select
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
                 slider.addEventListener('input', () => {
                     const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
-                    valueSpan.textContent = formatNumber(slider.value, decimals); // Usa formatNumber
+                    valueSpan.textContent = formatNumber(slider.value, decimals);
                 });
                 slider.addEventListener('change', postSettings);
             }
         });
         rotationSelect.addEventListener('change', postSettings);
 
-        // Listener para botão Reset
         resetButton.addEventListener('click', () => {
             if (Object.keys(defaultSettings).length > 0) {
                  console.debug("A restaurar padrões:", defaultSettings);
@@ -306,12 +261,12 @@
                         slider.value = defaultSettings[slider.name];
                          if (valueSpan) {
                             const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
-                            valueSpan.textContent = formatNumber(defaultSettings[slider.name], decimals); // Usa formatNumber
+                            valueSpan.textContent = formatNumber(defaultSettings[slider.name], decimals);
                          }
                     }
                 });
                  if (defaultSettings.hasOwnProperty('rotation')) rotationSelect.value = defaultSettings.rotation;
-                postSettings(); // Envia padrões para API
+                postSettings(); // Envia os padrões para a API
             } else {
                 console.warn("Padrões não carregados.");
                 saveStatus.textContent = "Padrões não carregados."; saveStatus.style.color = "#ffeb3b";
@@ -319,25 +274,22 @@
             }
         });
 
-        // Loop de atualização e busca inicial
         const statusInterval = setInterval(fetchAndUpdateSettings, 2000);
-        fetchAndUpdateSettings();
+        fetchAndUpdateSettings(); // Busca inicial
 
-        // Tratamento de erro do stream
         var stream = document.getElementById("stream");
         let errorTimeout = null;
         stream.onerror = function(event) {
             console.error("Erro stream (onerror). Evento:", event);
-            // Mostra imagem preta (ou placeholder) em caso de erro
             stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=";
             if (!errorTimeout) {
                  console.warn("Tentando recarregar stream em 5s...");
                  errorTimeout = setTimeout(function() {
                     var timestamp = new Date().getTime();
-                    var newSrc = "{{ url_for('video_feed') }}?" + timestamp; // Evita cache
+                    var newSrc = "{{ url_for('video_feed') }}?" + timestamp;
                     console.log("Tentando src:", newSrc);
                     stream.src = newSrc;
-                    errorTimeout = null; // Permite nova tentativa
+                    errorTimeout = null;
                 }, 5000);
             } else console.log("Timeout recarga ativo.");
         };
@@ -346,7 +298,6 @@
              if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; }
         }
 
-        // Limpeza ao fechar
         window.addEventListener('beforeunload', () => {
             clearInterval(statusInterval);
             if (errorTimeout) clearTimeout(errorTimeout);
