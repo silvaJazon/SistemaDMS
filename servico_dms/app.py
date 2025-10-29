@@ -61,6 +61,14 @@ INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 # (CORRIGIDO) Adiciona .strip() para remover espaços em branco
 DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper().strip()
 
+# ================== ALTERAÇÃO (Padrões Centralizados) ==================
+# Configurações Padrão de Deteção (centralizadas)
+DEFAULT_EAR_THRESHOLD = 0.25
+DEFAULT_EAR_FRAMES = 7
+DEFAULT_MAR_THRESHOLD = 0.40
+DEFAULT_MAR_FRAMES = 10
+# =======================================================================
+
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -370,22 +378,41 @@ if __name__ == '__main__':
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
+        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+        # Cria dicionário de padrões para passar aos monitores
+        default_dms_settings = {
+            "ear_threshold": DEFAULT_EAR_THRESHOLD,
+            "ear_frames": DEFAULT_EAR_FRAMES,
+            "mar_threshold": DEFAULT_MAR_THRESHOLD,
+            "mar_frames": DEFAULT_MAR_FRAMES
+            # (Nota: Padrões de distração são definidos internamente nos backends)
+        }
+        # =======================================================================
+        
         # (ALTERADO) Lógica para escolher o backend
         if DETECTION_BACKEND == 'MEDIAPIPE':
             if HAS_MEDIAPIPE:
-                dms_monitor = MediaPipeMonitor(frame_size=frame_size)
+                # (ALTERADO) Passa os padrões
+                dms_monitor = MediaPipeMonitor(frame_size=frame_size,
+                                               default_settings=default_dms_settings)
             else:
                 logging.error("!!! DETECTION_BACKEND='MEDIAPIPE' mas a importação falhou. A usar DLIB.")
                 DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-                dms_monitor = DlibMonitor(frame_size=frame_size)
+                # (ALTERADO) Passa os padrões
+                dms_monitor = DlibMonitor(frame_size=frame_size,
+                                          default_settings=default_dms_settings)
         
         elif DETECTION_BACKEND == 'DLIB':
-            dms_monitor = DlibMonitor(frame_size=frame_size)
+            # (ALTERADO) Passa os padrões
+            dms_monitor = DlibMonitor(frame_size=frame_size,
+                                      default_settings=default_dms_settings)
         
         else:
             logging.error(f"!!! DETECTION_BACKEND '{DETECTION_BACKEND}' desconhecido. A usar DLIB.")
             DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-            dms_monitor = DlibMonitor(frame_size=frame_size)
+            # (ALTERADO) Passa os padrões
+            dms_monitor = DlibMonitor(frame_size=frame_size,
+                                      default_settings=default_dms_settings)
 
         cam_thread = CameraThread(
             VIDEO_SOURCE,
@@ -475,4 +502,3 @@ if __name__ == '__main__':
 
         logging.info(">>> Serviço DMS terminado.")
         os._exit(0)  # Força a saída
-

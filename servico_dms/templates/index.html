@@ -68,7 +68,6 @@
 </head>
 <body class="bg-gray-800 text-gray-200 font-sans min-h-screen">
 
-    <!-- Cabeçalho -->
     <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg">
         <h1 class="text-3xl font-bold text-center text-white">SistemaDMS - Calibração ao Vivo</h1>
         <nav class="flex justify-center gap-6 mt-4">
@@ -77,10 +76,8 @@
         </nav>
     </header>
 
-    <!-- Container Principal (Grid) -->
     <main class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 flex-grow">
 
-        <!-- Coluna de Vídeo -->
         <section class="lg:col-span-2 bg-gray-900 p-6 rounded-lg shadow-2xl flex flex-col items-center justify-center">
             <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
             <p class="mt-4 text-gray-400">Fonte: {{ source_desc }}</p>
@@ -94,11 +91,9 @@
             </div>
         </section>
 
-        <!-- (ALTERADO) Coluna de Controles (Wrapper para JS) -->
         <aside id="controls-container" class="lg:col-span-1 bg-gray-900 p-6 rounded-lg shadow-2xl space-y-6 overflow-y-auto">
 
-            <!-- Sonolência -->
-            <details open>
+            <details>
                 <summary>Deteção de Sonolência</summary>
                 <div class="p-4 space-y-4">
                     <div class="control-group">
@@ -107,30 +102,27 @@
                     </div>
                     <div class="control-group">
                         <label for="ear_frames">Frames Sonolência <span class="info-icon" title="Nº frames com EAR baixo.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1"><span class="slider-value" id="ear_frames_value">15</span></div>
+                        <div class="input-row"><input type="range" id="ear_frames" name="ear_frames" min="5" max="50" step="1"><span class="slider-value" id="ear_frames_value">7</span></div>
                     </div>
                     <div class="control-group">
                         <label for="mar_threshold">Limite MAR Bocejo <span class="info-icon" title="MAR acima indica bocejo.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="mar_threshold" name="mar_threshold" min="0.4" max="1.0" step="0.01"><span class="slider-value" id="mar_threshold_value">0.60</span></div>
+                        <div class="input-row"><input type="range" id="mar_threshold" name="mar_threshold" min="0.4" max="1.0" step="0.01"><span class="slider-value" id="mar_threshold_value">0.40</span></div>
                     </div>
                     <div class="control-group">
                         <label for="mar_frames">Frames Bocejo <span class="info-icon" title="Nº frames com MAR alto.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1"><span class="slider-value" id="mar_frames_value">20</span></div>
+                        <div class="input-row"><input type="range" id="mar_frames" name="mar_frames" min="5" max="60" step="1"><span class="slider-value" id="mar_frames_value">10</span></div>
                     </div>
-                </div>
+                    </div>
             </details>
 
-            <!-- Distração -->
-            <details open>
+            <details>
                 <summary>Deteção de Distração</summary>
                 <div class="p-4 space-y-4">
-                    <!-- Checkbox Ativar/Desativar -->
                     <div class="flex items-center">
                         <input type="checkbox" id="distraction_detection_enabled" name="distraction_detection_enabled" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
                         <label for="distraction_detection_enabled" class="ml-2 text-sm font-medium text-gray-300">Ativar Deteção de Distração</label>
                     </div>
 
-                    <!-- Grupo de controlos de distração -->
                     <div id="distraction-controls-group" class="space-y-4 transition-opacity duration-300">
                         <div class="control-group">
                             <label for="distraction_angle">Ângulo Yaw (°) <span class="info-icon" title="Ângulo LATERAL relativo ao centro.">ⓘ</span></label>
@@ -148,8 +140,7 @@
                             <label for="distraction_frames">Frames Distração <span class="info-icon" title="Nº frames com cabeça fora dos limites.">ⓘ</span></label>
                             <div class="input-row"><input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1"><span class="slider-value" id="distraction_frames_value">35</span></div>
                         </div>
-                         <!-- Calibração Central -->
-                        <div class="calibration-section border-t border-gray-600 pt-4 mt-4 space-y-4">
+                         <div class="calibration-section border-t border-gray-600 pt-4 mt-4 space-y-4">
                             <h3 class="text-base font-semibold">Calibração Central</h3>
                             <div class="control-group">
                                 <label for="yaw_center_offset">Offset Yaw (°) <span class="info-icon" title="Ajuste Yaw '0'.">ⓘ</span></label>
@@ -162,11 +153,9 @@
                             <button id="start_calibration_button" class="btn btn-blue w-full">Iniciar Calibração (3s)</button>
                             <p id="calibration_status" class="text-center font-semibold min-h-[1.2em]"></p>
                         </div>
-                    </div> <!-- Fim #distraction-controls-group -->
-                </div>
+                    </div> </div>
             </details>
 
-            <!-- Câmara -->
             <details>
                 <summary>Configurações da Câmara</summary>
                 <div class="p-4 space-y-4">
@@ -184,7 +173,6 @@
                 </div>
             </details>
 
-            <!-- Perfis -->
             <details open class="profile-section">
                 <summary>Perfis de Configuração</summary>
                 <div class="p-4 space-y-4">
@@ -582,4 +570,3 @@
     </script>
 </body>
 </html>
-

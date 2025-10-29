@@ -37,9 +37,11 @@ class MediaPipeMonitor(BaseMonitor):
     A deteção de pose/distração NÃO está implementada nesta versão.
     """
 
-    def __init__(self, frame_size):
-        super().__init__(frame_size)
+    # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+    def __init__(self, frame_size, default_settings: dict = None):
+        super().__init__(frame_size, default_settings) # (ALTERADO)
         logging.info("A inicializar o MediaPipeMonitor Core (Modo: EAR + MAR)...")
+    # ===================================================================
 
         # Inicializa o MediaPipe FaceMesh
         try:
@@ -60,9 +62,15 @@ class MediaPipeMonitor(BaseMonitor):
         self.drowsy_alert_active = False
         self.yawn_alert_active = False
 
-        # Configurações (Padrão) - Mantém a estrutura completa
-        self.ear_threshold = 0.25; self.ear_frames = 15
-        self.mar_threshold = 0.60; self.mar_frames = 20
+        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+        # Define os padrões de EAR/MAR a partir do dict (vindo do app.py)
+        # ou usa padrões 'de emergência' (fallbacks) se não forem fornecidos.
+        self.ear_threshold = self.default_settings.get('ear_threshold', 0.25)
+        self.ear_frames = self.default_settings.get('ear_frames', 7) # Fallback
+        self.mar_threshold = self.default_settings.get('mar_threshold', 0.40) # Fallback
+        self.mar_frames = self.default_settings.get('mar_frames', 10) # Fallback
+        # =======================================================================
+        
         # A distração está desativada por *implementação*
         self.distraction_detection_enabled = False
         self.distraction_angle = 40.0

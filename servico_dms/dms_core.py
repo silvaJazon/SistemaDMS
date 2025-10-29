@@ -39,12 +39,14 @@ class DlibMonitor(BaseMonitor):
     ])
     HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54]
 
-    def __init__(self, frame_size):
+    # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+    def __init__(self, frame_size, default_settings: dict = None):
         # (NOVO) Chama o __init__ da classe base
-        super().__init__(frame_size) 
+        super().__init__(frame_size, default_settings) # (ALTERADO) Passa os settings
         
         # (ALTERADO) Log específico do Dlib
         logging.info("A inicializar o DlibMonitor Core (Modo: Pose 3D Suavizada + Offsets + Distração Opcional)...")
+    # ===================================================================
         # O resto do __init__ permanece igual
         self.focal_length = self.frame_width
         self.camera_center = (self.frame_width / 2, self.frame_height / 2)
@@ -64,11 +66,18 @@ class DlibMonitor(BaseMonitor):
         self.yaw_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
         self.pitch_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
 
-        # Configurações (Padrão)
-        self.ear_threshold = 0.25; self.ear_frames = 15
-        self.mar_threshold = 0.60; self.mar_frames = 20
+        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+        # Define os padrões de EAR/MAR a partir do dict (vindo do app.py)
+        # ou usa padrões 'de emergência' (fallbacks) se não forem fornecidos.
+        self.ear_threshold = self.default_settings.get('ear_threshold', 0.25)
+        self.ear_frames = self.default_settings.get('ear_frames', 7) # Fallback
+        self.mar_threshold = self.default_settings.get('mar_threshold', 0.40) # Fallback
+        self.mar_frames = self.default_settings.get('mar_frames', 10) # Fallback
+        # =======================================================================
+
         # (CORRIGIDO) Garante que o padrão é False
         self.distraction_detection_enabled = False
+        # Padrões específicos de Distração (continuam internos)
         self.distraction_angle = 40.0 # Yaw
         self.distraction_frames = 35
         self.pitch_down_offset = 20.0
@@ -341,4 +350,3 @@ class DlibMonitor(BaseMonitor):
                     "yaw_center_offset": self.yaw_center_offset,
                     "pitch_center_offset": self.pitch_center_offset
                    }
-

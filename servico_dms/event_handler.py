@@ -160,13 +160,19 @@ class EventHandler(threading.Thread):
             conn = sqlite3.connect(self.db_path, timeout=10.0) # Cria ligação (sem autocommit para leitura)
             conn.row_factory = sqlite3.Row # Retorna como dicionários
             cursor = conn.cursor()
+            
+            # ================== ALTERAÇÃO (Correção Erro) ==================
+            # Garante que 'limit' é um inteiro para evitar 'datatype mismatch'.
+            safe_limit = int(limit) 
+            # ===============================================================
+
             logging.debug("GetAlerts: Ligação criada, a executar SELECT...") # NOVO DEBUG
             cursor.execute('''
                 SELECT id, timestamp, event_type, details, image_file
                 FROM alerts
                 ORDER BY timestamp DESC
                 LIMIT ?
-            ''', (limit,))
+            ''', (safe_limit,)) # (ALTERADO) Usa safe_limit
             alerts = [dict(row) for row in cursor.fetchall()]
             logging.debug(f"GetAlerts: SELECT retornou {len(alerts)} alertas.") # NOVO DEBUG
         except sqlite3.Error as e:
@@ -181,4 +187,3 @@ class EventHandler(threading.Thread):
                 conn.close() # (NOVO) Garante que fecha a ligação local
 
         return alerts
-
