@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SistemaDMS - Calibração</title>
-    <!-- (NOVO) Adicionado Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         /* Estilo para sliders */
@@ -19,7 +18,7 @@
             opacity: 0.9;
             transition: opacity .2s;
         }
-        input[type="range"]:hover {
+        input[type="range"]:hover:not(:disabled) {
             opacity: 1;
         }
         input[type="range"]::-webkit-slider-thumb {
@@ -44,9 +43,11 @@
         }
         input[type="range"]:disabled::-webkit-slider-thumb {
             background: #718096; /* bg-gray-500 */
+            cursor: not-allowed;
         }
         input[type="range"]:disabled::-moz-range-thumb {
             background: #718096; /* bg-gray-500 */
+            cursor: not-allowed;
         }
         /* Estilo para tags <details> (agrupadores) */
         details > summary {
@@ -177,14 +178,14 @@
                 <summary>Calibração Central</summary>
                 <div class="details-content">
                     <div>
-                        <label for="yaw_center_offset" class="flex justify-between">Offset Central Yaw (°) <span class="info-icon" title="Ajuste para definir o Yaw '0' (olhar em frente). Calibre ou ajuste manualmente.">ⓘ</span></label>
+                        <label for="yaw_center_offset" class="flex justify-between">Offset Central Yaw (°) <span class="info-icon" title="Ajuste para definir o Yaw '0' (olhar em frente). Calibre ou ajuste manually.">ⓘ</span></label>
                         <div class="flex items-center gap-3">
                             <input type="range" id="yaw_center_offset" name="yaw_center_offset" min="-45" max="45" step="0.5">
                             <span class="slider-value" id="yaw_center_offset_value">0.0</span>
                         </div>
                     </div>
                     <div>
-                        <label for="pitch_center_offset" class="flex justify-between">Offset Central Pitch (°) <span class="info-icon" title="Ajuste para definir o Pitch '0' (olhar em frente). Calibre ou ajuste manualmente.">ⓘ</span></label>
+                        <label for="pitch_center_offset" class="flex justify-between">Offset Central Pitch (°) <span class="info-icon" title="Ajuste para definir o Pitch '0' (olhar em frente). Calibre ou ajuste manually.">ⓘ</span></label>
                         <div class="flex items-center gap-3">
                             <input type="range" id="pitch_center_offset" name="pitch_center_offset" min="-45" max="45" step="0.5">
                             <span class="slider-value" id="pitch_center_offset_value">0.0</span>
@@ -242,9 +243,9 @@
     <script>
         // --- Seletores de Elementos ---
         const sliders = document.querySelectorAll('input[type="range"]');
-        const allDetectionSliders = document.querySelectorAll('input[type="range"]:not([name="brightness"])'); // (NOVO) Todos exceto brilho
+        const allDetectionSliders = document.querySelectorAll('input[type="range"]:not([name="brightness"])');
         const rotationSelect = document.getElementById('rotation');
-        const brightnessSlider = document.getElementById('brightness'); // (NOVO)
+        const brightnessSlider = document.getElementById('brightness');
         const saveStatus = document.getElementById('save_status');
         const resetButton = document.getElementById('reset_button');
         const profileSelect = document.getElementById('profile_select');
@@ -252,7 +253,7 @@
         const saveProfileButton = document.getElementById('save_profile_button');
         const loadProfileButton = document.getElementById('load_profile_button');
         const deleteProfileButton = document.getElementById('delete_profile_button');
-        const updateProfileButton = document.getElementById('update_profile_button'); // (NOVO)
+        const updateProfileButton = document.getElementById('update_profile_button');
         const startCalibrationButton = document.getElementById('start_calibration_button');
         const calibrationStatus = document.getElementById('calibration_status');
         const yawOffsetSlider = document.getElementById('yaw_center_offset');
@@ -278,36 +279,22 @@
         const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
         // --- Funções Auxiliares ---
-
         function formatNumber(value, decimalPlaces = 2) {
             const num = parseFloat(value);
             return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
         
-        // (NOVO) Controla o estado (ativo/bloqueado) dos controlos
         function updateControlStates(isDefaultProfile) {
             console.debug(`updateControlStates: isDefaultProfile=${isDefaultProfile}`);
-            
-            // Bloqueia/desbloqueia sliders de deteção
-            allDetectionSliders.forEach(slider => {
-                slider.disabled = !isDefaultProfile;
-            });
-            
-            // Sliders da câmara estão sempre ativos
-            brightnessSlider.disabled = false;
-            rotationSelect.disabled = false;
-
-            // Botões de calibração e offsets
+            allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
+            brightnessSlider.disabled = false; rotationSelect.disabled = false;
             startCalibrationButton.disabled = !isDefaultProfile || isCalibrating;
             yawOffsetSlider.disabled = !isDefaultProfile;
             pitchOffsetSlider.disabled = !isDefaultProfile;
-
-            // Botões de Perfil
-            updateProfileButton.disabled = isDefaultProfile; // Só pode atualizar perfis salvos
-            deleteProfileButton.disabled = isDefaultProfile; // Só pode apagar perfis salvos
+            updateProfileButton.disabled = isDefaultProfile;
+            deleteProfileButton.disabled = isDefaultProfile;
         }
 
-        // Aplica um objeto de settings aos controlos da UI
         function applySettingsToControls(settings) {
             sliders.forEach(slider => {
                 const valueSpan = document.getElementById(`${slider.id}_value`);
@@ -321,12 +308,9 @@
             });
             if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
             else console.warn("Apply: Setting 'rotation' não encontrado.");
-            
-            // Atualiza o estado dos controlos (bloqueado/desbloqueado)
             updateControlStates(profileSelect.value === "__default__");
         }
         
-        // Retorna um objeto com os valores atuais de todos os controlos
         function getCurrentControlSettings() {
              const currentSettings = {};
              sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
@@ -335,9 +319,8 @@
         }
 
         // --- Comunicação API (Backend) ---
-
         async function fetchAndUpdateSettings() {
-             if (isCalibrating) { /* ... (igual, busca só status) ... */
+             if (isCalibrating) {
                  try {
                      const response = await fetch('/api/config');
                      if (!response.ok) return;
@@ -353,7 +336,7 @@
                  } catch(error) { console.warn("Erro status calibração:", error); }
                  return;
             }
-            try { /* ... (igual) ... */
+            try {
                 const response = await fetch('/api/config');
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
@@ -385,7 +368,7 @@
                     queueElements.span.className = 'queue-status queue-status-unknown';
                     if(data.queue_depth === -1) console.warn("Erro status fila.");
                 }
-            } catch (error) { /* ... (igual) ... */
+            } catch (error) {
                 console.error("Erro buscar conf/status:", error);
                 for (const key in statusElements) statusElements[key].textContent = 'Erro';
                 queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?';
@@ -396,7 +379,7 @@
 
         async function postSettings(settingsToPost) {
              if(isCalibrating) return;
-             if (!settingsToPost) settingsToPost = getCurrentControlSettings(); // Pega valores atuais se não for passado
+             if (!settingsToPost) settingsToPost = getCurrentControlSettings();
             console.debug("A enviar conf:", settingsToPost);
             try {
                 saveStatus.textContent = "A guardar..."; saveStatus.style.color = "#ffeb3b";
@@ -410,7 +393,7 @@
         }
 
         // --- Funções de Gestão de Perfis ---
-        function getSavedProfiles() { /* ... (igual) ... */
+        function getSavedProfiles() {
             const profiles = {};
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
@@ -418,14 +401,13 @@
                     try {
                         const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
                         const profileData = JSON.parse(localStorage.getItem(key));
-                        // Garante que todos os parâmetros existem
                         profiles[profileName] = { ...defaultProfile, ...profileData };
                     } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
                 }
             }
             return profiles;
         }
-        function populateProfileDropdown() { /* ... (igual) ... */
+        function populateProfileDropdown() {
              const profiles = getSavedProfiles();
             profileSelect.innerHTML = '';
             const defaultOption = document.createElement('option');
@@ -440,14 +422,10 @@
              console.debug("Dropdown perfis populado.");
          }
         
-        // (ALTERADO) Salva apenas como NOVO perfil
         function saveProfile() {
              const profileName = profileNameInput.value.trim();
             if (!profileName || profileName === "Padrão" || profileName === "__default__") { saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-            if (getSavedProfiles()[profileName]) { // Verifica se já existe
-                 saveStatus.textContent = "Perfil já existe. Use 'Atualizar'."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return;
-            }
-            
+            if (getSavedProfiles()[profileName]) { saveStatus.textContent = "Perfil já existe. Use 'Atualizar'."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             const currentSettings = getCurrentControlSettings();
             try {
                 const storageKey = PROFILE_STORAGE_PREFIX + profileName;
@@ -459,17 +437,17 @@
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
          
-        // (NOVO) Atualiza o perfil selecionado
         function updateProfile() {
             const selectedName = profileSelect.value;
             if (selectedName === "__default__") { saveStatus.textContent = "Selecione um perfil salvo para atualizar."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             
+            // (CORREÇÃO) Pega os valores dos sliders *desabilitados*
+            // A função getCurrentControlSettings() já faz isso corretamente.
             const currentSettings = getCurrentControlSettings();
              try {
                 const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
                 localStorage.setItem(storageKey, JSON.stringify(currentSettings));
                 saveStatus.textContent = `Perfil '${selectedName}' atualizado!`; saveStatus.style.color = "#4CAF50";
-                // Não precisa repopular dropdown, mas garante que os controlos permanecem desabilitados
                 updateControlStates(false);
             } catch (e) { console.error(`Erro ao atualizar perfil '${selectedName}':`, e); saveStatus.textContent = "Erro ao atualizar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
@@ -490,7 +468,7 @@
                  setTimeout(() => { saveStatus.textContent = ""; }, 3000);
             }
          }
-        function deleteProfile() { /* ... (igual) ... */
+        function deleteProfile() {
              const selectedName = profileSelect.value;
             if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
@@ -504,7 +482,7 @@
         }
 
         // --- Função de Calibração Central ---
-        function startCalibration() { /* ... (igual) ... */
+        function startCalibration() {
             if (isCalibrating) return;
             isCalibrating = true; startCalibrationButton.disabled = true;
             calibrationStatus.textContent = "Olhe em FRENTE por 3 segundos..."; calibrationStatus.style.color = "#ffeb3b";
@@ -518,8 +496,12 @@
                 if (samplesCollected >= maxSamples) { clearInterval(calibrationInterval); finishCalibration(yawSamples, pitchSamples); }
             }, sampleInterval);
         }
-        function finishCalibration(yawSamples, pitchSamples) { /* ... (igual) ... */
-            isCalibrating = false; startCalibrationButton.disabled = false;
+        function finishCalibration(yawSamples, pitchSamples) {
+            isCalibrating = false; 
+            // Re-habilita o botão APENAS se o perfil Padrão ainda estiver selecionado
+            if (profileSelect.value === "__default__") {
+                startCalibrationButton.disabled = false;
+            }
             if (yawSamples.length === 0 || pitchSamples.length === 0) { calibrationStatus.textContent = "Calibração falhou."; calibrationStatus.style.color = "#f44336"; setTimeout(() => { calibrationStatus.textContent = ""; }, 3000); return; }
             const avgYaw = yawSamples.reduce((a, b) => a + b, 0) / yawSamples.length; const avgPitch = pitchSamples.reduce((a, b) => a + b, 0) / pitchSamples.length;
             console.log(`Calibração: Yaw Médio=${avgYaw.toFixed(1)}, Pitch Médio=${avgPitch.toFixed(1)}`);
@@ -531,25 +513,15 @@
 
         // --- Event Listeners ---
         
-        // (NOVO) Listener unificado para sliders e selects
-        document.querySelector('.controls-container').addEventListener('change', (e) => {
-            const target = e.target;
-            // Apenas envia POST se for um slider/select da CÂMARA (sempre live)
-            // ou se for um slider de OFFSET (sempre live)
-            if (target.name === 'brightness' || target.name === 'rotation' || 
-                target.name === 'yaw_center_offset' || target.name === 'pitch_center_offset') {
-                
-                // Se for um slider de offset, atualiza o span (input fá-lo automaticamente)
-                if (target.type === 'range') {
-                     const valueSpan = document.getElementById(`${target.id}_value`);
-                     if(valueSpan) valueSpan.textContent = formatNumber(target.value, target.step.includes('.') ? 1 : 0);
-                }
-                postSettings(); // Envia apenas para estes controlos
-            }
-        });
-        
-        // Listener de INPUT (arrastar) - Apenas atualiza o texto, não envia POST
+        // (CORRIGIDO) Listeners para 'change' (quando solta o mouse)
+        // Só envia POST se o perfil Padrão estiver ativo
         sliders.forEach(slider => {
+            slider.addEventListener('change', () => {
+                if (profileSelect.value === "__default__") {
+                    postSettings();
+                }
+            });
+            // Listener de 'input' (arrastar) - Apenas atualiza o texto
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
                 slider.addEventListener('input', () => {
@@ -558,10 +530,18 @@
                 });
             }
         });
+        
+        // (CORRIGIDO) Listener para 'change' do select de rotação
+        rotationSelect.addEventListener('change', () => {
+             if (profileSelect.value === "__default__") {
+                postSettings();
+            }
+        });
+
 
         resetButton.addEventListener('click', () => {
             console.debug("Restaurando Padrão...");
-            profileSelect.value = "__default__"; // Garante que dropdown está em Padrão
+            profileSelect.value = "__default__";
             applySettingsToControls(defaultProfile); // Aplica (e habilita controlos)
             postSettings(defaultProfile); // Envia para API
             saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50";
@@ -569,7 +549,7 @@
         });
 
         saveProfileButton.addEventListener('click', saveProfile); // Salvar Como Novo
-        updateProfileButton.addEventListener('click', updateProfile); // (NOVO) Atualizar
+        updateProfileButton.addEventListener('click', updateProfile);
         loadProfileButton.addEventListener('click', loadProfile);
         deleteProfileButton.addEventListener('click', deleteProfile);
         startCalibrationButton.addEventListener('click', startCalibration);
@@ -580,7 +560,6 @@
         profileSelect.value = "__default__"; // 2. Define Padrão
         applySettingsToControls(defaultProfile); // 3. Aplica Padrão à UI (e habilita controlos)
         postSettings(defaultProfile); // 4. Envia Padrão para API
-        // updateControlStates(true); // Chamado dentro de applySettingsToControls
 
         var stream = document.getElementById("stream");
         let errorTimeout = null;
