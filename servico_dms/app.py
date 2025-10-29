@@ -1,5 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# (VERSÃO: Usa Posição Relativa dos Olhos para Distração)
+# (VERSÃO: Híbrido Tracking+Predict + Pose 3D Suavizada)
 
 import cv2
 import time
@@ -16,7 +16,7 @@ import signal
 
 # Importa os nossos módulos
 from camera_thread import CameraThread
-from dms_core import DriverMonitor # Importa a versão atualizada
+from dms_core import DriverMonitor # Importa a versão com Pose 3D Suavizada
 from event_handler import EventHandler
 
 # Tenta importar o Waitress
@@ -42,7 +42,7 @@ VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
 FRAME_WIDTH_DISPLAY = 640
 FRAME_HEIGHT_DISPLAY = 480
 JPEG_QUALITY = 75
-TARGET_FPS = 5 # Manter 5 FPS, pois a deteção ainda é feita a cada frame
+TARGET_FPS = 5 # Manter 5 FPS devido ao custo do predictor a cada frame
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
@@ -50,8 +50,8 @@ INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 # --- Variáveis Globais ---
 output_frame_display = None
 output_frame_lock = threading.Lock()
-# (ALTERADO) Status agora inclui eye_x, eye_y
-status_data_global = {"ear": "-", "mar": "-", "eye_x": "-", "eye_y": "-"}
+# (ALTERADO) Status volta a ter Yaw, Pitch, Roll
+status_data_global = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
 status_data_lock = threading.Lock()
 stop_event = threading.Event()
 
@@ -76,12 +76,11 @@ def create_placeholder_frame(text="Aguardando camera..."):
          cv2.rectangle(frame, (10, FRAME_HEIGHT_DISPLAY//2 - 20), (FRAME_WIDTH_DISPLAY-10, FRAME_HEIGHT_DISPLAY//2 + 20), (50, 50, 50), -1)
     return frame
 
-
 # --- Threads Principais ---
 def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
-    """Loop principal de deteção (SEM TRACKING)."""
+    """Loop principal de deteção (Híbrido + Pose 3D Suavizada)."""
     global output_frame_display, status_data_global
-    logging.info(f">>> Loop de deteção (SEM TRACKING) iniciado (Alvo: {TARGET_FPS} FPS).")
+    logging.info(f">>> Loop de deteção (HÍBRIDO + POSE SUAVE) iniciado (Alvo: {TARGET_FPS} FPS).")
     last_process_time = time.time()
     frame_count = 0
 
@@ -112,7 +111,7 @@ def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
                 stop_event.wait(timeout=1.0)
                 continue
 
-            # Chama a versão SEM tracking, COM posição relativa dos olhos
+            # Chama a versão HÍBRIDA + POSE SUAVE
             processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -128,7 +127,8 @@ def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
             logging.debug("DetectionLoop: A adquirir status_data_lock...")
             with status_data_lock:
                 logging.debug("DetectionLoop: status_data_lock adquirido.")
-                status_data_global = status_data.copy() # Copia {'ear': '...', 'mar': '...', 'eye_x': '...', 'eye_y': '...'}
+                # Status agora tem ear, mar, yaw, pitch, roll
+                status_data_global = status_data.copy()
             logging.debug("DetectionLoop: status_data_lock libertado.")
 
             if events:
@@ -168,18 +168,14 @@ def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
 @app.route("/")
 def index():
     """Serve a página de calibração."""
-    # ... (igual a antes)
     cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
     return render_template("index.html", source_desc=cam_source_desc,
                            width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY)
 
-
 @app.route("/alerts")
 def alerts_page():
     """Serve a página de histórico."""
-    # ... (igual a antes)
     return render_template("alerts.html")
-
 
 def generate_video_stream():
     """Gera frames de vídeo para o stream HTTP."""
@@ -267,7 +263,7 @@ def video_feed():
 # --- Rotas da API ---
 @app.route("/api/config", methods=['GET', 'POST'])
 def api_config():
-    """API para ler/atualizar configurações (Posição Relativa dos Olhos)."""
+    """API para ler/atualizar configurações (Pose 3D Suavizada)."""
     global dms_monitor
     logging.debug(f"Rota /api/config (Método: {request.method})")
     if dms_monitor is None or not cam_thread or not event_queue:
@@ -276,7 +272,7 @@ def api_config():
 
     if request.method == 'GET':
         try:
-            # (ALTERADO) get_settings() agora retorna os parâmetros de posição relativa
+            # (ALTERADO) get_settings() agora retorna os parâmetros de ângulo 3D
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
@@ -284,7 +280,7 @@ def api_config():
             logging.debug("api_config GET: A adquirir status_data_lock...")
             with status_data_lock:
                 logging.debug("api_config GET: status_data_lock adquirido.")
-                # (ALTERADO) Status agora inclui eye_x, eye_y
+                # (ALTERADO) Status agora inclui yaw, pitch, roll
                 current_settings['status'] = status_data_global.copy()
             logging.debug("api_config GET: status_data_lock libertado.")
 
@@ -309,7 +305,7 @@ def api_config():
             if not new_settings:
                 return jsonify({"success": False, "error": "No data received"}), 400
 
-            # (ALTERADO) update_settings() agora espera os parâmetros de posição relativa
+            # (ALTERADO) update_settings() agora espera os parâmetros de ângulo 3D
             dms_success = dms_monitor.update_settings(new_settings)
 
             cam_success = True # Câmara (igual)
@@ -351,6 +347,7 @@ def api_alerts():
 @app.route('/alerts/images/<path:filepath>')
 def serve_alert_image(filepath):
     """Serve imagens de alerta."""
+    # ... (igual a antes)
     logging.debug(f"Rota /alerts/images: {filepath}")
     if not event_handler:
          logging.warning(f"/alerts/images: Gestor de eventos não inicializado ({filepath}).")
@@ -386,7 +383,7 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     try:
-        logging.info(f">>> Serviço DMS (Posição Relativa Olhos) a iniciar... (Log: {logging.getLevelName(logging.getLogger().level)})")
+        logging.info(f">>> Serviço DMS (Híbrido + Pose Suave) a iniciar... (Log: {logging.getLevelName(logging.getLogger().level)})")
 
         event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
         event_handler = EventHandler(queue=event_queue, stop_event=stop_event)

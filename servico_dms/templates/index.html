@@ -9,19 +9,19 @@
         .container { display: flex; flex-wrap: wrap; gap: 20px; flex-grow: 1; }
         .video-container { flex: 2; min-width: 320px; display: flex; flex-direction: column; align-items: center; }
         .controls-container { flex: 1; min-width: 280px; background-color: #333; padding: 20px; border-radius: 8px; display: flex; flex-direction: column; gap: 15px; }
-        h1, h2, h3 { text-align: center; margin-bottom: 20px; margin-top: 10px; } /* Adicionado h3 */
+        h1, h2, h3 { text-align: center; margin-bottom: 20px; margin-top: 10px; }
         nav { text-align: center; margin-bottom: 20px; }
         nav a { color: #7fadf7; text-decoration: none; margin: 0 15px; font-size: 1.1em; }
         nav a:hover { text-decoration: underline; }
         img#stream { border: 1px solid #555; background-color: #000; max-width: 100%; height: auto; border-radius: 8px; }
         label { display: block; margin-bottom: 5px; color: #ccc; }
         input[type="range"] { width: 100%; cursor: pointer; }
-        input[type="text"], /* (NOVO) Estilo para input text */
-        select { width: 100%; padding: 8px; border-radius: 4px; background-color: #444; color: #eee; border: 1px solid #555; box-sizing: border-box; } /* box-sizing adicionado */
+        input[type="text"],
+        select { width: 100%; padding: 8px; border-radius: 4px; background-color: #444; color: #eee; border: 1px solid #555; box-sizing: border-box; }
         .slider-value { font-weight: bold; color: #fff; margin-left: 10px; min-width: 40px; display: inline-block; text-align: right; }
-        button { padding: 10px 15px; background-color: #555; color: #eee; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; width: 100%; box-sizing: border-box;} /* width e box-sizing */
+        button { padding: 10px 15px; background-color: #555; color: #eee; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; margin-top: 10px; width: 100%; box-sizing: border-box;}
         button:hover { background-color: #666; }
-        button#reset_button { background-color: #d9534f; } /* Vermelho para reset */
+        button#reset_button { background-color: #d9534f; }
         button#reset_button:hover { background-color: #c9302c; }
         .status-info { margin-top: 15px; font-size: 0.9em; color: #bbb; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
         .status-info span { font-weight: bold; color: #ddd; }
@@ -31,15 +31,13 @@
         .queue-status-warn { background-color: #ffeb3b; color: #333; }
         .queue-status-error { background-color: #f44336; color: white; }
         .queue-status-unknown { background-color: #777; color: white; }
-        /* (NOVO) Secção de Perfis */
         .profile-section { border-top: 1px solid #555; padding-top: 15px; margin-top: 15px; display: flex; flex-direction: column; gap: 10px;}
         .profile-actions { display: flex; gap: 10px; }
-        .profile-actions input[type="text"] { flex-grow: 1; } /* Faz o input ocupar espaço */
-
+        .profile-actions input[type="text"] { flex-grow: 1; }
         @media (max-width: 768px) {
             .container { flex-direction: column; }
             .video-container, .controls-container { min-width: 100%; }
-            .profile-actions { flex-direction: column; } /* Empilha ações em ecrãs pequenos */
+            .profile-actions { flex-direction: column; }
         }
     </style>
 </head>
@@ -57,8 +55,10 @@
             <div class="status-info">
                 <span>EAR: <span id="status-ear">-</span></span> |
                 <span>MAR: <span id="status-mar">-</span></span> |
-                <span>Olho X: <span id="status-eye_x">-</span></span> |
-                <span>Olho Y: <span id="status-eye_y">-</span></span>
+                <!-- (ALTERADO) Mostra Yaw, Pitch, Roll -->
+                <span>Yaw: <span id="status-yaw">-</span></span> |
+                <span>Pitch: <span id="status-pitch">-</span></span> |
+                <span>Roll: <span id="status-roll">-</span></span>
                 <span class="queue-status queue-status-unknown" id="status-queue">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
         </div>
@@ -87,32 +87,29 @@
                 <input type="range" id="mar_frames" name="mar_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="mar_frames_value">20</span>
             </div>
-            <!-- Posição Relativa Olhos -->
+
+            <!-- (ALTERADO) Volta para Distração por Ângulo -->
             <div>
-                <label for="eye_pos_h_threshold_min">Limite Olho Esq. (%): <span class="info-icon" title="Posição horizontal (0=esq, 1=dir). Abaixo disto = alerta.">ⓘ</span></label>
-                <input type="range" id="eye_pos_h_threshold_min" name="eye_pos_h_threshold_min" min="0.0" max="0.5" step="0.01">
-                <span class="slider-value" id="eye_pos_h_threshold_min_value">0.35</span>
+                <label for="distraction_angle">Ângulo Yaw Distração (°): <span class="info-icon" title="Ângulo LATERAL (Yaw) para distração.">ⓘ</span></label>
+                <input type="range" id="distraction_angle" name="distraction_angle" min="15" max="60" step="1">
+                <span class="slider-value" id="distraction_angle_value">35</span>
             </div>
              <div>
-                <label for="eye_pos_h_threshold_max">Limite Olho Dir. (%): <span class="info-icon" title="Posição horizontal (0=esq, 1=dir). Acima disto = alerta.">ⓘ</span></label>
-                <input type="range" id="eye_pos_h_threshold_max" name="eye_pos_h_threshold_max" min="0.5" max="1.0" step="0.01">
-                <span class="slider-value" id="eye_pos_h_threshold_max_value">0.65</span>
+                <label for="pitch_up_threshold">Limite Pitch Acima (°): <span class="info-icon" title="Ângulo VERTICAL (Pitch) para distração (olhar p/ CIMA). Valores mais negativos são menos sensíveis.">ⓘ</span></label>
+                <input type="range" id="pitch_up_threshold" name="pitch_up_threshold" min="-40" max="0" step="1">
+                <span class="slider-value" id="pitch_up_threshold_value">-10</span>
+            </div>
+            <div>
+                <label for="pitch_down_offset">Offset Pitch Abaixo (°): <span class="info-icon" title="Quanto MAIS para baixo (além do Ângulo Yaw) para distração (olhar p/ BAIXO). Maior = menos sensível.">ⓘ</span></label>
+                <input type="range" id="pitch_down_offset" name="pitch_down_offset" min="0" max="40" step="1">
+                <span class="slider-value" id="pitch_down_offset_value">15</span>
             </div>
              <div>
-                <label for="eye_pos_v_threshold_min">Limite Olho Acima (%): <span class="info-icon" title="Posição vertical (0=topo, 1=base). Abaixo disto = alerta (olhar p/ cima).">ⓘ</span></label>
-                <input type="range" id="eye_pos_v_threshold_min" name="eye_pos_v_threshold_min" min="0.0" max="0.5" step="0.01">
-                <span class="slider-value" id="eye_pos_v_threshold_min_value">0.30</span>
-            </div>
-            <div>
-                <label for="eye_pos_v_threshold_max">Limite Olho Abaixo (%): <span class="info-icon" title="Posição vertical (0=topo, 1=base). Acima disto = alerta (olhar p/ baixo).">ⓘ</span></label>
-                <input type="range" id="eye_pos_v_threshold_max" name="eye_pos_v_threshold_max" min="0.5" max="1.0" step="0.01">
-                <span class="slider-value" id="eye_pos_v_threshold_max_value">0.60</span>
-            </div>
-            <div>
-                <label for="distraction_frames">Frames Distração: <span class="info-icon" title="Nº frames com olhos fora dos limites para alerta.">ⓘ</span></label>
+                <label for="distraction_frames">Frames Distração: <span class="info-icon" title="Nº frames com cabeça virada (Yaw ou Pitch) para alerta.">ⓘ</span></label>
                 <input type="range" id="distraction_frames" name="distraction_frames" min="10" max="60" step="1">
                 <span class="slider-value" id="distraction_frames_value">25</span>
             </div>
+            <!-- Sliders de Posição Relativa Removidos -->
 
             <h2>Configurações da Câmara</h2>
             <div>
@@ -128,7 +125,7 @@
                 </select>
             </div>
 
-            <!-- (NOVO) Secção de Perfis -->
+            <!-- Secção de Perfis (do utilizador) -->
             <div class="profile-section">
                 <h3>Perfis de Configuração</h3>
                 <div>
@@ -140,12 +137,12 @@
                     <input type="text" id="profile_name" placeholder="Nome do novo perfil">
                     <button id="save_profile_button">Salvar Perfil Atual</button>
                 </div>
-                 <button id="delete_profile_button" style="background-color: #f0ad4e;">Apagar Perfil Selecionado</button> <!-- (NOVO) Botão Apagar -->
+                 <button id="delete_profile_button" style="background-color: #f0ad4e;">Apagar Perfil Selecionado</button>
             </div>
             <!-- Fim Secção Perfis -->
 
             <button id="reset_button">Restaurar Padrões</button>
-            <p id="save_status" style="text-align: center; height: 1.2em;"></p> <!-- height p/ evitar saltos -->
+            <p id="save_status" style="text-align: center; height: 1.2em;"></p>
         </div>
     </div>
 
@@ -154,31 +151,34 @@
         const rotationSelect = document.getElementById('rotation');
         const saveStatus = document.getElementById('save_status');
         const resetButton = document.getElementById('reset_button');
-        // (NOVO) Elementos de Perfil
         const profileSelect = document.getElementById('profile_select');
         const profileNameInput = document.getElementById('profile_name');
         const saveProfileButton = document.getElementById('save_profile_button');
         const loadProfileButton = document.getElementById('load_profile_button');
-        const deleteProfileButton = document.getElementById('delete_profile_button'); // (NOVO)
+        const deleteProfileButton = document.getElementById('delete_profile_button');
 
-        // Guarda o nome da chave para evitar erros de digitação
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
 
-        // (NOVO) Perfil Padrão - Estes são os valores iniciais *hardcoded*
+        // (ALTERADO) Perfil Padrão volta a ter ângulos
         const defaultProfile = {
             ear_threshold: 0.25, ear_frames: 15,
             mar_threshold: 0.60, mar_frames: 20,
-            eye_pos_h_threshold_min: 0.35, eye_pos_h_threshold_max: 0.65,
-            eye_pos_v_threshold_min: 0.30, eye_pos_v_threshold_max: 0.60,
+            distraction_angle: 35.0, // Yaw
+            pitch_up_threshold: -10.0,
+            pitch_down_offset: 15.0,
             distraction_frames: 25,
-            brightness: 0, // Ajustar se necessário
+            brightness: 0,
             rotation: 0
         };
-        // Guarda os valores que vieram da primeira chamada API (podem ser diferentes do defaultProfile)
-        let initialApiSettings = {};
+        let initialApiSettings = {}; // Guarda a primeira resposta da API
 
-        const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
-                                eye_x: document.getElementById('status-eye_x'), eye_y: document.getElementById('status-eye_y') };
+        // (ALTERADO) Status volta a ter yaw, pitch, roll
+        const statusElements = {
+            ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
+            yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
+            roll: document.getElementById('status-roll')
+            // Removido eye_x, eye_y
+        };
         const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
         function formatNumber(value, decimalPlaces = 2) {
@@ -186,7 +186,6 @@
             return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
 
-        // (NOVO) Atualiza os controlos (sliders, select) com base num objeto de settings
         function applySettingsToControls(settings) {
             sliders.forEach(slider => {
                 const valueSpan = document.getElementById(`${slider.id}_value`);
@@ -196,38 +195,37 @@
                         const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                         valueSpan.textContent = formatNumber(settings[slider.name], decimals);
                     }
-                } else console.warn(`applySettings: Setting '${slider.name}' não encontrado no perfil.`);
+                } else console.warn(`Apply: Setting '${slider.name}' não encontrado.`);
             });
             if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
-            else console.warn("applySettings: Setting 'rotation' não encontrado no perfil.");
+            else console.warn("Apply: Setting 'rotation' não encontrado.");
         }
-
 
         async function fetchAndUpdateSettings() {
             try {
                 const response = await fetch('/api/config');
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
-                console.debug("Conf recebida:", data);
+                console.debug("Conf/Status recebido:", data);
 
-                // Guarda as configurações da API na primeira vez (usado pelo botão Restaurar Padrões original)
                 if (Object.keys(initialApiSettings).length === 0 && data && !data.error) {
                     initialApiSettings = { ...data };
                     delete initialApiSettings.status; delete initialApiSettings.queue_depth; delete initialApiSettings.queue_max_size;
-                    console.debug("Configurações iniciais da API guardadas:", initialApiSettings);
+                    console.debug("Conf iniciais API:", initialApiSettings);
                 }
 
-                // *** ATENÇÃO: NÃO atualiza mais os sliders aqui diretamente ***
-                // Apenas atualiza o STATUS (EAR, MAR, etc.) e a FILA
-
+                // Atualiza Status (Yaw, Pitch, Roll)
                 if (data.status) {
                     for (const key in statusElements) {
-                        statusElements[key].textContent = formatNumber(data.status[key], 2);
+                         // EAR/MAR com 2 casas, ângulos com 1
+                        const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
+                        statusElements[key].textContent = formatNumber(data.status[key], decimals);
                     }
                 } else {
                     for (const key in statusElements) statusElements[key].textContent = '-';
                 }
 
+                // Atualiza Fila
                 if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
                     const depth = data.queue_depth, max_size = data.queue_max_size;
                     queueElements.depth.textContent = depth; queueElements.max.textContent = max_size;
@@ -237,11 +235,10 @@
                 } else {
                     queueElements.depth.textContent = '?'; queueElements.max.textContent = '?';
                     queueElements.span.className = 'queue-status queue-status-unknown';
-                    if(data.queue_depth === -1) console.warn("Erro obter status fila.");
+                    if(data.queue_depth === -1) console.warn("Erro status fila.");
                 }
             } catch (error) {
                 console.error("Erro buscar conf/status:", error);
-                // Não mostra erro de carregamento geral, só nos status
                 for (const key in statusElements) statusElements[key].textContent = 'Erro';
                 queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?';
                 queueElements.span.className = 'queue-status queue-status-error';
@@ -249,7 +246,6 @@
         }
 
         async function postSettings(settingsToPost) {
-            // Se nenhumas settings forem passadas, usa os valores atuais dos controlos
             if (!settingsToPost) {
                  settingsToPost = {};
                  sliders.forEach(slider => {
@@ -258,7 +254,6 @@
                  settingsToPost.rotation = parseInt(rotationSelect.value);
             }
             console.debug("A enviar conf:", settingsToPost);
-
             try {
                 saveStatus.textContent = "A guardar..."; saveStatus.style.color = "#ffeb3b";
                 const response = await fetch('/api/config', {
@@ -273,9 +268,7 @@
                 const result = await response.json();
                 if (result.success) {
                     saveStatus.textContent = "Guardado!"; saveStatus.style.color = "#4CAF50";
-                } else {
-                    throw new Error(result.error || "Falha API.");
-                }
+                } else { throw new Error(result.error || "Falha API."); }
             } catch (error) {
                 console.error("Erro guardar conf:", error);
                 saveStatus.textContent = `Erro: ${error.message}`; saveStatus.style.color = "#f44336";
@@ -283,194 +276,115 @@
             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-        // --- (NOVO) Funções de Gestão de Perfis ---
-
-        function getSavedProfiles() {
-            const profiles = {};
+        // --- Funções de Gestão de Perfis (do utilizador) ---
+        function getSavedProfiles() { /* ... (igual a antes) ... */
+             const profiles = {};
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
                 if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
                     try {
                         const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
                         profiles[profileName] = JSON.parse(localStorage.getItem(key));
-                    } catch (e) {
-                        console.error(`Erro ao carregar perfil '${key}' do localStorage:`, e);
-                    }
+                    } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
                 }
             }
             return profiles;
         }
-
-        function populateProfileDropdown() {
-            const profiles = getSavedProfiles();
-            profileSelect.innerHTML = ''; // Limpa opções existentes
-
-            // Adiciona a opção Padrão
+        function populateProfileDropdown() { /* ... (igual a antes) ... */
+             const profiles = getSavedProfiles();
+            profileSelect.innerHTML = '';
             const defaultOption = document.createElement('option');
-            defaultOption.value = "__default__"; // Valor especial
-            defaultOption.textContent = "Padrão";
+            defaultOption.value = "__default__"; defaultOption.textContent = "Padrão";
             profileSelect.appendChild(defaultOption);
-
-            // Adiciona perfis guardados
             const sortedNames = Object.keys(profiles).sort();
             sortedNames.forEach(name => {
                 const option = document.createElement('option');
-                option.value = name;
-                option.textContent = name;
+                option.value = name; option.textContent = name;
                 profileSelect.appendChild(option);
             });
-             console.debug("Dropdown de perfis populado.");
-        }
-
-        function saveProfile() {
-            const profileName = profileNameInput.value.trim();
-            if (!profileName) {
-                saveStatus.textContent = "Digite um nome para o perfil.";
+             console.debug("Dropdown perfis populado.");
+         }
+        function saveProfile() { /* ... (igual a antes) ... */
+             const profileName = profileNameInput.value.trim();
+            if (!profileName || profileName === "Padrão" || profileName === "__default__") {
+                saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado.";
                 saveStatus.style.color = "#ffeb3b";
-                setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                return;
+                setTimeout(() => { saveStatus.textContent = ""; }, 3000); return;
             }
-            if (profileName === "Padrão" || profileName === "__default__") {
-                saveStatus.textContent = "Nome 'Padrão' é reservado.";
-                 saveStatus.style.color = "#ffeb3b";
-                setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                return;
-            }
-
-
             const currentSettings = {};
-            sliders.forEach(slider => {
-                currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
-            });
+            sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
             currentSettings.rotation = parseInt(rotationSelect.value);
-
             try {
                 const storageKey = PROFILE_STORAGE_PREFIX + profileName;
                 localStorage.setItem(storageKey, JSON.stringify(currentSettings));
-                saveStatus.textContent = `Perfil '${profileName}' guardado!`;
-                saveStatus.style.color = "#4CAF50";
-                profileNameInput.value = ''; // Limpa o input
-                populateProfileDropdown(); // Atualiza o dropdown
-                profileSelect.value = profileName; // Seleciona o perfil recém-guardado
-            } catch (e) {
-                 console.error(`Erro ao guardar perfil '${profileName}':`, e);
-                 saveStatus.textContent = "Erro ao guardar perfil.";
-                 saveStatus.style.color = "#f44336";
-            }
+                saveStatus.textContent = `Perfil '${profileName}' guardado!`; saveStatus.style.color = "#4CAF50";
+                profileNameInput.value = ''; populateProfileDropdown(); profileSelect.value = profileName;
+            } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-        }
-
-        function loadProfile() {
-            const selectedName = profileSelect.value;
+         }
+        function loadProfile() { /* ... (igual a antes) ... */
+             const selectedName = profileSelect.value;
             let settingsToLoad = null;
-
             if (selectedName === "__default__") {
-                settingsToLoad = defaultProfile;
-                 console.debug("A carregar perfil Padrão.");
+                settingsToLoad = defaultProfile; console.debug("Carregando Padrão.");
             } else {
                 const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
                 const savedData = localStorage.getItem(storageKey);
                 if (savedData) {
-                    try {
-                        settingsToLoad = JSON.parse(savedData);
-                         console.debug(`A carregar perfil '${selectedName}'.`);
-                    } catch (e) {
-                         console.error(`Erro ao ler perfil '${selectedName}' do localStorage:`, e);
-                         saveStatus.textContent = `Erro ao ler perfil '${selectedName}'.`;
-                         saveStatus.style.color = "#f44336";
-                         setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                         return;
-                    }
-                } else {
-                     saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`;
-                     saveStatus.style.color = "#f44336";
-                     setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                     return; // Sai se o perfil não for encontrado
-                }
+                    try { settingsToLoad = JSON.parse(savedData); console.debug(`Carregando '${selectedName}'.`); }
+                    catch (e) { console.error(`Erro ler '${selectedName}':`, e); saveStatus.textContent = `Erro ler '${selectedName}'.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+                } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             }
-
             if (settingsToLoad) {
-                 applySettingsToControls(settingsToLoad); // Atualiza a UI
-                 postSettings(settingsToLoad); // Envia para o backend
-                 saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`;
-                 saveStatus.style.color = "#4CAF50";
+                 applySettingsToControls(settingsToLoad); postSettings(settingsToLoad);
+                 saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50";
                  setTimeout(() => { saveStatus.textContent = ""; }, 3000);
             }
-        }
-
-        // (NOVO) Função para apagar perfil
-        function deleteProfile() {
-            const selectedName = profileSelect.value;
-            if (selectedName === "__default__") {
-                saveStatus.textContent = "Não pode apagar o perfil Padrão.";
-                saveStatus.style.color = "#ffeb3b";
-                setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                return;
-            }
-
+         }
+        function deleteProfile() { /* ... (igual a antes) ... */
+             const selectedName = profileSelect.value;
+            if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
             if (localStorage.getItem(storageKey)) {
-                // Confirmação (opcional mas recomendado)
-                // if (!confirm(`Tem a certeza que deseja apagar o perfil '${selectedName}'?`)) {
-                //     return;
-                // }
                 try {
-                    localStorage.removeItem(storageKey);
-                    saveStatus.textContent = `Perfil '${selectedName}' apagado.`;
-                    saveStatus.style.color = "#4CAF50";
-                    populateProfileDropdown(); // Atualiza o dropdown
-                    loadProfile(); // Carrega o perfil Padrão após apagar
-                } catch (e) {
-                    console.error(`Erro ao apagar perfil '${selectedName}':`, e);
-                    saveStatus.textContent = `Erro ao apagar perfil.`;
-                    saveStatus.style.color = "#f44336";
-                }
-            } else {
-                 saveStatus.textContent = `Perfil '${selectedName}' não encontrado para apagar.`;
-                 saveStatus.style.color = "#ffeb3b";
-            }
+                    localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50";
+                    populateProfileDropdown(); loadProfile(); // Carrega Padrão
+                } catch (e) { console.error(`Erro apagar '${selectedName}':`, e); saveStatus.textContent = `Erro apagar.`; saveStatus.style.color = "#f44336"; }
+            } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#ffeb3b"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-
         // --- Event Listeners ---
-
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                slider.addEventListener('input', () => {
+                slider.addEventListener('input', () => { // Atualiza o span em tempo real
                     const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                     valueSpan.textContent = formatNumber(slider.value, decimals);
                 });
-                // (ALTERADO) NÃO envia mais no 'change', só ao carregar/salvar perfil
-                // slider.addEventListener('change', postSettings);
+                // Envia para a API SÓ quando o utilizador carrega/salva um perfil ou clica em Reset
+                // slider.addEventListener('change', postSettings); // REMOVIDO
             }
         });
-        // (ALTERADO) NÃO envia mais no 'change', só ao carregar/salvar perfil
-        // rotationSelect.addEventListener('change', postSettings);
+        // Envia para a API SÓ quando o utilizador carrega/salva um perfil ou clica em Reset
+        // rotationSelect.addEventListener('change', postSettings); // REMOVIDO
 
-        // (ALTERADO) Botão Reset agora carrega o defaultProfile
-        resetButton.addEventListener('click', () => {
-            console.debug("Restaurando perfil Padrão...");
-            applySettingsToControls(defaultProfile);
-            postSettings(defaultProfile); // Envia os padrões para a API
-             saveStatus.textContent = "Padrões restaurados.";
-             saveStatus.style.color = "#4CAF50";
-             profileSelect.value = "__default__"; // Seleciona "Padrão" no dropdown
-             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+        resetButton.addEventListener('click', () => { // Carrega e envia o perfil Padrão
+            console.debug("Restaurando Padrão...");
+            applySettingsToControls(defaultProfile); postSettings(defaultProfile);
+            saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50";
+            profileSelect.value = "__default__"; setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         });
 
-        // (NOVO) Listeners dos botões de perfil
         saveProfileButton.addEventListener('click', saveProfile);
         loadProfileButton.addEventListener('click', loadProfile);
-        deleteProfileButton.addEventListener('click', deleteProfile); // (NOVO)
+        deleteProfileButton.addEventListener('click', deleteProfile);
 
         // --- Inicialização ---
-        const statusInterval = setInterval(fetchAndUpdateSettings, 2000);
-        // (ALTERADO) Carrega o perfil Padrão na inicialização da página
-        applySettingsToControls(defaultProfile);
-        postSettings(defaultProfile); // Envia os padrões iniciais para a API
-        populateProfileDropdown(); // Popula o dropdown com perfis guardados
+        const statusInterval = setInterval(fetchAndUpdateSettings, 2000); // Busca status periodicamente
+        applySettingsToControls(defaultProfile); // Aplica padrões à UI
+        postSettings(defaultProfile); // Envia padrões para a API
+        populateProfileDropdown(); // Popula dropdown
 
         var stream = document.getElementById("stream");
         let errorTimeout = null;
