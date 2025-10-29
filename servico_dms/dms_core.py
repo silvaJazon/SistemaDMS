@@ -20,7 +20,7 @@ MOUTH_AR_END = 68
 
 # Constantes de Tracking
 FRAMES_FOR_REDETECTION = 10
-TRACKER_CONFIDENCE_THRESHOLD = 5.5 # (AJUSTADO) Reduzido de 7.0 para 5.5
+TRACKER_CONFIDENCE_THRESHOLD = 5.0 # (AJUSTADO) Reduzido de 7.0 para 5.5
 # Constante de Suavização
 ANGLE_SMOOTHING_FRAMES = 7
 
