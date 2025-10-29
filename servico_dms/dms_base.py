@@ -13,12 +13,18 @@ class BaseMonitor(abc.ABC):
     """
 
     @abc.abstractmethod
-    def __init__(self, frame_size):
+    # ================== ALTERAÇÃO (Padrões Centralizados) ==================
+    def __init__(self, frame_size, default_settings: dict = None):
         """
         Inicializa o monitor.
         :param frame_size: Uma tupla (height, width) do frame de entrada.
+        :param default_settings: (Opcional) Um dict com os padrões (ear_threshold, etc.)
         """
         self.frame_height, self.frame_width = frame_size
+        if default_settings is None: 
+            default_settings = {}
+        self.default_settings = default_settings 
+        # ===================================================================
         # O log real virá da subclasse (ex: "Inicializando DlibMonitor...")
 
     @abc.abstractmethod
@@ -53,4 +59,3 @@ class BaseMonitor(abc.ABC):
         :return: Um dicionário com as configurações atuais.
         """
         pass
-
