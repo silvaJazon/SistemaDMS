@@ -114,7 +114,7 @@
                 <span class="slider-value" id="distraction_frames_value">35</span>
             </div>
 
-            <!-- (NOVO) Secção de Calibração Central -->
+            <!-- Secção de Calibração Central -->
             <div class="calibration-section">
                 <h3>Calibração da Posição Central</h3>
                 <div>
@@ -178,31 +178,24 @@
         const saveProfileButton = document.getElementById('save_profile_button');
         const loadProfileButton = document.getElementById('load_profile_button');
         const deleteProfileButton = document.getElementById('delete_profile_button');
-        // (NOVO) Elementos de Calibração
         const startCalibrationButton = document.getElementById('start_calibration_button');
         const calibrationStatus = document.getElementById('calibration_status');
         const yawOffsetSlider = document.getElementById('yaw_center_offset');
         const pitchOffsetSlider = document.getElementById('pitch_center_offset');
 
-
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
 
-        // Perfil Padrão com novos offsets
         const defaultProfile = {
             ear_threshold: 0.25, ear_frames: 15,
             mar_threshold: 0.60, mar_frames: 20,
-            distraction_angle: 40.0,
-            pitch_up_threshold: -15.0,
-            pitch_down_offset: 20.0,
-            distraction_frames: 35,
-            yaw_center_offset: 0.0, // Offset padrão
-            pitch_center_offset: 0.0, // Offset padrão
-            brightness: 0,
-            rotation: 0
+            distraction_angle: 40.0, pitch_up_threshold: -15.0,
+            pitch_down_offset: 20.0, distraction_frames: 35,
+            yaw_center_offset: 0.0, pitch_center_offset: 0.0,
+            brightness: 0, rotation: 0
         };
-        let initialApiSettings = {}; // Guarda a primeira resposta da API (usado por Reset)
-        let currentYawPitch = { yaw: null, pitch: null }; // Guarda os últimos ângulos recebidos
-        let isCalibrating = false; // Flag para controlar estado da calibração
+        let initialApiSettings = {};
+        let currentYawPitch = { yaw: null, pitch: null };
+        let isCalibrating = false;
 
         const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
                                  yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
@@ -227,69 +220,60 @@
             });
             if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
             else console.warn("Apply: Setting 'rotation' não encontrado.");
-            // (NOVO) Habilita/Desabilita sliders de offset e botão de calibração
+
+            // Habilita/Desabilita baseado no perfil selecionado ATUALMENTE no dropdown
             const isDefaultProfile = (profileSelect.value === "__default__");
+            console.debug(`applySettingsToControls: isDefaultProfile=${isDefaultProfile} (select value: ${profileSelect.value})`); // DEBUG
             yawOffsetSlider.disabled = !isDefaultProfile;
             pitchOffsetSlider.disabled = !isDefaultProfile;
             startCalibrationButton.disabled = !isDefaultProfile;
         }
 
         async function fetchAndUpdateSettings() {
-             // Se estiver calibrando, não busca novas configurações, apenas status
-            if (isCalibrating) {
+             if (isCalibrating) { /* ... (igual) ... */
                  try {
                      const response = await fetch('/api/config');
-                     if (!response.ok) return; // Ignora erro durante calibração
+                     if (!response.ok) return;
                      const data = await response.json();
                      if (data.status && !isNaN(parseFloat(data.status.yaw)) && !isNaN(parseFloat(data.status.pitch))) {
                         currentYawPitch.yaw = parseFloat(data.status.yaw);
                         currentYawPitch.pitch = parseFloat(data.status.pitch);
-                        // Atualiza UI de status
                         for (const key in statusElements) {
                              const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
                              statusElements[key].textContent = formatNumber(data.status[key], decimals);
                          }
                      }
-                 } catch(error) { console.warn("Erro ao buscar status durante calibração:", error); }
-                 return; // Sai da função se estiver calibrando
+                 } catch(error) { console.warn("Erro status calibração:", error); }
+                 return;
             }
-
-            // Lógica normal de busca de status E configurações (só quando não está calibrando)
-            try {
+            try { /* ... (igual) ... */
                 const response = await fetch('/api/config');
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 console.debug("Conf/Status recebido:", data);
-
                 if (Object.keys(initialApiSettings).length === 0 && data && !data.error) {
                     initialApiSettings = { ...data };
                     delete initialApiSettings.status; delete initialApiSettings.queue_depth; delete initialApiSettings.queue_max_size;
                     console.debug("Conf iniciais API:", initialApiSettings);
                 }
-
-                // Atualiza Status (Yaw, Pitch, Roll)
                 if (data.status) {
-                     // Guarda os últimos ângulos válidos
                      if(!isNaN(parseFloat(data.status.yaw))) currentYawPitch.yaw = parseFloat(data.status.yaw);
                      if(!isNaN(parseFloat(data.status.pitch))) currentYawPitch.pitch = parseFloat(data.status.pitch);
-
                     for (const key in statusElements) {
                          const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
                         statusElements[key].textContent = formatNumber(data.status[key], decimals);
                     }
                 } else {
                     for (const key in statusElements) statusElements[key].textContent = '-';
-                    currentYawPitch = { yaw: null, pitch: null }; // Limpa se não houver status
+                    currentYawPitch = { yaw: null, pitch: null };
                 }
-
-                // Atualiza Fila
                 if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
                     const depth = data.queue_depth, max_size = data.queue_max_size;
                     queueElements.depth.textContent = depth; queueElements.max.textContent = max_size;
                     const occupancy = depth / max_size;
                     let queueClass = occupancy < 0.5 ? 'ok' : (occupancy < 0.8 ? 'warn' : 'error');
                     queueElements.span.className = `queue-status queue-status-${queueClass}`;
-                } else { /* ... (igual) ... */
+                } else {
                     queueElements.depth.textContent = '?'; queueElements.max.textContent = '?';
                     queueElements.span.className = 'queue-status queue-status-unknown';
                     if(data.queue_depth === -1) console.warn("Erro status fila.");
@@ -299,41 +283,26 @@
                 for (const key in statusElements) statusElements[key].textContent = 'Erro';
                 queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?';
                 queueElements.span.className = 'queue-status queue-status-error';
-                currentYawPitch = { yaw: null, pitch: null }; // Limpa em caso de erro
+                currentYawPitch = { yaw: null, pitch: null };
             }
         }
 
-        async function postSettings(settingsToPost) {
-             // Se estiver calibrando, não envia nada para a API ainda
-            if(isCalibrating) return;
-
-            if (!settingsToPost) { /* ... (igual) ... */
+        async function postSettings(settingsToPost) { /* ... (igual) ... */
+             if(isCalibrating) return;
+             if (!settingsToPost) {
                  settingsToPost = {};
-                 sliders.forEach(slider => {
-                     settingsToPost[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value);
-                 });
+                 sliders.forEach(slider => { settingsToPost[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
                  settingsToPost.rotation = parseInt(rotationSelect.value);
             }
             console.debug("A enviar conf:", settingsToPost);
-            try { /* ... (igual) ... */
+            try {
                 saveStatus.textContent = "A guardar..."; saveStatus.style.color = "#ffeb3b";
-                const response = await fetch('/api/config', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(settingsToPost)
-                });
-                if (!response.ok) {
-                    let errorMsg = `HTTP ${response.status}`;
-                    try { errorMsg = (await response.json()).error || errorMsg; } catch (e) {}
-                    throw new Error(errorMsg);
-                }
+                const response = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsToPost) });
+                if (!response.ok) { let errorMsg = `HTTP ${response.status}`; try { errorMsg = (await response.json()).error || errorMsg; } catch (e) {} throw new Error(errorMsg); }
                 const result = await response.json();
-                if (result.success) {
-                    saveStatus.textContent = "Guardado!"; saveStatus.style.color = "#4CAF50";
-                } else { throw new Error(result.error || "Falha API."); }
-            } catch (error) {
-                console.error("Erro guardar conf:", error);
-                saveStatus.textContent = `Erro: ${error.message}`; saveStatus.style.color = "#f44336";
-            }
+                if (result.success) { saveStatus.textContent = "Guardado!"; saveStatus.style.color = "#4CAF50"; }
+                else { throw new Error(result.error || "Falha API."); }
+            } catch (error) { console.error("Erro guardar conf:", error); saveStatus.textContent = `Erro: ${error.message}`; saveStatus.style.color = "#f44336"; }
             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
@@ -345,7 +314,6 @@
                 if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
                     try {
                         const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
-                        // (NOVO) Garante que offsets existem no perfil antigo
                         const profileData = JSON.parse(localStorage.getItem(key));
                         if (!profileData.hasOwnProperty('yaw_center_offset')) profileData.yaw_center_offset = 0.0;
                         if (!profileData.hasOwnProperty('pitch_center_offset')) profileData.pitch_center_offset = 0.0;
@@ -369,54 +337,32 @@
             });
              console.debug("Dropdown perfis populado.");
          }
-        function saveProfile() {
+        function saveProfile() { /* ... (igual) ... */
              const profileName = profileNameInput.value.trim();
-            if (!profileName || profileName === "Padrão" || profileName === "__default__") { /* ... (igual) ... */
-                saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado.";
-                saveStatus.style.color = "#ffeb3b";
-                setTimeout(() => { saveStatus.textContent = ""; }, 3000); return;
-            }
+            if (!profileName || profileName === "Padrão" || profileName === "__default__") { saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             const currentSettings = {};
             sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
             currentSettings.rotation = parseInt(rotationSelect.value);
-            // (NOVO) Inclui offsets no perfil salvo
-            currentSettings.yaw_center_offset = parseFloat(yawOffsetSlider.value);
-            currentSettings.pitch_center_offset = parseFloat(pitchOffsetSlider.value);
-
-            try { /* ... (igual) ... */
+            currentSettings.yaw_center_offset = parseFloat(yawOffsetSlider.value); currentSettings.pitch_center_offset = parseFloat(pitchOffsetSlider.value);
+            try {
                 const storageKey = PROFILE_STORAGE_PREFIX + profileName;
                 localStorage.setItem(storageKey, JSON.stringify(currentSettings));
                 saveStatus.textContent = `Perfil '${profileName}' guardado!`; saveStatus.style.color = "#4CAF50";
                 profileNameInput.value = ''; populateProfileDropdown(); profileSelect.value = profileName;
-                 // (NOVO) Bloqueia offsets após salvar
-                yawOffsetSlider.disabled = true;
-                pitchOffsetSlider.disabled = true;
-                startCalibrationButton.disabled = true;
+                yawOffsetSlider.disabled = true; pitchOffsetSlider.disabled = true; startCalibrationButton.disabled = true; // Bloqueia após salvar
             } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
-        function loadProfile() {
+        function loadProfile() { /* ... (igual) ... */
              const selectedName = profileSelect.value;
             let settingsToLoad = null;
-            if (selectedName === "__default__") {
-                settingsToLoad = defaultProfile; console.debug("Carregando Padrão.");
-            } else { /* ... (igual, já trata offsets) ... */
-                const storageKey = PROFILE_STORAGE_PREFIX + selectedName;
-                const savedData = localStorage.getItem(storageKey);
-                if (savedData) {
-                    try {
-                        settingsToLoad = JSON.parse(savedData);
-                        // Garante que offsets existem
-                        if (!settingsToLoad.hasOwnProperty('yaw_center_offset')) settingsToLoad.yaw_center_offset = 0.0;
-                        if (!settingsToLoad.hasOwnProperty('pitch_center_offset')) settingsToLoad.pitch_center_offset = 0.0;
-                        console.debug(`Carregando '${selectedName}'.`);
-                    }
-                    catch (e) { console.error(`Erro ler '${selectedName}':`, e); saveStatus.textContent = `Erro ler '${selectedName}'.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            if (selectedName === "__default__") { settingsToLoad = defaultProfile; console.debug("Carregando Padrão."); }
+            else { const storageKey = PROFILE_STORAGE_PREFIX + selectedName; const savedData = localStorage.getItem(storageKey);
+                if (savedData) { try { settingsToLoad = JSON.parse(savedData); if (!settingsToLoad.hasOwnProperty('yaw_center_offset')) settingsToLoad.yaw_center_offset = 0.0; if (!settingsToLoad.hasOwnProperty('pitch_center_offset')) settingsToLoad.pitch_center_offset = 0.0; console.debug(`Carregando '${selectedName}'.`); } catch (e) { console.error(`Erro ler '${selectedName}':`, e); saveStatus.textContent = `Erro ler '${selectedName}'.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
                 } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             }
             if (settingsToLoad) {
-                 applySettingsToControls(settingsToLoad); // Aplica à UI (e gere disabled)
-                 postSettings(settingsToLoad); // Envia para backend
+                 applySettingsToControls(settingsToLoad); postSettings(settingsToLoad);
                  saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50";
                  setTimeout(() => { saveStatus.textContent = ""; }, 3000);
             }
@@ -428,121 +374,75 @@
             if (localStorage.getItem(storageKey)) {
                 try {
                     localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50";
-                    populateProfileDropdown();
-                    profileSelect.value = "__default__"; // Volta para o padrão
-                    loadProfile(); // Carrega o perfil Padrão após apagar
+                    populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile();
                 } catch (e) { console.error(`Erro apagar '${selectedName}':`, e); saveStatus.textContent = `Erro apagar.`; saveStatus.style.color = "#f44336"; }
             } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#ffeb3b"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-        // --- (NOVO) Função de Calibração Central ---
-        function startCalibration() {
-            if (isCalibrating) return; // Evita múltiplas calibrações
-            isCalibrating = true;
-            startCalibrationButton.disabled = true; // Desabilita botão durante calibração
-            calibrationStatus.textContent = "Olhe em FRENTE por 3 segundos...";
-            calibrationStatus.style.color = "#ffeb3b"; // Amarelo
-
-            const yawSamples = [];
-            const pitchSamples = [];
-            const calibrationDuration = 3000; // 3 segundos
-            const sampleInterval = 200; // A cada 200ms (ajustar se necessário)
-            let samplesCollected = 0;
-            const maxSamples = calibrationDuration / sampleInterval;
-
+        // --- Função de Calibração Central ---
+        function startCalibration() { /* ... (igual) ... */
+            if (isCalibrating) return;
+            isCalibrating = true; startCalibrationButton.disabled = true;
+            calibrationStatus.textContent = "Olhe em FRENTE por 3 segundos..."; calibrationStatus.style.color = "#ffeb3b";
+            const yawSamples = []; const pitchSamples = []; const calibrationDuration = 3000;
+            const sampleInterval = 200; let samplesCollected = 0; const maxSamples = calibrationDuration / sampleInterval;
             const calibrationInterval = setInterval(() => {
                 if (currentYawPitch.yaw !== null && currentYawPitch.pitch !== null) {
-                    yawSamples.push(currentYawPitch.yaw);
-                    pitchSamples.push(currentYawPitch.pitch);
-                    samplesCollected++;
+                    yawSamples.push(currentYawPitch.yaw); pitchSamples.push(currentYawPitch.pitch); samplesCollected++;
                     calibrationStatus.textContent = `Calibrando... (${samplesCollected}/${maxSamples})`;
-                } else {
-                     console.warn("Calibração: Ângulo inválido recebido.");
-                }
-
-                if (samplesCollected >= maxSamples) {
-                    clearInterval(calibrationInterval);
-                    finishCalibration(yawSamples, pitchSamples);
-                }
+                } else { console.warn("Calibração: Ângulo inválido."); }
+                if (samplesCollected >= maxSamples) { clearInterval(calibrationInterval); finishCalibration(yawSamples, pitchSamples); }
             }, sampleInterval);
         }
-
-        function finishCalibration(yawSamples, pitchSamples) {
-            isCalibrating = false;
-            startCalibrationButton.disabled = false; // Reabilita botão
-
-            if (yawSamples.length === 0 || pitchSamples.length === 0) {
-                calibrationStatus.textContent = "Calibração falhou (sem dados).";
-                calibrationStatus.style.color = "#f44336"; // Vermelho
-                setTimeout(() => { calibrationStatus.textContent = ""; }, 3000);
-                return;
-            }
-
-            const avgYaw = yawSamples.reduce((a, b) => a + b, 0) / yawSamples.length;
-            const avgPitch = pitchSamples.reduce((a, b) => a + b, 0) / pitchSamples.length;
-
-            console.log(`Calibração concluída: Yaw Médio=${avgYaw.toFixed(1)}, Pitch Médio=${avgPitch.toFixed(1)}`);
-
-            // Atualiza os sliders de offset
-            yawOffsetSlider.value = avgYaw.toFixed(1); // Usa 1 casa decimal
-            pitchOffsetSlider.value = avgPitch.toFixed(1);
-
-            // Atualiza os spans dos sliders de offset
-            document.getElementById('yaw_center_offset_value').textContent = avgYaw.toFixed(1);
-            document.getElementById('pitch_center_offset_value').textContent = avgPitch.toFixed(1);
-
-            calibrationStatus.textContent = "Calibração Central Concluída!";
-            calibrationStatus.style.color = "#4CAF50"; // Verde
-            setTimeout(() => { calibrationStatus.textContent = ""; }, 3000);
-
-            // Envia as novas configurações (incluindo offsets) para o backend
-            postSettings();
+        function finishCalibration(yawSamples, pitchSamples) { /* ... (igual) ... */
+            isCalibrating = false; startCalibrationButton.disabled = false;
+            if (yawSamples.length === 0 || pitchSamples.length === 0) { calibrationStatus.textContent = "Calibração falhou."; calibrationStatus.style.color = "#f44336"; setTimeout(() => { calibrationStatus.textContent = ""; }, 3000); return; }
+            const avgYaw = yawSamples.reduce((a, b) => a + b, 0) / yawSamples.length; const avgPitch = pitchSamples.reduce((a, b) => a + b, 0) / pitchSamples.length;
+            console.log(`Calibração: Yaw Médio=${avgYaw.toFixed(1)}, Pitch Médio=${avgPitch.toFixed(1)}`);
+            yawOffsetSlider.value = avgYaw.toFixed(1); pitchOffsetSlider.value = avgPitch.toFixed(1);
+            document.getElementById('yaw_center_offset_value').textContent = avgYaw.toFixed(1); document.getElementById('pitch_center_offset_value').textContent = avgPitch.toFixed(1);
+            calibrationStatus.textContent = "Calibração Concluída!"; calibrationStatus.style.color = "#4CAF50"; setTimeout(() => { calibrationStatus.textContent = ""; }, 3000);
+            postSettings(); // Envia novas conf (com offsets)
         }
 
-
         // --- Event Listeners ---
-        sliders.forEach(slider => {
+        sliders.forEach(slider => { /* ... (igual) ... */
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
-                slider.addEventListener('input', () => { // Atualiza o span em tempo real
+                slider.addEventListener('input', () => {
                     const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                     valueSpan.textContent = formatNumber(slider.value, decimals);
-                    // (NOVO) Se for um slider de offset, envia a alteração imediatamente
-                    if (slider.name === 'yaw_center_offset' || slider.name === 'pitch_center_offset') {
-                        postSettings();
-                    }
+                    if (slider.name === 'yaw_center_offset' || slider.name === 'pitch_center_offset') { postSettings(); }
                 });
-                // Envia APENAS sliders de offset no 'change' (outros só ao salvar/carregar perfil)
-                if (slider.name === 'yaw_center_offset' || slider.name === 'pitch_center_offset') {
-                     slider.addEventListener('change', postSettings);
-                }
+                if (slider.name === 'yaw_center_offset' || slider.name === 'pitch_center_offset') { slider.addEventListener('change', postSettings); }
             }
         });
-        // Envia rotação apenas ao salvar/carregar perfil
-        // rotationSelect.addEventListener('change', postSettings);
 
-        resetButton.addEventListener('click', () => { // Carrega e envia o perfil Padrão
+        resetButton.addEventListener('click', () => { /* ... (igual) ... */
             console.debug("Restaurando Padrão...");
+            profileSelect.value = "__default__"; // Garante que dropdown está em Padrão
             applySettingsToControls(defaultProfile); postSettings(defaultProfile);
             saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50";
-            profileSelect.value = "__default__"; setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+            setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         });
 
         saveProfileButton.addEventListener('click', saveProfile);
         loadProfileButton.addEventListener('click', loadProfile);
         deleteProfileButton.addEventListener('click', deleteProfile);
-        startCalibrationButton.addEventListener('click', startCalibration); // Listener botão calibração
+        startCalibrationButton.addEventListener('click', startCalibration);
 
         // --- Inicialização ---
-        const statusInterval = setInterval(fetchAndUpdateSettings, 200); // (AJUSTADO) Busca status mais rápido para calibração
-        applySettingsToControls(defaultProfile); // Aplica padrões à UI
-        postSettings(defaultProfile); // Envia padrões para a API
-        populateProfileDropdown(); // Popula dropdown
+        const statusInterval = setInterval(fetchAndUpdateSettings, 200);
+        // (ALTERADO) Ordem de inicialização corrigida
+        populateProfileDropdown(); // 1. Popula dropdown
+        profileSelect.value = "__default__"; // 2. Garante que "Padrão" está selecionado
+        applySettingsToControls(defaultProfile); // 3. Aplica padrões à UI (e habilita/desabilita botões)
+        postSettings(defaultProfile); // 4. Envia padrões para a API
 
         var stream = document.getElementById("stream");
         let errorTimeout = null;
-        stream.onerror = function(event) { /* ... (igual a antes) ... */
+        stream.onerror = function(event) { /* ... (igual) ... */
              console.error("Erro stream (onerror). Evento:", event);
              stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=";
              if (!errorTimeout) {
@@ -556,7 +456,7 @@
                  }, 5000);
              } else console.log("Timeout recarga ativo.");
         };
-        stream.onload = function() { /* ... (igual a antes) ... */
+        stream.onload = function() { /* ... (igual) ... */
               console.debug("Stream carregado (onload). Limpando timeout erro.");
               if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; }
         }
