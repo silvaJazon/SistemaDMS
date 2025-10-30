@@ -23,9 +23,6 @@ MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
 
-# (REMOVIDO) YOLO_IMG_SIZE/SCALE_X/Y - Vamos usar coordenadas dinâmicas
-
-
 class MediaPipeMonitor(BaseMonitor):
     """
     Implementação Multithread:
@@ -53,8 +50,8 @@ class MediaPipeMonitor(BaseMonitor):
         # --- 2. Inicializa o MediaPipe Hands (Thread Fundo) ---
         try:
             self.hands = mp.solutions.hands.Hands(
-                static_image_mode=False, # Modo vídeo
-                max_num_hands=1,         # Apenas 1 mão é distração
+                static_image_mode=False,
+                max_num_hands=1,
                 min_detection_confidence=0.5
             )
             logging.info(">>> Modelos MediaPipe Hands carregados.")
@@ -64,10 +61,12 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 3. Carregar Modelo YOLOv8 (Thread Fundo) ---
         try:
-            model_file = 'yolov8s.pt' 
+            # ================== ALTERAÇÃO (Modelo 'm') ==================
+            model_file = 'yolov8m.pt' # (ALTERADO) Usando modelo 'Medium'
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
+            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -81,11 +80,16 @@ class MediaPipeMonitor(BaseMonitor):
             
             logging.info(">>> Executando 'warm-up' (primeira inferência)...")
             try:
-                # (ALTERADO) Warm-up agora só precisa do 'hands'
+                # Warm-up Hands (frame inteiro)
                 dummy_frame_rgb = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
                 self.hands.process(dummy_frame_rgb)
-                # O YOLO será "aquecido" na primeira vez que uma mão for detetada
                 logging.info(">>> Warm-up (Hands) concluído.")
+                
+                # (NOVO) Warm-up YOLO (frame pequeno, simulando recorte)
+                dummy_crop_rgb = np.zeros((160, 160, 3), dtype=np.uint8)
+                self.yolo_model(dummy_crop_rgb, verbose=False, imgsz=160)
+                logging.info(">>> Warm-up (YOLO-Recorte) concluído.")
+                
             except Exception as e:
                 logging.warning(f"Falha no warm-up: {e}")
                  
@@ -108,7 +112,6 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
-        # Padrões (como definido nos logs: Conf 0.2, Frames 5)
         self.phone_detection_enabled = True
         self.phone_confidence = 0.20
         self.phone_frames = 5      
@@ -117,18 +120,12 @@ class MediaPipeMonitor(BaseMonitor):
         self.cam_thread_ref: CameraThread = None
         self.phone_thread = None
         self.yolo_lock = threading.Lock() 
-        self.last_yolo_boxes = [] # (ALTERADO) Agora guarda a BBox da MÃO
+        self.last_yolo_boxes = []
         self.phone_found_by_thread = False
 
 
     # --- Loop do Thread YOLO ---
     def _yolo_loop(self):
-        """
-        Loop (Thread Fundo) - Lógica Híbrida Otimizada:
-        1. Procura Mão (MediaPipe Hands - Rápido)
-        2. SE encontrar mão -> Recorta (Crop) a imagem
-        3. Executa YOLO (Celular) SÓ no recorte (Super Rápido)
-        """
         logging.info(">>> _yolo_loop (Thread Híbrido) iniciado.")
         
         if self.stop_event.wait(timeout=3.0): return
@@ -158,14 +155,13 @@ class MediaPipeMonitor(BaseMonitor):
                 
                 logging.debug("_yolo_loop: A executar inferência (1. Mãos)...")
                 
-                # Converte para RGB (necessário para MediaPipe Hands)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
                 # --- 1. Inferência MediaPipe Hands ---
                 results_hands = self.hands.process(frame_rgb)
                 
                 phone_found_final = False
-                current_boxes = [] # Caixa da MÃO
+                current_boxes = [] 
 
                 if results_hands.multi_hand_landmarks:
                     logging.info("_yolo_loop: Mão(MP) encontrada. Verificando se há um celular (YOLO)...")
@@ -182,7 +178,6 @@ class MediaPipeMonitor(BaseMonitor):
                             if y < y_min: y_min = y
                             if y > y_max: y_max = y
                         
-                        # Adicionar uma "margem" (padding) de segurança
                         padding = 30
                         x_min = max(0, x_min - padding)
                         y_min = max(0, y_min - padding)
@@ -202,7 +197,7 @@ class MediaPipeMonitor(BaseMonitor):
                             
                         results_yolo = self.yolo_model(
                             hand_crop, verbose=False, classes=[self.yolo_cellphone_class_id],
-                            conf=current_phone_confidence, imgsz=160, # Tamanho pequeno, pois a imagem já é pequena
+                            conf=current_phone_confidence, imgsz=160, 
                             augment=False, half=False
                         )
 
@@ -210,12 +205,11 @@ class MediaPipeMonitor(BaseMonitor):
                             for box in results_yolo[0].boxes:
                                 if int(box.cls) == self.yolo_cellphone_class_id:
                                     phone_found_final = True
-                                    # A "caixa" que desenhamos é a da MÃO
                                     current_boxes.append([x_min, y_min, x_max, y_max]) 
-                                    break # Encontrou telemóvel nesta mão
+                                    break 
                     
                         if phone_found_final:
-                             break # Sai do loop 'for hand_landmarks'
+                             break 
                 
                 # --- 5. Atualizar os resultados (thread-safe) ---
                 with self.yolo_lock:
@@ -231,7 +225,6 @@ class MediaPipeMonitor(BaseMonitor):
                     self.last_yolo_boxes = []
             # ================== LÓGICA HÍBRIDA (FIM) ==================
 
-            # (ALTERADO) Descansa 2 segundos. O processo agora é muito mais rápido (MP Hands + YOLO-crop)
             sleep_time = 2.0
             if self.stop_event.wait(timeout=sleep_time):
                 break
@@ -304,10 +297,9 @@ class MediaPipeMonitor(BaseMonitor):
         
         if phone_enabled_locked:
             with self.yolo_lock:
-                local_boxes = self.last_yolo_boxes # (ALTERADO) Isto agora é a BBox da mão
+                local_boxes = self.last_yolo_boxes 
                 phone_found = self.phone_found_by_thread
             
-            # (ALTERADO) Desenha a caixa da MÃO (apenas se o telemóvel foi encontrado nela)
             for box_coords in local_boxes:
                 x1, y1, x2, y2 = map(int, box_coords) 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
@@ -355,7 +347,6 @@ class MediaPipeMonitor(BaseMonitor):
                     logging.debug(f"DMSCore(YOLO/Mao): Celular/Mão encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
                     if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
                         self.phone_alert_active = True
-                        # (ALTERADO) Descrição do evento
                         events_list.append({"type": "DISTRACAO", "value": "Celular na mao", "timestamp": datetime.now().isoformat() + "Z"})
                         logging.warning("DMSCore(YOLO/Mao): EVENTO DISTRACAO (CELULAR NA MAO).")
                 else:
