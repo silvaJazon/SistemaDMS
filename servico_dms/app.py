@@ -375,9 +375,9 @@ if __name__ == '__main__':
         
         # ================== ALTERAÇÃO (Carregamento Fixo) ==================
         # Carrega diretamente o MediaPipeMonitor
-        if not HAS_MEDIAPIPE:
-             logging.error("!!! MediaPipe não foi importado com sucesso. A parar.")
-             raise ImportError("MediaPipeMonitor não encontrado.")
+        
+        # (REMOVIDO) A verificação 'if not HAS_MEDIAPIPE:' que estava a causar o crash.
+        # A importação na linha 27 já falhará se o mediapipe não estiver instalado.
              
         dms_monitor = MediaPipeMonitor(frame_size=frame_size,
                                        default_settings=default_dms_settings)
