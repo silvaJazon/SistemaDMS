@@ -14,25 +14,26 @@ ROTATE_FRAME ?= 0
 
 # --- Variáveis Internas ---
 DOCKER_COMPOSE := docker compose -f $(COMPOSE_FILE)
+# Define o volume do código-fonte para os comandos de CI
+CI_VOLUME := -v ./servico_dms:/app
+
+# --- Alvos principais e auxiliares declarados como phony ---
+.PHONY: build up down prod-up-build logs restart status clean prune test lint format help
 
 # --- Alvos Principais ---
 
-.PHONY: build
 build:
 	@echo ">>> Construindo a imagem de $(SERVICO) (sem cache)..."
 	$(DOCKER_COMPOSE) build --no-cache $(SERVICO)
 
-.PHONY: up
 up:
 	@echo ">>> Iniciando os serviços... (Log: $(LOG_LEVEL), Rotação: $(ROTATE_FRAME))"
 	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d
 
-.PHONY: down
 down:
 	@echo ">>> Parando e removendo os serviços..."
 	$(DOCKER_COMPOSE) down
 
-.PHONY: prod-up-build
 prod-up-build: down
 	@echo ">>> Forçando a reconstrução e reiniciando os serviços..."
 	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d --build
@@ -40,56 +41,45 @@ prod-up-build: down
 
 # --- Alvos Auxiliares ---
 
-.PHONY: logs
 logs:
 	@echo ">>> Mostrando logs em tempo real de $(SERVICO)... (Ctrl+C para sair)"
 	$(DOCKER_COMPOSE) logs -f $(SERVICO)
 
-.PHONY: restart
 restart:
 	@echo ">>> Reiniciando o serviço $(SERVICO)..."
 	$(DOCKER_COMPOSE) restart $(SERVICO)
 	@echo ">>> Serviço reiniciado com sucesso!"
 
-.PHONY: status
 status:
 	@echo ">>> Status atual dos containers:"
 	$(DOCKER_COMPOSE) ps
 
-.PHONY: clean
 clean:
 	@echo ">>> Removendo containers parados, imagens órfãs e volumes não utilizados..."
 	docker system prune -f
 	@echo ">>> Limpeza leve concluída!"
 
-.PHONY: prune
 prune:
 	@echo "⚠️  ATENÇÃO: Esta ação remove TUDO (containers, imagens, volumes e redes)."
 	@read -p 'Deseja realmente continuar? (digite SIM): ' CONFIRM && [ "$$CONFIRM" = "SIM" ] && docker system prune -a --volumes -f || echo 'Operação cancelada.'
 	@echo ">>> Limpeza completa concluída (ou cancelada pelo usuário)."
 
-# --- (NOVOS) Alvos de Teste e Qualidade ---
+# --- Testes e Qualidade ---
 
-.PHONY: test
 test:
 	@echo ">>> Executando testes (pytest)..."
-	# Executa o pytest dentro de um novo container (run --rm)
-	$(DOCKER_COMPOSE) run --rm $(SERVICO) pytest
+	$(DOCKER_COMPOSE) run --rm $(CI_VOLUME) $(SERVICO) pytest
 
-.PHONY: lint
 lint:
 	@echo ">>> Verificando estilo de código (flake8)..."
-	$(DOCKER_COMPOSE) run --rm $(SERVICO) flake8 .
+	$(DOCKER_COMPOSE) run --rm $(CI_VOLUME) $(SERVICO) flake8 . --max-line-length=88 --extend-ignore=W292,E501
 
-.PHONY: format
 format:
 	@echo ">>> Formatando código (black)..."
-	$(DOCKER_COMPOSE) run --rm $(SERVICO) black .
-
+	$(DOCKER_COMPOSE) run --rm $(CI_VOLUME) $(SERVICO) black .
 
 # --- Ajuda ---
 
-.PHONY: help
 help:
 	@echo ""
 	@echo "==========================================="
@@ -106,9 +96,9 @@ help:
 	@echo "Comandos de Diagnóstico e Qualidade:"
 	@echo "  make status              - Mostra o status dos containers."
 	@echo "  make logs                - Mostra os logs em tempo real."
-	@echo "  make test                - (NOVO) Executa os testes automatizados (pytest)."
-	@echo "  make lint                - (NOVO) Verifica o estilo do código (flake8)."
-	@echo "  make format              - (NOVO) Formata o código (black)."
+	@echo "  make test                - Executa os testes automatizados (pytest)."
+	@echo "  make lint                - Verifica o estilo do código (flake8)."
+	@echo "  make format              - Formata o código (black)."
 	@echo ""
 	@echo "Comandos de Limpeza:"
 	@echo "  make clean               - Faz uma limpeza leve (sem apagar tudo)."
