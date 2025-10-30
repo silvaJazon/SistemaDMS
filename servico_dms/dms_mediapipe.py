@@ -55,10 +55,12 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 2. Carregar Modelo YOLOv8 ---
         try:
-            model_file = 'yolov8s.pt'
+            # ================== ALTERAÇÃO (Modelo 'm') ==================
+            model_file = 'yolov8m.pt' # (ALTERADO de 's' para 'm')
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
+            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -97,11 +99,11 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
-        # ================== ALTERAÇÃO ==================
-        self.phone_detection_enabled = True # (ALTERADO) Padrão agora é ATIVADO
-        # ===============================================
-        self.phone_confidence = 0.50
-        self.phone_frames = 20
+        # ================== ALTERAÇÃO (Novos Padrões) ==================
+        self.phone_detection_enabled = True
+        self.phone_confidence = 0.30 # (ALTERADO) Padrão 0.3 (30%)
+        self.phone_frames = 10     # (ALTERADO) Padrão 10 (segundos)
+        # ==============================================================
 
         # --- 4. Configuração do Thread YOLO ---
         self.cam_thread_ref: CameraThread = None

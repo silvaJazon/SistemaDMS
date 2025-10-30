@@ -39,8 +39,8 @@ COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
 
-# ================== ALTERAÇÃO (Modelo 's') ==================
-COPY models/yolov8s.pt .
+# ================== ALTERAÇÃO (Modelo 'm') ==================
+COPY models/yolov8m.pt .
 # ==========================================================
 
 # Expõe a porta padrão do Flask
