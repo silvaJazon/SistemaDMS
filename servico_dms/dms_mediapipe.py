@@ -23,7 +23,7 @@ MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
 
-# (NOVO) Define o tamanho da imagem de inferência do YOLO
+# Define o tamanho da imagem de inferência do YOLO
 YOLO_IMG_WIDTH = 320
 YOLO_IMG_HEIGHT = 240
 # Fatores de escala (640/320 = 2.0)
@@ -70,16 +70,13 @@ class MediaPipeMonitor(BaseMonitor):
             if self.yolo_cellphone_class_id == -1:
                  logging.warning("!!! Classe 'cell phone' não encontrada nos nomes do modelo YOLO.")
             
-            # ================== ALTERAÇÃO 1 (Warm-up) ==================
             logging.info(">>> Executando 'warm-up' do YOLOv8 (primeira inferência)...")
             try:
-                # Cria uma imagem preta (320x240) para o warm-up
                 dummy_frame = np.zeros((YOLO_IMG_HEIGHT, YOLO_IMG_WIDTH, 3), dtype=np.uint8)
                 self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_WIDTH)
                 logging.info(">>> Warm-up do YOLOv8 concluído.")
             except Exception as e:
                 logging.warning(f"Falha no warm-up do YOLO: {e}")
-            # ==========================================================
                  
         except Exception as e:
             logging.error(f"!!! ERRO FATAL YOLO: {e}", exc_info=True)
@@ -100,7 +97,9 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
-        self.phone_detection_enabled = False
+        # ================== ALTERAÇÃO ==================
+        self.phone_detection_enabled = True # (ALTERADO) Padrão agora é ATIVADO
+        # ===============================================
         self.phone_confidence = 0.50
         self.phone_frames = 20
 
@@ -142,20 +141,17 @@ class MediaPipeMonitor(BaseMonitor):
                 
                 logging.info("_yolo_loop: A executar inferência YOLO...")
                 
-                # Reduz o frame para acelerar a inferência
                 yolo_frame = cv2.resize(frame, (YOLO_IMG_WIDTH, YOLO_IMG_HEIGHT))
 
-                # ================== ALTERAÇÃO 2 (Otimização) ==================
                 results = self.yolo_model(
                     yolo_frame,
                     verbose=False,
                     classes=[self.yolo_cellphone_class_id],
                     conf=current_phone_confidence,
-                    imgsz=YOLO_IMG_WIDTH, # Explicitamente diz o tamanho
-                    augment=False,      # Desliga aumentação
-                    half=False          # Desliga half-precision (CPU)
+                    imgsz=YOLO_IMG_WIDTH, 
+                    augment=False,      
+                    half=False          
                 )
-                # ============================================================
                 
                 current_boxes = []
                 phone_found = False
