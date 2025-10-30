@@ -57,9 +57,11 @@
             <div class="status-info mt-4 flex flex-wrap gap-x-4 gap-y-2 justify-center text-sm">
                 <span>EAR: <span id="status-ear" class="font-mono text-lg text-blue-300">-</span></span> |
                 <span>MAR: <span id="status-mar" class="font-mono text-lg text-blue-300">-</span></span> |
+                {% if active_backend == 'DLIB' %}
                 <span>Yaw: <span id="status-yaw" class="font-mono text-lg text-green-300">-</span></span> |
                 <span>Pitch: <span id="status-pitch" class="font-mono text-lg text-green-300">-</span></span> |
                 <span>Roll: <span id="status-roll" class="font-mono text-lg text-green-300">-</span></span> |
+                {% endif %}
                 <span id="status-queue" class="queue-status queue-status-unknown font-mono text-lg">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
         </section>
@@ -88,6 +90,7 @@
                 </div>
             </details>
 
+            {% if active_backend == 'DLIB' %}
             <details>
                 <summary>Deteção de Celular (YOLO)</summary>
                 <div class="p-4 space-y-4">
@@ -107,9 +110,10 @@
                             <label for="phone_frames">Frames Deteção <span class="info-icon" title="Nº frames (contados em 'saltos') com celular.">ⓘ</span></label>
                             <div class="input-row"><input type="range" id="phone_frames" name="phone_frames" min="10" max="60" step="1"><span class="slider-value" id="phone_frames_value">20</span></div>
                         </div>
-                        
-                         </div> </div>
+
+                    </div> </div>
             </details>
+            {% endif %}
             <details>
                 <summary>Configurações da Câmara</summary>
                 <div class="p-4 space-y-4">
@@ -157,18 +161,10 @@
         const sliders = controlsContainer.querySelectorAll('input[type="range"]');
         const allDetectionSliders = document.querySelectorAll('details:not(:last-of-type) input[type="range"]'); 
         
-        // (ALTERADO) Seletores para Deteção de Celular
+        // (ALTERADO) Seletores podem ser NULOS se o painel não for renderizado
         const phoneControlsGroup = document.getElementById('phone-controls-group');
         const phoneCheckbox = document.getElementById('phone_detection_enabled');
         
-        // (REMOVIDO) Seletores de Distração/Pose
-        // const distractionControlsGroup = ...
-        // const distractionCheckbox = ...
-        // const startCalibrationButton = ...
-        // const calibrationStatus = ...
-        // const yawOffsetSlider = ...
-        // const pitchOffsetSlider = ...
-
         const rotationSelect = document.getElementById('rotation');
         const brightnessSlider = document.getElementById('brightness');
         const saveStatus = document.getElementById('save_status');
@@ -183,8 +179,6 @@
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
         
         let initialApiSettings = {}; 
-        // (REMOVIDO) currentYawPitch
-        // (REMOVIDO) isCalibrating
 
         const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
                                  yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
@@ -197,27 +191,28 @@
             return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
         }
 
-        // (ALTERADO) Controla estado dos controlos
         function updateControlStates() {
             const isDefaultProfile = (profileSelect.value === "__default__");
             
-            // (ALTERADO) Verifica o checkbox de celular
-            const isPhoneEnabled = phoneCheckbox.checked; 
+            // (ALTERADO) Verifica se o checkbox de celular existe
+            const isPhoneEnabled = phoneCheckbox ? phoneCheckbox.checked : false; 
             console.debug(`updateControlStates: Default=${isDefaultProfile}, PhoneEnabled=${isPhoneEnabled}`);
 
             // Sliders de deteção (EAR, MAR, Celular) - Ativos só no perfil Padrão
             allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
-            // Checkbox de celular - Ativo só no perfil Padrão
-            phoneCheckbox.disabled = !isDefaultProfile;
+            // Checkbox de celular - Ativo só no perfil Padrão (e se existir)
+            if (phoneCheckbox) phoneCheckbox.disabled = !isDefaultProfile;
 
-            // (ALTERADO) Grupo de controlos de celular
-            const phoneSliders = phoneControlsGroup.querySelectorAll('input[type="range"]');
-            if (isDefaultProfile && isPhoneEnabled) {
-                phoneControlsGroup.classList.remove('opacity-50', 'disabled-group');
-                phoneSliders.forEach(s => s.disabled = false);
-            } else {
-                phoneControlsGroup.classList.add('opacity-50', 'disabled-group');
-                phoneSliders.forEach(s => s.disabled = true);
+            // (ALTERADO) Grupo de controlos de celular (só se existir)
+            if (phoneControlsGroup) {
+                const phoneSliders = phoneControlsGroup.querySelectorAll('input[type="range"]');
+                if (isDefaultProfile && isPhoneEnabled) {
+                    phoneControlsGroup.classList.remove('opacity-50', 'disabled-group');
+                    phoneSliders.forEach(s => s.disabled = false);
+                } else {
+                    phoneControlsGroup.classList.add('opacity-50', 'disabled-group');
+                    phoneSliders.forEach(s => s.disabled = true);
+                }
             }
 
             // Sliders da câmara (sempre ativos)
@@ -230,8 +225,6 @@
             saveProfileButton.disabled = false;
         }
 
-
-        // Aplica settings aos controlos (sliders, select, checkbox)
         function applySettingsToControls(settings) {
             sliders.forEach(slider => {
                 const valueSpan = document.getElementById(`${slider.id}_value`);
@@ -241,57 +234,57 @@
                         const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                         valueSpan.textContent = formatNumber(settings[slider.name], decimals);
                     }
-                } else console.warn(`Apply: Setting '${slider.name}' não encontrado.`);
+                // (ALTERADO) Não avisa se o slider não existir (ex: phone_confidence no backend MediaPipe)
+                } else if (document.getElementById(slider.id)) { 
+                    console.warn(`Apply: Setting '${slider.name}' não encontrado.`);
+                }
             });
             if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
             else console.warn("Apply: Setting 'rotation' não encontrado.");
             
-            // (ALTERADO) Aplica estado da checkbox de celular
+            // (ALTERADO) Aplica estado da checkbox de celular (só se existir)
             if (settings.hasOwnProperty('phone_detection_enabled')) {
-                 phoneCheckbox.checked = settings.phone_detection_enabled;
+                 if (phoneCheckbox) phoneCheckbox.checked = settings.phone_detection_enabled;
             } else {
-                 phoneCheckbox.checked = false; 
-                 console.warn("Apply: Setting 'phone_detection_enabled' não encontrado, usando 'false'.")
+                 if (phoneCheckbox) phoneCheckbox.checked = false; 
+                 if (phoneCheckbox) console.warn("Apply: Setting 'phone_detection_enabled' não encontrado, usando 'false'.")
             }
 
-            // Atualiza estado visual (bloqueado/desbloqueado)
             updateControlStates();
         }
 
-        // Retorna objeto com valores atuais dos controlos (incluindo checkbox)
         function getCurrentControlSettings() {
              const currentSettings = {};
              sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
              currentSettings.rotation = parseInt(rotationSelect.value);
-             // (ALTERADO) Lê o checkbox de celular
-             currentSettings.phone_detection_enabled = phoneCheckbox.checked; 
+             // (ALTERADO) Lê o checkbox de celular (só se existir)
+             if (phoneCheckbox) {
+                currentSettings.phone_detection_enabled = phoneCheckbox.checked;
+             }
              return currentSettings;
         }
 
         // --- Comunicação API (Backend) ---
         async function fetchAndUpdateSettings() {
-             // (REMOVIDO) Modo Calibração
-            
-            // Modo Normal: Busca config completa e status
             try { 
                 const response = await fetch('/api/config'); if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json(); console.debug("Conf/Status recebido:", data);
                 
-                // (REMOVIDO) Lógica de guardar config inicial (movida para initializeApp)
-                
-                // Atualiza Status (EAR/MAR/Yaw...)
                 if (data.status) {
-                    // (REMOVIDO) currentYawPitch
-                    for (const key in statusElements) { 
-                        // (ALTERADO) Se a chave não existir (ex: yaw), o formatNumber tratará como NaN e porá '-'
-                        const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; 
-                        statusElements[key].textContent = formatNumber(data.status[key], decimals); 
+                    for (const key in statusElements) {
+                        // (ALTERADO) Verifica se o elemento de status existe no HTML antes de o atualizar
+                        // (Isto esconde Yaw/Pitch/Roll se não existirem)
+                        if (statusElements[key]) { 
+                            const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; 
+                            statusElements[key].textContent = formatNumber(data.status[key], decimals);
+                        }
                     }
                 } else { 
-                    for (const key in statusElements) statusElements[key].textContent = '-';
+                    for (const key in statusElements) {
+                         if (statusElements[key]) statusElements[key].textContent = '-';
+                    }
                 }
                 
-                // Atualiza Status da Fila
                 if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
                     const depth = data.queue_depth, max_size = data.queue_max_size; 
                     queueElements.depth.textContent = depth; 
@@ -306,14 +299,15 @@
                 }
             } catch (error) { 
                 console.error("Erro buscar conf/status:", error); 
-                for (const key in statusElements) statusElements[key].textContent = 'Erro'; 
+                for (const key in statusElements) {
+                    if (statusElements[key]) statusElements[key].textContent = 'Erro';
+                }
                 queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?'; 
                 queueElements.span.className = 'queue-status queue-status-error'; 
             }
         }
 
         async function postSettings(settingsToPost) {
-             // (REMOVIDO) if(isCalibrating) return;
              if (!settingsToPost) settingsToPost = getCurrentControlSettings();
             console.debug("A enviar conf:", settingsToPost);
             try { 
@@ -327,7 +321,6 @@
         }
 
         // --- Funções de Gestão de Perfis ---
-        // (Funções getSavedProfiles, populateProfileDropdown, saveProfile, updateProfile, loadProfile, deleteProfile permanecem idênticas)
         function getSavedProfiles() {
             const profiles = {};
             for (let i = 0; i < localStorage.length; i++) {
@@ -382,18 +375,14 @@
              const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { saveStatus.textContent = "Erro apagar."; saveStatus.style.color = "#f44336"; } } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
         }
 
-        // --- (REMOVIDO) Funções de Calibração (startCalibration, finishCalibration) ---
-
         // --- Event Listeners ---
-
-        // (ALTERADO) Listener GERAL para 'change'
         controlsContainer.addEventListener('change', (e) => {
             const target = e.target;
             if (target.type === 'text') return;
             
             console.debug(`Change event on: ${target.name}, Value: ${target.type === 'checkbox' ? target.checked : target.value}`);
 
-            // (ALTERADO) Verifica o checkbox de celular
+            // (ALTERADO) Verifica se o alvo existe (ex: phone_detection_enabled)
             if (target.id === 'phone_detection_enabled') {
                 updateControlStates();
             }
@@ -410,7 +399,6 @@
             }
         });
 
-        // Listener GERAL para 'input' (arrastar slider) - (Permanece igual)
         sliders.forEach(slider => {
             const valueSpan = document.getElementById(`${slider.id}_value`);
             if (valueSpan) {
@@ -421,7 +409,6 @@
             }
         });
 
-        // Listener 'resetButton' - (Permanece igual)
         resetButton.addEventListener('click', () => { 
             console.debug("Restaurando Padrão (da API)..."); 
             profileSelect.value = "__default__"; 
@@ -443,11 +430,8 @@
         updateProfileButton.addEventListener('click', updateProfile);
         loadProfileButton.addEventListener('click', loadProfile);
         deleteProfileButton.addEventListener('click', deleteProfile);
-        // (REMOVIDO) startCalibrationButton.addEventListener('click', startCalibration);
 
         // --- Inicialização ---
-        
-        // (ALTERADO) Função de inicialização
         async function initializeApp() {
             try {
                 console.debug("Iniciando app, buscando config da API...");
@@ -458,11 +442,10 @@
                 if (data.error) throw new Error(data.error);
 
                 initialApiSettings = { ...data };
-                // Limpa chaves dinâmicas
                 delete initialApiSettings.status; 
                 delete initialApiSettings.queue_depth; 
                 delete initialApiSettings.queue_max_size; 
-                // (NOVO) Limpa chaves de pose que podem ter vindo do cache do backend MediaPipe
+                // (Limpa chaves de pose que possam ter vindo do backend MediaPipe)
                 delete initialApiSettings.distraction_detection_enabled;
                 delete initialApiSettings.distraction_angle;
                 delete initialApiSettings.distraction_frames;
@@ -492,7 +475,7 @@
 
         initializeApp();
 
-        // Stream Error Handling - (Permanece igual)
+        // Stream Error Handling
         var stream = document.getElementById("stream"); let errorTimeout = null;
         stream.onerror = function(event) { console.error("Erro stream (onerror). Evento:", event); stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; if (!errorTimeout) { console.warn("Tentando recarregar stream em 5s..."); errorTimeout = setTimeout(function() { var timestamp = new Date().getTime(); var newSrc = "{{ url_for('video_feed') }}?" + timestamp; console.log("Tentando src:", newSrc); stream.src = newSrc; errorTimeout = null; }, 5000); } else console.log("Timeout recarga ativo."); };
         stream.onload = function() { console.debug("Stream carregado (onload). Limpando timeout erro."); if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; } }
