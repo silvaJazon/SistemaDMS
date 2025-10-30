@@ -79,7 +79,8 @@ test:
 .PHONY: lint
 lint:
 	@echo ">>> Verificando estilo de código (flake8)..."
-	$(DOCKER_COMPOSE) run --rm $(SERVICO) flake8 .
+	# (NOVO) Passa as regras do .flake8 diretamente para o comando
+	$(DOCKER_COMPOSE) run --rm $(SERVICO) flake8 . --max-line-length=88 --extend-ignore=W292
 
 .PHONY: format
 format:
