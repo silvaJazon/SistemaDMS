@@ -1,6 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
-# (ALTERADO) Refatorado para usar a classe base BaseMonitor
+# (VERSÃO: MediaPipe + YOLO)
 
 import cv2
 import time
@@ -17,20 +16,11 @@ import signal
 
 # Importa os nossos módulos
 from camera_thread import CameraThread
-# (ALTERADO) Importa a implementação específica (DlibMonitor) e a base
 from dms_base import BaseMonitor
-from dms_core import DlibMonitor 
-# (NOVO) Importa a implementação MediaPipe
-try:
-    from dms_mediapipe import MediaPipeMonitor
-    HAS_MEDIAPIPE = True
-except ImportError as e:
-    logging.warning(f"Não foi possível importar MediaPipeMonitor: {e}. MediaPipe não estará disponível.")
-    HAS_MEDIAPIPE = False
+from dms_mediapipe import MediaPipeMonitor
     
 from event_handler import EventHandler
 
-# Tenta importar o Waitress
 try:
     from waitress import serve
     HAS_WAITRESS = True
@@ -58,17 +48,12 @@ TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 
-# (CORRIGIDO) Adiciona .strip() para remover espaços em branco
-DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper().strip()
+DETECTION_BACKEND = "MEDIAPIPE"
 
-# ================== ALTERAÇÃO (Padrões Centralizados) ==================
-# Configurações Padrão de Deteção (centralizadas)
 DEFAULT_EAR_THRESHOLD = 0.25
 DEFAULT_EAR_FRAMES = 7
 DEFAULT_MAR_THRESHOLD = 0.40
 DEFAULT_MAR_FRAMES = 10
-# =======================================================================
-
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -81,13 +66,12 @@ cam_thread = None
 detection_thread = None
 event_handler = None
 event_queue = None
-dms_monitor: BaseMonitor = None # (ALTERADO) Tipo é a classe Base
+dms_monitor: BaseMonitor = None
 
 app = Flask(__name__)
 
-# --- Funções Auxiliares ---
+# --- Funções Auxiliares (create_placeholder_frame) ---
 def create_placeholder_frame(text="Aguardando camera..."):
-    """Cria um frame preto com texto."""
     frame = np.zeros((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY, 3), dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
     try:
@@ -97,9 +81,8 @@ def create_placeholder_frame(text="Aguardando camera..."):
          cv2.rectangle(frame, (10, FRAME_HEIGHT_DISPLAY//2 - 20), (FRAME_WIDTH_DISPLAY-10, FRAME_HEIGHT_DISPLAY//2 + 20), (50, 50, 50), -1)
     return frame
 
-# --- Threads Principais ---
-def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref): # (ALTERADO) Tipo da referência
-    """Loop principal de deteção (Usa a interface BaseMonitor)."""
+# --- Threads Principais (detection_loop) ---
+def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
     global output_frame_display, status_data_global
     logging.info(f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) iniciado (Alvo: {TARGET_FPS} FPS).")
     last_process_time = time.time()
@@ -132,7 +115,7 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 stop_event.wait(timeout=1.0)
                 continue
 
-            # (SEM ALTERAÇÃO) Chama o método da interface, não importa a implementação
+            # (ALTERADO) Esta chamada agora é RÁPIDA. O YOLO corre em paralelo.
             processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -174,33 +157,26 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
             logging.debug(f"DetectionLoop: A esperar {wait_time:.3f}s...")
             stop_event.wait(timeout=wait_time)
         else:
-            current_time = time.time()
-            if current_time - last_process_time > 5.0:
-                 logging.warning(f"!!! LOOP LENTO. Demorou {processing_time:.2f}s (Alvo {TARGET_FRAME_TIME:.2f}s)")
-                 last_process_time = current_time
+            # (REMOVIDO) O log de "LOOP LENTO" já não deve acontecer
             logging.debug("DetectionLoop: Loop lento, pausa (0.01s).")
             stop_event.wait(timeout=0.01)
 
     logging.info(">>> Loop de deteção terminado.")
 
 
-# --- Servidor Web Flask ---
+# --- Servidor Web Flask (Rotas: /, /alerts, generate_video_stream, video_feed) ---
 @app.route("/")
 def index():
-    """Serve a página de calibração."""
     cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
-    # (NOVO) Passa o backend ativo para o template
     return render_template("index.html", source_desc=cam_source_desc,
                            width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY,
                            active_backend=DETECTION_BACKEND)
 
 @app.route("/alerts")
 def alerts_page():
-    """Serve a página de histórico."""
     return render_template("alerts.html")
 
 def generate_video_stream():
-    """Gera frames de vídeo para o stream HTTP."""
     global output_frame_display
     placeholder = create_placeholder_frame()
     last_frame_time = time.time()
@@ -259,17 +235,15 @@ def generate_video_stream():
 
 @app.route("/video_feed")
 def video_feed():
-    """Serve o stream de vídeo."""
     logging.debug("Rota /video_feed acedida.")
     if not cam_thread or not cam_thread.is_alive():
          logging.error("Rota /video_feed: Thread câmara não ativa.")
          return "Camera thread not running", 503
     return Response(generate_video_stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-# --- Rotas da API ---
+# --- Rotas da API (api_config, api_alerts, serve_alert_image) ---
 @app.route("/api/config", methods=['GET', 'POST'])
 def api_config():
-    """API para ler/atualizar configurações (Distração Opcional)."""
     global dms_monitor
     logging.debug(f"Rota /api/config (Método: {request.method})")
     if dms_monitor is None or not cam_thread or not event_queue:
@@ -278,12 +252,9 @@ def api_config():
 
     if request.method == 'GET':
         try:
-            # (SEM ALTERAÇÃO) Chama o método da interface
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
-            
-            # (NOVO) Adiciona o backend ativo
             current_settings['active_backend'] = DETECTION_BACKEND
 
             logging.debug("api_config GET: Lock status...")
@@ -292,7 +263,7 @@ def api_config():
                 current_settings['status'] = status_data_global.copy()
             logging.debug("api_config GET: Lock status libertado.")
 
-            try: # Fila
+            try:
                 current_settings['queue_depth'] = event_queue.qsize()
                 current_settings['queue_max_size'] = event_queue.maxsize
             except Exception as e:
@@ -311,10 +282,9 @@ def api_config():
             logging.debug(f"/api/config POST: Recebido {new_settings}")
             if not new_settings: return jsonify({"success": False, "error": "No data received"}), 400
 
-            # (SEM ALTERAÇÃO) Chama o método da interface
             dms_success = dms_monitor.update_settings(new_settings)
 
-            cam_success = True # Câmara
+            cam_success = True
             try:
                 if 'brightness' in new_settings: cam_thread.update_brightness(new_settings['brightness'])
                 if 'rotation' in new_settings: cam_thread.update_rotation(new_settings['rotation'])
@@ -333,7 +303,6 @@ def api_config():
 
 @app.route("/api/alerts", methods=['GET'])
 def api_alerts():
-    """API para obter alertas."""
     logging.debug("Rota /api/alerts acedida.")
     if not event_handler: logging.warning("/api/alerts: Gestor eventos não init."); return jsonify({"error": "Event handler not initialized"}), 503
     try:
@@ -344,7 +313,6 @@ def api_alerts():
 
 @app.route('/alerts/images/<path:filepath>')
 def serve_alert_image(filepath):
-    """Serve imagens de alerta."""
     logging.debug(f"Rota /alerts/images: {filepath}")
     if not event_handler: logging.warning(f"/alerts/images: Gestor eventos não init ({filepath})."); return "Event handler not initialized", 503
     image_base_path = os.path.join(event_handler.save_path, "images"); safe_path = os.path.abspath(os.path.join(image_base_path, filepath))
@@ -353,9 +321,8 @@ def serve_alert_image(filepath):
     try: logging.debug(f"A servir imagem: {safe_path}"); return send_from_directory(os.path.dirname(safe_path), os.path.basename(safe_path))
     except Exception as e: logging.error(f"Erro servir imagem '{filepath}': {e}", exc_info=True); return "Internal server error", 500
 
-# --- Encerramento Gracioso ---
+# --- Encerramento Gracioso (shutdown_handler) ---
 def shutdown_handler(signum, frame):
-    """Lida com SIGINT/SIGTERM."""
     if not stop_event.is_set():
         logging.info(f">>> Sinal {signal.Signals(signum).name} recebido. A encerrar...")
         stop_event.set()
@@ -378,41 +345,19 @@ if __name__ == '__main__':
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
-        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
-        # Cria dicionário de padrões para passar aos monitores
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
             "mar_threshold": DEFAULT_MAR_THRESHOLD,
             "mar_frames": DEFAULT_MAR_FRAMES
-            # (Nota: Padrões de distração são definidos internamente nos backends)
         }
-        # =======================================================================
         
-        # (ALTERADO) Lógica para escolher o backend
-        if DETECTION_BACKEND == 'MEDIAPIPE':
-            if HAS_MEDIAPIPE:
-                # (ALTERADO) Passa os padrões
-                dms_monitor = MediaPipeMonitor(frame_size=frame_size,
-                                               default_settings=default_dms_settings)
-            else:
-                logging.error("!!! DETECTION_BACKEND='MEDIAPIPE' mas a importação falhou. A usar DLIB.")
-                DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-                # (ALTERADO) Passa os padrões
-                dms_monitor = DlibMonitor(frame_size=frame_size,
-                                          default_settings=default_dms_settings)
-        
-        elif DETECTION_BACKEND == 'DLIB':
-            # (ALTERADO) Passa os padrões
-            dms_monitor = DlibMonitor(frame_size=frame_size,
-                                      default_settings=default_dms_settings)
-        
-        else:
-            logging.error(f"!!! DETECTION_BACKEND '{DETECTION_BACKEND}' desconhecido. A usar DLIB.")
-            DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-            # (ALTERADO) Passa os padrões
-            dms_monitor = DlibMonitor(frame_size=frame_size,
-                                      default_settings=default_dms_settings)
+        # ================== ALTERAÇÃO (Passa o stop_event) ==================
+        logging.info("A carregar o MediaPipeMonitor...")
+        dms_monitor = MediaPipeMonitor(frame_size=frame_size,
+                                       stop_event=stop_event, # (NOVO)
+                                       default_settings=default_dms_settings)
+        # ===================================================================
 
         cam_thread = CameraThread(
             VIDEO_SOURCE,
@@ -436,6 +381,17 @@ if __name__ == '__main__':
             raise RuntimeError("Thread câmara terminou.")
 
         logging.info(">>> Primeiro frame recebido!")
+
+        # (ALTERADO) O dms_monitor agora precisa do cam_thread para o seu loop YOLO
+        # Vamos passar a referência após a câmara ter arrancado.
+        try:
+             dms_monitor.start_yolo_thread(cam_thread)
+             logging.info(">>> Thread de deteção de celular (YOLO) iniciada.")
+        except AttributeError as e:
+             logging.warning(f"Não foi possível iniciar o thread YOLO: {e}")
+        except Exception as e:
+             logging.error(f"Erro ao iniciar thread YOLO: {e}", exc_info=True)
+
 
         detection_thread = threading.Thread(
             target=detection_loop,
@@ -475,7 +431,6 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error(f"!!! ERRO FATAL não capturado: {e}", exc_info=True)
     finally:
-        # Garante que stop_event é definido antes de tentar juntar threads
         if not stop_event.is_set():
             logging.warning("stop_event não estava definido no finally, definindo agora.")
             stop_event.set()
@@ -483,22 +438,24 @@ if __name__ == '__main__':
         logging.info(">>> A iniciar encerramento final...")
         threads_to_join = []
 
-        # Verifica se as variáveis existem antes de aceder
         if 'detection_thread' in locals() and detection_thread and detection_thread.is_alive():
             threads_to_join.append(detection_thread)
         if 'cam_thread' in locals() and cam_thread and cam_thread.is_alive():
             threads_to_join.append(cam_thread)
         if 'event_handler' in locals() and event_handler and event_handler.is_alive():
             threads_to_join.append(event_handler)
+        
+        # (NOVO) Adiciona o thread YOLO ao encerramento, se existir
+        if 'dms_monitor' in locals() and dms_monitor and hasattr(dms_monitor, 'phone_thread') and dms_monitor.phone_thread.is_alive():
+             threads_to_join.append(dms_monitor.phone_thread)
 
         for t in threads_to_join:
             logging.info(f"A aguardar thread '{t.name}'...")
-            timeout = 2 if getattr(t, 'daemon', False) else 5  # getattr para segurança
+            timeout = 2 if getattr(t, 'daemon', False) else 5
             t.join(timeout=timeout)
 
-            # Verifica se alguma thread ficou presa
             if t.is_alive():
                 logging.warning(f"!!! Timeout ao esperar thread '{t.name}'.")
 
         logging.info(">>> Serviço DMS terminado.")
-        os._exit(0)  # Força a saída
+        os._exit(0)

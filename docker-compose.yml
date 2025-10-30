@@ -16,8 +16,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Passa a variável ROTATE_FRAME (definida no Makefile) para o contentor.
       - ROTATE_FRAME=${ROTATE_FRAME:-0}
-      # (NOVO) Passa a variável DETECTION_BACKEND (definida no Makefile)
-      - DETECTION_BACKEND=${DETECTION_BACKEND:-DLIB}
+      # (REMOVIDO) DETECTION_BACKEND
     ports:
       # Mapeamento de portas: Liga a porta 5000 do Pi à porta 5000 do contentor.
       - "5000:5000"
