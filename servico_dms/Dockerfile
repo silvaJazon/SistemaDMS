@@ -26,7 +26,9 @@ RUN apt-get update && \
         libopenblas-dev \
         libgl1-mesa-glx \
         libglib2.0-0 && \
-    apt-get autove -y && \
+    # ================== CORREÇÃO ==================
+    apt-get autoremove -y && \
+    # ============================================
     rm -rf /var/lib/apt/lists/*
 
 # Verifica a versão do CMake (deve ser >= 3.25.1)
@@ -45,8 +47,6 @@ RUN pip install --no-cache-dir --no-build-isolation pybind11
 RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
     pip install --no-cache-dir --no-build-isolation dlib==19.24.2
 
-# --- (REMOVIDO) Estágios de Download (agora locais) ---
-
 # --- Estágio Final ---
 
 # Cria diretório de alertas e copia templates
@@ -61,12 +61,10 @@ COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
 
-# ================== ALTERAÇÃO ==================
-# (NOVO) Copia os modelos da pasta local 'models/' para a raiz do app '.'
+# Copia os modelos da pasta local 'models/' para a raiz do app '.'
 # O Dockerfile é executado a partir de 'servico_dms', por isso o caminho é 'models/...'
 COPY models/shape_predictor_68_face_landmarks.dat .
 COPY models/yolov8n.pt .
-# ===============================================
 
 # Expõe a porta padrão do Flask
 EXPOSE 5000
