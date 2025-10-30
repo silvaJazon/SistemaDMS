@@ -1,5 +1,5 @@
-# Documentação: Núcleo do SistemaDMS (Implementação Dlib)
-# (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
+# Documentação: Núcleo do SistemaDMS (Implementação Dlib + YOLOv8)
+# (VERSÃO: Híbrido + Deteção de Celular (YOLOv8))
 
 import cv2
 import dlib
@@ -13,6 +13,9 @@ import time
 import sys
 from collections import deque
 
+# (NOVO) Importa YOLO
+from ultralytics import YOLO
+
 # (NOVO) Importa a classe base
 from dms_base import BaseMonitor
 
@@ -22,68 +25,75 @@ MOUTH_AR_START = 60
 MOUTH_AR_END = 68
 FRAMES_FOR_REDETECTION = 10
 TRACKER_CONFIDENCE_THRESHOLD = 5.5
-ANGLE_SMOOTHING_FRAMES = 7
+# (REMOVIDO) ANGLE_SMOOTHING_FRAMES
 
-# (ALTERADO) Renomeia a classe e herda de BaseMonitor
+# (NOVO) Stride para Deteção de Celular (executa o modelo a cada N frames)
+PHONE_DETECTION_STRIDE = 5 # Executa YOLO a cada 5 frames
+
 class DlibMonitor(BaseMonitor):
     """
-    Classe principal para a deteção de sonolência e distração (Backend: Dlib).
-    (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
+    Classe principal para a deteção de sonolência e (NOVO) telemóvel.
+    (VERSÃO: Híbrido Dlib + Deteção de Celular YOLOv8)
     """
     EYE_AR_LEFT_START = 42; EYE_AR_LEFT_END = 48
     EYE_AR_RIGHT_START = 36; EYE_AR_RIGHT_END = 42
 
-    HEAD_MODEL_POINTS = np.array([
-        (0.0, 0.0, 0.0), (0.0, -330.0, -65.0), (-225.0, 170.0, -135.0),
-        (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
-    ])
-    HEAD_IMAGE_POINTS_IDX = [30, 8, 36, 45, 48, 54]
+    # (REMOVIDO) Lógica de Pose 3D (HEAD_MODEL_POINTS, HEAD_IMAGE_POINTS_IDX)
 
-    # ================== ALTERAÇÃO (Padrões Centralizados) ==================
     def __init__(self, frame_size, default_settings: dict = None):
-        # (NOVO) Chama o __init__ da classe base
-        super().__init__(frame_size, default_settings) # (ALTERADO) Passa os settings
+        super().__init__(frame_size, default_settings)
         
-        # (ALTERADO) Log específico do Dlib
-        logging.info("A inicializar o DlibMonitor Core (Modo: Pose 3D Suavizada + Offsets + Distração Opcional)...")
-    # ===================================================================
-        # O resto do __init__ permanece igual
-        self.focal_length = self.frame_width
-        self.camera_center = (self.frame_width / 2, self.frame_height / 2)
-        self.camera_matrix = np.array([[self.focal_length, 0, self.camera_center[0]],
-                                       [0, self.focal_length, self.camera_center[1]],
-                                       [0, 0, 1]], dtype="double")
-        self.dist_coeffs = np.zeros((4,1))
+        logging.info("A inicializar o DlibMonitor Core (Modo: Híbrido Dlib + Deteção Celular YOLOv8)...")
 
+        # --- Carregar Modelos Dlib ---
         self.detector = None
         self.predictor = None
         self.initialize_dlib()
 
+        # --- (NOVO) Carregar Modelo YOLOv8 ---
+        try:
+            logging.info(">>> Carregando modelo YOLOv8n ('yolov8n.pt')...")
+            self.yolo_model = YOLO('yolov8n.pt')
+            logging.info(">>> Modelo YOLOv8n carregado.")
+            
+            # (NOVO) Encontra o ID da classe "cell phone" no modelo
+            self.yolo_cellphone_class_id = -1
+            if self.yolo_model.names:
+                for class_id, name in self.yolo_model.names.items():
+                    if name == 'cell phone':
+                        self.yolo_cellphone_class_id = class_id
+                        logging.info(f"Classe 'cell phone' encontrada no YOLO. ID: {class_id}")
+                        break
+            if self.yolo_cellphone_class_id == -1:
+                 logging.warning("!!! Classe 'cell phone' não encontrada nos nomes do modelo YOLO.")
+                 
+        except Exception as e:
+            logging.error(f"!!! ERRO FATAL YOLO: {e}", exc_info=True)
+            raise RuntimeError(f"Erro YOLO: {e}")
+
         self.lock = threading.Lock()
-        self.drowsiness_counter = 0; self.distraction_counter = 0; self.yawn_counter = 0
-        self.drowsy_alert_active = False; self.distraction_alert_active = False; self.yawn_alert_active = False
+        self.drowsiness_counter = 0
+        self.yawn_counter = 0
+        self.phone_counter = 0 # (RENOMEADO) de distraction_counter
+        self.frame_counter = 0 # (NOVO) Para o stride
+        
+        self.drowsy_alert_active = False
+        self.yawn_alert_active = False
+        self.phone_alert_active = False # (RENOMEADO) de distraction_alert_active
+
         self.face_tracker = None; self.tracking_active = False; self.tracked_rect = None; self.frame_since_detection = 0
-        self.yaw_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
-        self.pitch_history = deque(maxlen=ANGLE_SMOOTHING_FRAMES)
+        # (REMOVIDO) Histórico de Ângulos (yaw_history, pitch_history)
 
-        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
-        # Define os padrões de EAR/MAR a partir do dict (vindo do app.py)
-        # ou usa padrões 'de emergência' (fallbacks) se não forem fornecidos.
+        # Configurações (Padrão)
         self.ear_threshold = self.default_settings.get('ear_threshold', 0.25)
-        self.ear_frames = self.default_settings.get('ear_frames', 7) # Fallback
-        self.mar_threshold = self.default_settings.get('mar_threshold', 0.40) # Fallback
-        self.mar_frames = self.default_settings.get('mar_frames', 10) # Fallback
-        # =======================================================================
-
-        # (CORRIGIDO) Garante que o padrão é False
-        self.distraction_detection_enabled = False
-        # Padrões específicos de Distração (continuam internos)
-        self.distraction_angle = 40.0 # Yaw
-        self.distraction_frames = 35
-        self.pitch_down_offset = 20.0
-        self.pitch_up_threshold = -15.0
-        self.yaw_center_offset = 0.0
-        self.pitch_center_offset = 0.0
+        self.ear_frames = self.default_settings.get('ear_frames', 7)
+        self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
+        self.mar_frames = self.default_settings.get('mar_frames', 10)
+        
+        # (ALTERADO) Configurações de Deteção de Celular
+        self.phone_detection_enabled = False # (RENOMEADO)
+        self.phone_confidence = 0.50 # (NOVO) Confiança mínima
+        self.phone_frames = 20 # (RENOMEADO) N frames para alerta (antigo distraction_frames)
 
     def initialize_dlib(self):
         """Carrega modelos Dlib."""
@@ -98,64 +108,45 @@ class DlibMonitor(BaseMonitor):
             logging.error(f"!!! ERRO FATAL Dlib ({model_path}): {e}", exc_info=True)
             raise RuntimeError(f"Erro Dlib: {e}")
 
+    # ... (Funções _shape_to_np, _eye_aspect_ratio, _mouth_aspect_ratio permanecem iguais) ...
     def _shape_to_np(self, shape, dtype="int"):
-        """Converte landmarks Dlib para NumPy."""
         coords = np.zeros((shape.num_parts, 2), dtype=dtype)
         for i in range(shape.num_parts): coords[i] = (shape.part(i).x, shape.part(i).y)
         return coords
-
     def _eye_aspect_ratio(self, eye):
-        """Calcula EAR."""
         A=dist.euclidean(eye[1],eye[5]); B=dist.euclidean(eye[2],eye[4]); C=dist.euclidean(eye[0],eye[3])
         return 0.3 if C < 1e-6 else (A + B) / (2.0 * C)
-
     def _mouth_aspect_ratio(self, mouth):
-        """Calcula MAR."""
         A=dist.euclidean(mouth[1],mouth[7]); B=dist.euclidean(mouth[3],mouth[5]); C=dist.euclidean(mouth[0],mouth[4])
         return 0.0 if C < 1e-6 else (A + B) / (2.0 * C)
 
-    def _estimate_head_pose(self, shape_np):
-        """Estima pose da cabeça (Yaw, Pitch, Roll)."""
-        logging.debug("DMSCore(Dlib): Estimando pose...")
-        start_time_pose = time.time()
-        image_points = np.array([shape_np[i] for i in self.HEAD_IMAGE_POINTS_IDX], dtype="double")
-        try:
-            (success, rotation_vector, _) = cv2.solvePnP(self.HEAD_MODEL_POINTS, image_points,
-                                                          self.camera_matrix, self.dist_coeffs,
-                                                          flags=cv2.SOLVEPNP_ITERATIVE)
-            if not success: logging.debug("DMSCore(Dlib): solvePnP falhou."); return None, None, None
-            (rotation_matrix, _) = cv2.Rodrigues(rotation_vector)
-            angles, _, _, _, _, _ = cv2.RQDecomp3x3(rotation_matrix)
-            yaw = angles[1]; pitch = angles[0]; roll = angles[2]
-            logging.debug(f"DMSCore(Dlib): Pose RAW (Y={yaw:.1f}, P={pitch:.1f}, R={roll:.1f}) {time.time()-start_time_pose:.4f}s.")
-            return yaw, pitch, roll
-        except cv2.error as e: logging.warning(f"DMSCore(Dlib): Erro OpenCV pose: {e}"); return None, None, None
-        except Exception as e: logging.error(f"DMSCore(Dlib): Erro pose: {e}", exc_info=True); return None, None, None
+    # (REMOVIDO) def _estimate_head_pose(self, shape_np): ...
 
     def _reset_counters_and_cooldowns(self):
-        """Reinicia contadores, cooldowns e histórico de ângulos."""
-        logging.debug("DMSCore(Dlib): Reset counters/cooldowns/history.")
-        self.drowsiness_counter=0; self.distraction_counter=0; self.yawn_counter=0
-        self.drowsy_alert_active=False; self.distraction_alert_active=False; self.yawn_alert_active=False
-        self.yaw_history.clear(); self.pitch_history.clear()
-
+        """Reinicia contadores e cooldowns."""
+        logging.debug("DMSCore(Dlib): Reset counters/cooldowns.")
+        self.drowsiness_counter=0; self.yawn_counter=0; self.phone_counter = 0
+        self.drowsy_alert_active=False; self.yawn_alert_active=False; self.phone_alert_active = False
+        # (REMOVIDO) Reset de histórico de ângulos
 
     def process_frame(self, frame, gray):
-        """Analisa um frame (Híbrido + Pose 3D Suavizada + Offsets + Distração Opcional)."""
-        logging.debug("DMSCore(Dlib): process_frame (HÍBRIDO + POSE SUAVE + OFFSETS + DIST_OPCIONAL) iniciado.")
+        """Analisa um frame (Híbrido Dlib + Deteção Celular YOLOv8)."""
+        logging.debug("DMSCore(Dlib): process_frame (HÍBRIDO + YOLO CELULAR) iniciado.")
         start_time_total = time.time()
         events_list = []
+        # (ALTERADO) Status data não tem pose
         status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
         face_found_this_frame = False
-        gray_processed = cv2.equalizeHist(gray) # Para deteção
+        gray_processed = cv2.equalizeHist(gray)
         current_rect = None
+        
+        self.frame_counter += 1 # Incrementa contador de frames
 
-        # --- Lógica de Deteção/Tracking ---
+        # --- Lógica de Deteção/Tracking de Rosto (Dlib) ---
         logging.debug("DMSCore(Dlib): Lock tracking...")
         with self.lock:
-            # (NOVO) Lê estado de ativação da distração DENTRO do lock
-            # para evitar condições de corrida se for alterado enquanto processa
-            distraction_enabled = self.distraction_detection_enabled
+            # (ALTERADO) Lê estado de ativação da deteção de celular
+            phone_enabled = self.phone_detection_enabled
 
             logging.debug("DMSCore(Dlib): Lock tracking OK.")
             needs_detection = (not self.tracking_active) or (self.frame_since_detection >= FRAMES_FOR_REDETECTION)
@@ -190,7 +181,46 @@ class DlibMonitor(BaseMonitor):
                     self._reset_counters_and_cooldowns(); self.tracking_active=False; self.tracked_rect=None
         logging.debug("DMSCore(Dlib): Lock tracking libertado.")
 
-        # --- Processamento dos Landmarks e Pose ---
+        # --- (NOVO) Lógica de Deteção de Celular (YOLOv8) ---
+        phone_found_this_stride = False
+        if phone_enabled and (self.frame_counter % PHONE_DETECTION_STRIDE == 0) and self.yolo_cellphone_class_id != -1:
+            logging.debug("DMSCore(YOLO): Executando deteção de celular (YOLO)...")
+            start_time_yolo = time.time()
+            
+            # Executa a inferência YOLO. verbose=False desliga os logs do YOLO.
+            try:
+                # Usamos o 'frame' original (BGR), que é o que o YOLO espera
+                results = self.yolo_model(frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=self.phone_confidence)
+                
+                if results and results[0].boxes:
+                    for box in results[0].boxes:
+                        # Verifica se a classe é 'cell phone' (apesar do filtro, é uma boa prática)
+                        # e se a confiança é suficiente
+                        if int(box.cls) == self.yolo_cellphone_class_id:
+                            phone_found_this_stride = True
+                            logging.debug(f"DMSCore(YOLO): Celular encontrado! Conf: {box.conf.item():.2f}")
+                            
+                            # (NOVO) Desenha a caixa no frame
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                            cv2.putText(frame, f"Celular {box.conf.item():.2f}", (x1, y1 - 10), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+                            
+                            # Encontrou um, não precisa de procurar mais neste frame
+                            break 
+                            
+            except Exception as e:
+                logging.error(f"DMSCore(YOLO): Erro durante inferência YOLO: {e}", exc_info=True)
+
+            logging.debug(f"DMSCore(YOLO): Deteção YOLO {time.time()-start_time_yolo:.4f}s. Encontrado={phone_found_this_stride}")
+        
+        elif not phone_enabled: # Se desativado, reseta
+             with self.lock:
+                if self.phone_counter > 0 or self.phone_alert_active:
+                    self.phone_counter = 0; self.phone_alert_active = False
+                    logging.debug("DMSCore(YOLO): Deteção celular desativada, resetando contador/flag.")
+
+        # --- Processamento dos Landmarks (Rosto) ---
         if face_found_this_frame and current_rect is not None:
             logging.debug("DMSCore(Dlib): Prevendo landmarks...")
             start_time_predict = time.time()
@@ -202,34 +232,10 @@ class DlibMonitor(BaseMonitor):
             leftEye=shape_np[self.EYE_AR_LEFT_START:self.EYE_AR_LEFT_END]; rightEye=shape_np[self.EYE_AR_RIGHT_START:self.EYE_AR_RIGHT_END]
             ear = (self._eye_aspect_ratio(leftEye) + self._eye_aspect_ratio(rightEye)) / 2.0; logging.debug(f"DMSCore(Dlib): EAR={ear:.3f}")
             mouth = shape_np[MOUTH_AR_START:MOUTH_AR_END]; mar = self._mouth_aspect_ratio(mouth); logging.debug(f"DMSCore(Dlib): MAR={mar:.3f}")
+            
+            # (REMOVIDO) Cálculo de Pose
 
-            # (ALTERADO) Cálculo de Pose e Suavização só se a distração estiver ATIVA
-            yaw, pitch, roll = None, None, None
-            avg_yaw_centered, avg_pitch_centered = None, None
-            if distraction_enabled:
-                yaw, pitch, roll = self._estimate_head_pose(shape_np)
-                if yaw is not None and pitch is not None:
-                    with self.lock:
-                        self.yaw_history.append(yaw); self.pitch_history.append(pitch)
-                        if len(self.yaw_history) == ANGLE_SMOOTHING_FRAMES:
-                            avg_yaw = np.mean(self.yaw_history); avg_pitch = np.mean(self.pitch_history)
-                            avg_yaw_centered = avg_yaw - self.yaw_center_offset
-                            avg_pitch_centered = avg_pitch - self.pitch_center_offset
-                            logging.debug(f"DMSCore(Dlib): Ângulos Suaves (Y={avg_yaw:.1f}, P={avg_pitch:.1f}), Centrados (Yc={avg_yaw_centered:.1f}, Pc={avg_pitch_centered:.1f})")
-                        else: logging.debug(f"DMSCore(Dlib): Aguardando histórico ({len(self.yaw_history)}/{ANGLE_SMOOTHING_FRAMES})")
-                else: # Se a pose falhou, limpa histórico
-                    with self.lock: self.yaw_history.clear(); self.pitch_history.clear()
-            else: # Se distração desativada, limpa histórico e reseta contador/flag
-                 with self.lock:
-                      if len(self.yaw_history) > 0 or len(self.pitch_history) > 0:
-                          self.yaw_history.clear(); self.pitch_history.clear()
-                          logging.debug("DMSCore(Dlib): Histórico de ângulos limpo (distração desativada).")
-                      if self.distraction_counter > 0 or self.distraction_alert_active:
-                          self.distraction_counter = 0; self.distraction_alert_active = False
-                          logging.debug("DMSCore(Dlib): Contador/flag de distração resetado (distração desativada).")
-
-
-            # Desenho (igual)
+            # Desenho (Rosto)
             try:
                 cv2.drawContours(frame, [cv2.convexHull(leftEye)], -1, (0, 255, 0), 1); cv2.drawContours(frame, [cv2.convexHull(rightEye)], -1, (0, 255, 0), 1)
                 cv2.drawContours(frame, [cv2.convexHull(mouth)], -1, (0, 255, 255), 1)
@@ -237,7 +243,7 @@ class DlibMonitor(BaseMonitor):
                 cv2.rectangle(frame, pt1, pt2, (255, 255, 0), 2)
             except Exception as e: logging.warning(f"DMSCore(Dlib): Erro desenho: {e}")
 
-            # --- Lógica de Alerta ---
+            # --- Lógica de Alerta (Sonolência, Bocejo) ---
             logging.debug("DMSCore(Dlib): Lock alerta...")
             with self.lock:
                 logging.debug("DMSCore(Dlib): Lock alerta OK.")
@@ -258,48 +264,40 @@ class DlibMonitor(BaseMonitor):
                     if self.yawn_counter > 0: logging.debug("DMSCore(Dlib): Bocejo reset.")
                     self.yawn_counter=0; self.yawn_alert_active=False
 
-                # (ALTERADO) Distração (só executa se ativa E ângulos médios disponíveis)
-                if distraction_enabled and avg_yaw_centered is not None and avg_pitch_centered is not None:
-                    pitch_down_limit_centered = self.pitch_down_offset
-                    pitch_up_limit_centered = self.pitch_up_threshold
-                    is_distracted_angle = (abs(avg_yaw_centered) > self.distraction_angle) or \
-                                          (avg_pitch_centered < pitch_up_limit_centered) or \
-                                          (avg_pitch_centered > pitch_down_limit_centered)
-                    details = f"Yaw(c): {avg_yaw_centered:.1f}, Pitch(c): {avg_pitch_centered:.1f}"
-                    if is_distracted_angle:
-                        self.distraction_counter += 1
-                        logging.debug(f"DMSCore(Dlib): Ângulo CENTRADO fora ({details} vs Yaw>{self.distraction_angle}, Pitch<({pitch_up_limit_centered})>({pitch_down_limit_centered})), cont={self.distraction_counter}/{self.distraction_frames}")
-                        if self.distraction_counter >= self.distraction_frames and not self.distraction_alert_active:
-                            self.distraction_alert_active = True
-                            events_list.append({"type": "DISTRACAO", "value": f"Yaw: {yaw:.1f}, Pitch: {pitch:.1f}", "timestamp": datetime.now().isoformat() + "Z"})
-                            logging.warning("DMSCore(Dlib): EVENTO DISTRACAO.")
+                # --- (ALTERADO) Lógica de Alerta (Celular) ---
+                # Esta lógica é atualizada apenas nos frames em que o YOLO corre
+                if phone_enabled and (self.frame_counter % PHONE_DETECTION_STRIDE == 0):
+                    if phone_found_this_stride:
+                        self.phone_counter += PHONE_DETECTION_STRIDE # Incrementa o "stride"
+                        logging.debug(f"DMSCore(YOLO): Celular encontrado, cont={self.phone_counter}/{self.phone_frames}")
+                        if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
+                            self.phone_alert_active = True
+                            # (ALTERADO) Tipo de evento para "DISTRACAO" (ou "CELULAR")
+                            events_list.append({"type": "DISTRACAO", "value": "Celular detectado", "timestamp": datetime.now().isoformat() + "Z"})
+                            logging.warning("DMSCore(YOLO): EVENTO DISTRACAO (CELULAR).")
                     else:
-                        if self.distraction_counter > 0: logging.debug("DMSCore(Dlib): Distração (centrada) reset.")
-                        self.distraction_counter = 0; self.distraction_alert_active = False
-                else: # Se distração desativada OU histórico incompleto, garante reset
-                     if self.distraction_counter > 0 or self.distraction_alert_active: # Só loga se estava ativo
-                         log_reason = "distração desativada" if not distraction_enabled else "histórico incompleto"
-                         logging.debug(f"DMSCore(Dlib): Distração reset ({log_reason}).")
-                         self.distraction_counter = 0; self.distraction_alert_active = False
+                        if self.phone_counter > 0: logging.debug("DMSCore(YOLO): Deteção celular reset.")
+                        self.phone_counter = 0; self.phone_alert_active = False
+                
             logging.debug("DMSCore(Dlib): Lock alerta libertado.")
 
-            # Status usa ângulos RAW (ou "-" se distração desativada)
+            # (ALTERADO) Status data
             status_data = {"ear": f"{ear:.2f}", "mar": f"{mar:.2f}",
-                           "yaw": f"{yaw:.1f}" if distraction_enabled and yaw is not None else "-",
-                           "pitch": f"{pitch:.1f}" if distraction_enabled and pitch is not None else "-",
-                           "roll": f"{roll:.1f}" if distraction_enabled and roll is not None else "-"}
+                           "yaw": "-", "pitch": "-", "roll": "-"} # Pose removida
+                           
             # Desenha alertas
             if self.drowsy_alert_active: cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if self.yawn_alert_active: cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            # Só desenha alerta de distração se estiver ativo E habilitado
-            if distraction_enabled and self.distraction_alert_active:
-                 cv2.putText(frame, "ALERTA: DISTRACAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-        else:
+            # (ALTERADO) Alerta de Celular
+            if phone_enabled and self.phone_alert_active:
+                 cv2.putText(frame, "ALERTA: CELULAR!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+        
+        else: # Se nenhuma face foi encontrada
              logging.debug("DMSCore(Dlib): Nenhuma face encontrada/rastreada.")
              # Reset já feito dentro do lock de tracking ou no início do loop se rects vazio
 
         total_time = time.time() - start_time_total
-        logging.debug(f"DMSCore(Dlib): process_frame (HÍBRIDO + POSE SUAVE + OFFSETS + DIST_OPCIONAL) {total_time:.4f}s.")
+        logging.debug(f"DMSCore(Dlib): process_frame (HÍBRIDO + YOLO CELULAR) {total_time:.4f}s.")
         return frame, events_list, status_data
 
     def update_settings(self, settings):
@@ -311,25 +309,22 @@ class DlibMonitor(BaseMonitor):
                 self.ear_frames = int(settings.get('ear_frames', self.ear_frames))
                 self.mar_threshold = float(settings.get('mar_threshold', self.mar_threshold))
                 self.mar_frames = int(settings.get('mar_frames', self.mar_frames))
-                # (NOVO) Atualiza flag de ativação
-                self.distraction_detection_enabled = bool(settings.get('distraction_detection_enabled', self.distraction_detection_enabled))
-                self.distraction_angle = float(settings.get('distraction_angle', self.distraction_angle)) # Yaw
-                self.distraction_frames = int(settings.get('distraction_frames', self.distraction_frames))
-                self.pitch_up_threshold = float(settings.get('pitch_up_threshold', self.pitch_up_threshold))
-                self.pitch_down_offset = float(settings.get('pitch_down_offset', self.pitch_down_offset))
-                self.yaw_center_offset = float(settings.get('yaw_center_offset', self.yaw_center_offset))
-                self.pitch_center_offset = float(settings.get('pitch_center_offset', self.pitch_center_offset))
+                
+                # (ALTERADO) Atualiza settings de celular
+                self.phone_detection_enabled = bool(settings.get('phone_detection_enabled', self.phone_detection_enabled))
+                self.phone_confidence = float(settings.get('phone_confidence', self.phone_confidence))
+                self.phone_frames = int(settings.get('phone_frames', self.phone_frames))
+                
+                # (REMOVIDO) Settings de distração/pose
 
                 # Log atualizado com estado de ativação
-                distraction_status = "ATIVADA" if self.distraction_detection_enabled else "DESATIVADA"
-                logging.info(f"Conf DMS Core(Dlib): EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Distração:{distraction_status} [Yaw>{self.distraction_angle}({self.distraction_frames}f, Off:{self.yaw_center_offset:.1f}), Pitch<({self.pitch_up_threshold})>({self.pitch_down_offset})({self.distraction_frames}f, Off:{self.pitch_center_offset:.1f})]")
+                distraction_status = "ATIVADA" if self.phone_detection_enabled else "DESATIVADA"
+                logging.info(f"Conf DMS Core(Dlib): EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Celular:{distraction_status} [Conf>{self.phone_confidence}({self.phone_frames}f)]")
 
-                # (NOVO) Se a distração foi desativada, limpa o histórico de ângulos imediatamente
-                if not self.distraction_detection_enabled:
-                    self.yaw_history.clear()
-                    self.pitch_history.clear()
-                    self.distraction_counter = 0 # Reseta contador também
-                    self.distraction_alert_active = False # Reseta flag
+                # (NOVO) Se a deteção foi desativada, reseta
+                if not self.phone_detection_enabled:
+                    self.phone_counter = 0
+                    self.phone_alert_active = False
 
                 return True
             except (ValueError, TypeError) as e: logging.error(f"Erro conf Dlib (valor inválido?): {e}"); return False
@@ -339,14 +334,11 @@ class DlibMonitor(BaseMonitor):
         """Obtém configurações."""
         logging.debug("DMSCore(Dlib): get_settings.")
         with self.lock:
-            # (NOVO) Retorna flag de ativação
+            # (ALTERADO) Retorna settings de celular
             return {"ear_threshold": self.ear_threshold, "ear_frames": self.ear_frames,
                     "mar_threshold": self.mar_threshold, "mar_frames": self.mar_frames,
-                    "distraction_detection_enabled": self.distraction_detection_enabled, # NOVO
-                    "distraction_angle": self.distraction_angle, # Yaw
-                    "distraction_frames": self.distraction_frames,
-                    "pitch_up_threshold": self.pitch_up_threshold,
-                    "pitch_down_offset": self.pitch_down_offset,
-                    "yaw_center_offset": self.yaw_center_offset,
-                    "pitch_center_offset": self.pitch_center_offset
+                    
+                    "phone_detection_enabled": self.phone_detection_enabled,
+                    "phone_confidence": self.phone_confidence,
+                    "phone_frames": self.phone_frames,
                    }

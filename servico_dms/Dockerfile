@@ -11,7 +11,6 @@ WORKDIR /app
 
 # Copia o arquivo de dependências
 COPY requirements.txt .
-
 # Instala dependências de sistema (incluindo cmake 3.25.1)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -36,7 +35,9 @@ RUN which cmake && cmake --version
 # (NOVO) Atualiza pip, setuptools e wheel
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Instala dependências do requirements.txt (SEM dlib, SEM cmake, SEM mediapipe)
+# Instala dependências do requirements.txt (SEM dlib, SEM cmake)
+# (ALTERADO) O Dlib e o MediaPipe estão agora no requirements.txt (se necessário)
+# (MAS o YOLO/ultralytics será instalado)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Instala o pybind11 (necessário para compilar o dlib)
@@ -46,8 +47,6 @@ RUN pip install --no-cache-dir --no-build-isolation pybind11
 RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
     pip install --no-cache-dir --no-build-isolation dlib==19.24.2
 
-# (NOVO) Instala o MediaPipe (garantia extra)
-RUN pip install --no-cache-dir mediapipe==0.10.9
 
 # --- Estágio de Download do Modelo (Dlib) ---
 
@@ -55,6 +54,10 @@ RUN pip install --no-cache-dir mediapipe==0.10.9
 RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o landmarks.dat.bz2 && \
     bzip2 -d landmarks.dat.bz2 && \
     mv landmarks.dat shape_predictor_68_face_landmarks.dat
+
+# (NOVO) Pré-download (opcional) do modelo YOLOv8n
+# Isto evita que o download ocorra no primeiro arranque do container
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # --- Estágio Final ---
 
@@ -69,7 +72,6 @@ COPY dms_core.py .
 COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
-
 # Expõe a porta padrão do Flask
 EXPOSE 5000
 
