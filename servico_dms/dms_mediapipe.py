@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
-# (VERSÃO: Multithread - MP Rápido + YOLO Lento Otimizado)
+# (VERSÃO: Multithread - MP Rápido + YOLO Lento Otimizado 416x416)
 
 import cv2
 import mediapipe as mp
@@ -23,12 +23,11 @@ MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
 
-# Define o tamanho da imagem de inferência do YOLO
-YOLO_IMG_WIDTH = 320
-YOLO_IMG_HEIGHT = 240
-# Fatores de escala (640/320 = 2.0)
-SCALE_X = 640 / YOLO_IMG_WIDTH
-SCALE_Y = 480 / YOLO_IMG_HEIGHT
+# Define o tamanho da imagem de inferência do YOLO (quadrado, padrão YOLO)
+YOLO_IMG_SIZE = 416
+# Fatores de escala (Baseado no original 640x480)
+SCALE_X = 640 / YOLO_IMG_SIZE
+SCALE_Y = 480 / YOLO_IMG_SIZE
 
 
 class MediaPipeMonitor(BaseMonitor):
@@ -55,12 +54,10 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 2. Carregar Modelo YOLOv8 ---
         try:
-            # ================== ALTERAÇÃO (Modelo 'm') ==================
-            model_file = 'yolov8m.pt' # (ALTERADO de 's' para 'm')
+            model_file = 'yolov8m.pt' 
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
-            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -74,8 +71,8 @@ class MediaPipeMonitor(BaseMonitor):
             
             logging.info(">>> Executando 'warm-up' do YOLOv8 (primeira inferência)...")
             try:
-                dummy_frame = np.zeros((YOLO_IMG_HEIGHT, YOLO_IMG_WIDTH, 3), dtype=np.uint8)
-                self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_WIDTH)
+                dummy_frame = np.zeros((YOLO_IMG_SIZE, YOLO_IMG_SIZE, 3), dtype=np.uint8)
+                self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_SIZE)
                 logging.info(">>> Warm-up do YOLOv8 concluído.")
             except Exception as e:
                 logging.warning(f"Falha no warm-up do YOLO: {e}")
@@ -101,8 +98,8 @@ class MediaPipeMonitor(BaseMonitor):
         
         # ================== ALTERAÇÃO (Novos Padrões) ==================
         self.phone_detection_enabled = True
-        self.phone_confidence = 0.30 # (ALTERADO) Padrão 0.3 (30%)
-        self.phone_frames = 10     # (ALTERADO) Padrão 10 (segundos)
+        self.phone_confidence = 0.20 # (ALTERADO) Padrão 0.2 (20%)
+        self.phone_frames = 5      # (ALTERADO) Padrão 5 (segundos)
         # ==============================================================
 
         # --- 4. Configuração do Thread YOLO ---
@@ -143,14 +140,14 @@ class MediaPipeMonitor(BaseMonitor):
                 
                 logging.info("_yolo_loop: A executar inferência YOLO...")
                 
-                yolo_frame = cv2.resize(frame, (YOLO_IMG_WIDTH, YOLO_IMG_HEIGHT))
+                yolo_frame = cv2.resize(frame, (YOLO_IMG_SIZE, YOLO_IMG_SIZE))
 
                 results = self.yolo_model(
                     yolo_frame,
                     verbose=False,
                     classes=[self.yolo_cellphone_class_id],
                     conf=current_phone_confidence,
-                    imgsz=YOLO_IMG_WIDTH, 
+                    imgsz=YOLO_IMG_SIZE, 
                     augment=False,      
                     half=False          
                 )
@@ -177,7 +174,9 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_found_by_thread = False
                     self.last_yolo_boxes = []
 
-            if self.stop_event.wait(timeout=1.0):
+            elapsed = time.time() - start_time_yolo
+            sleep_time = max(0.1, 1.0 - elapsed) 
+            if self.stop_event.wait(timeout=sleep_time):
                 break
         
         logging.info(">>> _yolo_loop (Thread) terminado.")

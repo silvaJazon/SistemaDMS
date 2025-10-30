@@ -97,12 +97,12 @@
                         
                         <div class="control-group">
                             <label for="phone_confidence">Confiança Mínima <span class="info-icon" title="Confiança mínima do YOLO para detetar.">ⓘ</span></label>
-                            <div class="input-row"><input type="range" id="phone_confidence" name="phone_confidence" min="0.2" max="0.9" step="0.05"><span class="slider-value" id="phone_confidence_value">0.30</span></div>
+                            <div class="input-row"><input type="range" id="phone_confidence" name="phone_confidence" min="0.2" max="0.9" step="0.05"><span class="slider-value" id="phone_confidence_value">0.20</span></div>
                         </div>
                         
                         <div class="control-group">
-                            <label for="phone_frames">Frames Deteção <span class="info-icon" title="Nº frames (contados em 'saltos') com celular.">ⓘ</span></label>
-                            <div class="input-row"><input type="range" id="phone_frames" name="phone_frames" min="5" max="60" step="1"><span class="slider-value" id="phone_frames_value">10</span></div>
+                            <label for="phone_frames">Segundos Deteção <span class="info-icon" title="Nº de segundos a segurar o telemóvel para alertar.">ⓘ</span></label>
+                            <div class="input-row"><input type="range" id="phone_frames" name="phone_frames" min="3" max="60" step="1"><span class="slider-value" id="phone_frames_value">5</span></div>
                         </div>
                         </div> </div>
             </details>
@@ -368,7 +368,7 @@
                  if (target.type === 'range') {
                      const valueSpan = document.getElementById(`${target.id}_value`);
                      if(valueSpan) {
-                         const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
+                         const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
                          valueSpan.textContent = formatNumber(target.value, decimals);
                      }
                  }
