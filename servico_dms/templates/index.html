@@ -53,18 +53,13 @@
 
         <section class="lg:col-span-2 bg-gray-900 p-6 rounded-lg shadow-2xl flex flex-col items-center justify-center">
             <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
-            <p class="mt-4 text-gray-400">Fonte: {{ source_desc }}</p>
+            <p class="mt-4 text-gray-400">Fonte: {{ source_desc }} (Backend: {{ active_backend }})</p>
             <div class="status-info mt-4 flex flex-wrap gap-x-4 gap-y-2 justify-center text-sm">
                 <span>EAR: <span id="status-ear" class="font-mono text-lg text-blue-300">-</span></span> |
                 <span>MAR: <span id="status-mar" class="font-mono text-lg text-blue-300">-</span></span> |
-                {% if active_backend == 'DLIB' %}
-                <span>Yaw: <span id="status-yaw" class="font-mono text-lg text-green-300">-</span></span> |
-                <span>Pitch: <span id="status-pitch" class="font-mono text-lg text-green-300">-</span></span> |
-                <span>Roll: <span id="status-roll" class="font-mono text-lg text-green-300">-</span></span> |
-                {% endif %}
                 <span id="status-queue" class="queue-status queue-status-unknown font-mono text-lg">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
-        </section>
+            </section>
 
         <aside id="controls-container" class="lg:col-span-1 bg-gray-900 p-6 rounded-lg shadow-2xl space-y-6 overflow-y-auto">
 
@@ -90,7 +85,6 @@
                 </div>
             </details>
 
-            {% if active_backend == 'DLIB' %}
             <details>
                 <summary>Deteção de Celular (YOLO)</summary>
                 <div class="p-4 space-y-4">
@@ -113,7 +107,6 @@
 
                     </div> </div>
             </details>
-            {% endif %}
             <details>
                 <summary>Configurações da Câmara</summary>
                 <div class="p-4 space-y-4">
@@ -161,7 +154,6 @@
         const sliders = controlsContainer.querySelectorAll('input[type="range"]');
         const allDetectionSliders = document.querySelectorAll('details:not(:last-of-type) input[type="range"]'); 
         
-        // (ALTERADO) Seletores podem ser NULOS se o painel não for renderizado
         const phoneControlsGroup = document.getElementById('phone-controls-group');
         const phoneCheckbox = document.getElementById('phone_detection_enabled');
         
@@ -180,9 +172,9 @@
         
         let initialApiSettings = {}; 
 
-        const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar'),
-                                 yaw: document.getElementById('status-yaw'), pitch: document.getElementById('status-pitch'),
-                                 roll: document.getElementById('status-roll') };
+        // ================== ALTERAÇÃO (Remove Yaw/Pitch/Roll) ==================
+        const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar') };
+        // =======================================================================
         const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
         // --- Funções Auxiliares ---
@@ -194,16 +186,12 @@
         function updateControlStates() {
             const isDefaultProfile = (profileSelect.value === "__default__");
             
-            // (ALTERADO) Verifica se o checkbox de celular existe
             const isPhoneEnabled = phoneCheckbox ? phoneCheckbox.checked : false; 
             console.debug(`updateControlStates: Default=${isDefaultProfile}, PhoneEnabled=${isPhoneEnabled}`);
 
-            // Sliders de deteção (EAR, MAR, Celular) - Ativos só no perfil Padrão
             allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
-            // Checkbox de celular - Ativo só no perfil Padrão (e se existir)
             if (phoneCheckbox) phoneCheckbox.disabled = !isDefaultProfile;
 
-            // (ALTERADO) Grupo de controlos de celular (só se existir)
             if (phoneControlsGroup) {
                 const phoneSliders = phoneControlsGroup.querySelectorAll('input[type="range"]');
                 if (isDefaultProfile && isPhoneEnabled) {
@@ -215,11 +203,9 @@
                 }
             }
 
-            // Sliders da câmara (sempre ativos)
             brightnessSlider.disabled = false;
             rotationSelect.disabled = false;
 
-            // Botões de Perfil
             updateProfileButton.disabled = isDefaultProfile; 
             deleteProfileButton.disabled = isDefaultProfile; 
             saveProfileButton.disabled = false;
@@ -234,7 +220,6 @@
                         const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                         valueSpan.textContent = formatNumber(settings[slider.name], decimals);
                     }
-                // (ALTERADO) Não avisa se o slider não existir (ex: phone_confidence no backend MediaPipe)
                 } else if (document.getElementById(slider.id)) { 
                     console.warn(`Apply: Setting '${slider.name}' não encontrado.`);
                 }
@@ -242,7 +227,6 @@
             if (settings.hasOwnProperty('rotation')) rotationSelect.value = settings.rotation;
             else console.warn("Apply: Setting 'rotation' não encontrado.");
             
-            // (ALTERADO) Aplica estado da checkbox de celular (só se existir)
             if (settings.hasOwnProperty('phone_detection_enabled')) {
                  if (phoneCheckbox) phoneCheckbox.checked = settings.phone_detection_enabled;
             } else {
@@ -257,7 +241,6 @@
              const currentSettings = {};
              sliders.forEach(slider => { currentSettings[slider.name] = slider.step.includes('.') ? parseFloat(slider.value) : parseInt(slider.value); });
              currentSettings.rotation = parseInt(rotationSelect.value);
-             // (ALTERADO) Lê o checkbox de celular (só se existir)
              if (phoneCheckbox) {
                 currentSettings.phone_detection_enabled = phoneCheckbox.checked;
              }
@@ -271,9 +254,8 @@
                 const data = await response.json(); console.debug("Conf/Status recebido:", data);
                 
                 if (data.status) {
+                    // (ALTERADO) Itera apenas sobre os statusElements definidos (EAR, MAR)
                     for (const key in statusElements) {
-                        // (ALTERADO) Verifica se o elemento de status existe no HTML antes de o atualizar
-                        // (Isto esconde Yaw/Pitch/Roll se não existirem)
                         if (statusElements[key]) { 
                             const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; 
                             statusElements[key].textContent = formatNumber(data.status[key], decimals);
@@ -382,7 +364,6 @@
             
             console.debug(`Change event on: ${target.name}, Value: ${target.type === 'checkbox' ? target.checked : target.value}`);
 
-            // (ALTERADO) Verifica se o alvo existe (ex: phone_detection_enabled)
             if (target.id === 'phone_detection_enabled') {
                 updateControlStates();
             }
@@ -391,7 +372,7 @@
                  if (target.type === 'range') {
                      const valueSpan = document.getElementById(`${target.id}_value`);
                      if(valueSpan) {
-                         const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
+                         const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
                          valueSpan.textContent = formatNumber(target.value, decimals);
                      }
                  }
@@ -445,7 +426,6 @@
                 delete initialApiSettings.status; 
                 delete initialApiSettings.queue_depth; 
                 delete initialApiSettings.queue_max_size; 
-                // (Limpa chaves de pose que possam ter vindo do backend MediaPipe)
                 delete initialApiSettings.distraction_detection_enabled;
                 delete initialApiSettings.distraction_angle;
                 delete initialApiSettings.distraction_frames;
