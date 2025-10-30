@@ -54,10 +54,12 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 2. Carregar Modelo YOLOv8 ---
         try:
-            model_file = 'yolov8m.pt' 
+            # ================== ALTERAÇÃO (Modelo 's') ==================
+            model_file = 'yolov8s.pt' # (ALTERADO) Voltámos para o 's' (Small)
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
+            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -96,11 +98,9 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
-        # ================== ALTERAÇÃO (Novos Padrões) ==================
         self.phone_detection_enabled = True
-        self.phone_confidence = 0.20 # (ALTERADO) Padrão 0.2 (20%)
-        self.phone_frames = 5      # (ALTERADO) Padrão 5 (segundos)
-        # ==============================================================
+        self.phone_confidence = 0.20
+        self.phone_frames = 5      
 
         # --- 4. Configuração do Thread YOLO ---
         self.cam_thread_ref: CameraThread = None
@@ -174,8 +174,11 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_found_by_thread = False
                     self.last_yolo_boxes = []
 
-            elapsed = time.time() - start_time_yolo
-            sleep_time = max(0.1, 1.0 - elapsed) 
+            # ================== ALTERAÇÃO (Mais Descanso) ==================
+            # Aumenta o 'descanso' para 3 segundos, para libertar a CPU
+            # para o stream de vídeo.
+            sleep_time = 3.0
+            # =============================================================
             if self.stop_event.wait(timeout=sleep_time):
                 break
         
