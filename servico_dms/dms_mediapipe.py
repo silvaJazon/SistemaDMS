@@ -53,8 +53,8 @@ class MediaPipeMonitor(BaseMonitor):
         # --- 2. Inicializa o MediaPipe Hands (Thread Fundo) ---
         try:
             self.hands = mp.solutions.hands.Hands(
-                static_image_mode=False,
-                max_num_hands=1,
+                static_image_mode=False, # Modo vídeo
+                max_num_hands=1,         # Apenas 1 mão é distração
                 min_detection_confidence=0.5
             )
             logging.info(">>> Modelos MediaPipe Hands carregados.")
@@ -108,6 +108,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
+        # Padrões (como definido nos logs: Conf 0.2, Frames 5)
         self.phone_detection_enabled = True
         self.phone_confidence = 0.20
         self.phone_frames = 5      
@@ -147,6 +148,7 @@ class MediaPipeMonitor(BaseMonitor):
                 if self.stop_event.wait(timeout=2.0): break
                 continue
 
+            # ================== LÓGICA HÍBRIDA (INÍCIO) ==================
             try:
                 frame = self.cam_thread_ref.get_frame()
                 if frame is None:
@@ -227,6 +229,7 @@ class MediaPipeMonitor(BaseMonitor):
                 with self.yolo_lock:
                     self.phone_found_by_thread = False
                     self.last_yolo_boxes = []
+            # ================== LÓGICA HÍBRIDA (FIM) ==================
 
             # (ALTERADO) Descansa 2 segundos. O processo agora é muito mais rápido (MP Hands + YOLO-crop)
             sleep_time = 2.0
@@ -352,6 +355,7 @@ class MediaPipeMonitor(BaseMonitor):
                     logging.debug(f"DMSCore(YOLO/Mao): Celular/Mão encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
                     if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
                         self.phone_alert_active = True
+                        # (ALTERADO) Descrição do evento
                         events_list.append({"type": "DISTRACAO", "value": "Celular na mao", "timestamp": datetime.now().isoformat() + "Z"})
                         logging.warning("DMSCore(YOLO/Mao): EVENTO DISTRACAO (CELULAR NA MAO).")
                 else:
