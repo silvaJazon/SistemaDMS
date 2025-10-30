@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
-# (VERSÃO: Multithread - MP Rápido + YOLO Lento Otimizado 416x416)
+# (VERSÃO: Híbrido Multithread - MP Rosto + MP Mãos + YOLO Celular)
 
 import cv2
 import mediapipe as mp
@@ -32,16 +32,16 @@ SCALE_Y = 480 / YOLO_IMG_SIZE
 
 class MediaPipeMonitor(BaseMonitor):
     """
-    Implementação Multithread do BaseMonitor:
-    - Thread 1 (Principal): MediaPipe Face Mesh (EAR/MAR) - Rápido
-    - Thread 2 (Fundo): YOLOv8 (Deteção de Celular) - Lento
+    Implementação Multithread:
+    - Thread 1 (Principal): MediaPipe Face Mesh (EAR/MAR)
+    - Thread 2 (Fundo): YOLOv8 (Celular) + MediaPipe Hands (Mão)
     """
 
     def __init__(self, frame_size, stop_event: threading.Event, default_settings: dict = None):
         super().__init__(frame_size, stop_event, default_settings)
-        logging.info("A inicializar o MediaPipeMonitor Core (Modo: MP Rápido + YOLO Lento)...")
+        logging.info("A inicializar o MediaPipeMonitor Core (Modo: Híbrido MP Rosto + MP Mão + YOLO)...")
 
-        # --- 1. Inicializa o MediaPipe FaceMesh ---
+        # --- 1. Inicializa o MediaPipe FaceMesh (Thread Principal) ---
         try:
             self.face_mesh = mp.solutions.face_mesh.FaceMesh(
                 max_num_faces=1, refine_landmarks=True,
@@ -49,17 +49,27 @@ class MediaPipeMonitor(BaseMonitor):
             )
             logging.info(">>> Modelos MediaPipe FaceMesh carregados.")
         except Exception as e:
-            logging.error(f"!!! ERRO FATAL MediaPipe: {e}", exc_info=True)
-            raise RuntimeError(f"Erro MediaPipe: {e}")
+            logging.error(f"!!! ERRO FATAL MediaPipe (FaceMesh): {e}", exc_info=True)
+            raise RuntimeError(f"Erro MediaPipe (FaceMesh): {e}")
 
-        # --- 2. Carregar Modelo YOLOv8 ---
+        # --- 2. (NOVO) Inicializa o MediaPipe Hands (Thread YOLO) ---
         try:
-            # ================== ALTERAÇÃO (Modelo 's') ==================
-            model_file = 'yolov8s.pt' # (ALTERADO) Voltámos para o 's' (Small)
+            self.hands = mp.solutions.hands.Hands(
+                static_image_mode=False, # Modo vídeo
+                max_num_hands=1,         # Apenas 1 mão é distração
+                min_detection_confidence=0.5
+            )
+            logging.info(">>> Modelos MediaPipe Hands carregados.")
+        except Exception as e:
+            logging.error(f"!!! ERRO FATAL MediaPipe (Hands): {e}", exc_info=True)
+            raise RuntimeError(f"Erro MediaPipe (Hands): {e}")
+
+        # --- 3. Carregar Modelo YOLOv8 (Thread YOLO) ---
+        try:
+            model_file = 'yolov8s.pt' 
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
-            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -74,16 +84,17 @@ class MediaPipeMonitor(BaseMonitor):
             logging.info(">>> Executando 'warm-up' do YOLOv8 (primeira inferência)...")
             try:
                 dummy_frame = np.zeros((YOLO_IMG_SIZE, YOLO_IMG_SIZE, 3), dtype=np.uint8)
-                self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_SIZE)
-                logging.info(">>> Warm-up do YOLOv8 concluído.")
+                self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_SIZE) # Warm-up YOLO
+                self.hands.process(dummy_frame) # Warm-up Hands
+                logging.info(">>> Warm-up (YOLO + Hands) concluído.")
             except Exception as e:
-                logging.warning(f"Falha no warm-up do YOLO: {e}")
+                logging.warning(f"Falha no warm-up: {e}")
                  
         except Exception as e:
             logging.error(f"!!! ERRO FATAL YOLO: {e}", exc_info=True)
             raise RuntimeError(f"Erro YOLO: {e}")
 
-        # --- 3. Contadores e Configurações ---
+        # --- 4. Contadores e Configurações ---
         self.lock = threading.Lock() 
         self.drowsiness_counter = 0
         self.yawn_counter = 0
@@ -98,16 +109,17 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
+        # (ALTERADO) Novos Padrões (como pedido nos logs)
         self.phone_detection_enabled = True
-        self.phone_confidence = 0.20
-        self.phone_frames = 5      
+        self.phone_confidence = 0.20 # Padrão 0.2 (20%)
+        self.phone_frames = 5      # Padrão 5 (segundos)
 
-        # --- 4. Configuração do Thread YOLO ---
+        # --- 5. Configuração do Thread YOLO ---
         self.cam_thread_ref: CameraThread = None
         self.phone_thread = None
         self.yolo_lock = threading.Lock() 
         self.last_yolo_boxes = []
-        self.phone_found_by_thread = False
+        self.phone_found_by_thread = False # Flag final (YOLO ou Mão)
 
 
     # --- Loop do Thread YOLO ---
@@ -138,35 +150,46 @@ class MediaPipeMonitor(BaseMonitor):
                     if self.stop_event.wait(timeout=2.0): break
                     continue
                 
-                logging.info("_yolo_loop: A executar inferência YOLO...")
+                logging.info("_yolo_loop: A executar inferência (YOLO + Mãos)...")
                 
+                # Reduz o frame para acelerar
                 yolo_frame = cv2.resize(frame, (YOLO_IMG_SIZE, YOLO_IMG_SIZE))
+                # Converte para RGB (necessário para MediaPipe Hands)
+                yolo_frame_rgb = cv2.cvtColor(yolo_frame, cv2.COLOR_BGR2RGB)
 
-                results = self.yolo_model(
-                    yolo_frame,
-                    verbose=False,
-                    classes=[self.yolo_cellphone_class_id],
-                    conf=current_phone_confidence,
-                    imgsz=YOLO_IMG_SIZE, 
-                    augment=False,      
-                    half=False          
+                # --- 1. Inferência YOLO ---
+                results_yolo = self.yolo_model(
+                    yolo_frame, verbose=False, classes=[self.yolo_cellphone_class_id],
+                    conf=current_phone_confidence, imgsz=YOLO_IMG_SIZE, 
+                    augment=False, half=False          
                 )
                 
                 current_boxes = []
-                phone_found = False
-                if results and results[0].boxes:
-                    for box in results[0].boxes:
+                phone_found_yolo = False
+                if results_yolo and results_yolo[0].boxes:
+                    for box in results_yolo[0].boxes:
                         if int(box.cls) == self.yolo_cellphone_class_id:
-                            phone_found = True
+                            phone_found_yolo = True
                             x1, y1, x2, y2 = box.xyxy[0]
                             scaled_box = [x1 * SCALE_X, y1 * SCALE_Y, x2 * SCALE_X, y2 * SCALE_Y]
                             current_boxes.append(scaled_box)
                 
+                # --- 2. (NOVO) Inferência MediaPipe Hands ---
+                phone_found_hands = False
+                results_hands = self.hands.process(yolo_frame_rgb)
+                if results_hands.multi_hand_landmarks:
+                    phone_found_hands = True
+                    # (Opcional: desenhar os landmarks da mão, mas vamos evitar pelo desempenho)
+
+                # --- 3. Lógica Híbrida ---
+                phone_found = phone_found_yolo or phone_found_hands
+
                 with self.yolo_lock:
                     self.phone_found_by_thread = phone_found
-                    self.last_yolo_boxes = current_boxes
+                    # Só desenhamos as caixas se o YOLO as encontrou
+                    self.last_yolo_boxes = current_boxes if phone_found_yolo else []
 
-                logging.info(f"_yolo_loop: Inferência concluída. Celular encontrado: {phone_found}. Duração: {time.time() - start_time_yolo:.3f}s")
+                logging.info(f"_yolo_loop: Inferência concluída. Celular(YOLO): {phone_found_yolo}, Mão(MP): {phone_found_hands}. Duração: {time.time() - start_time_yolo:.3f}s")
 
             except Exception as e:
                 logging.error(f"_yolo_loop: Erro na inferência: {e}", exc_info=True)
@@ -174,11 +197,8 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_found_by_thread = False
                     self.last_yolo_boxes = []
 
-            # ================== ALTERAÇÃO (Mais Descanso) ==================
-            # Aumenta o 'descanso' para 3 segundos, para libertar a CPU
-            # para o stream de vídeo.
+            # (ALTERADO) Aumenta o 'descanso' para 3 segundos
             sleep_time = 3.0
-            # =============================================================
             if self.stop_event.wait(timeout=sleep_time):
                 break
         
@@ -253,6 +273,10 @@ class MediaPipeMonitor(BaseMonitor):
                 local_boxes = self.last_yolo_boxes
                 phone_found = self.phone_found_by_thread
             
+            # (ALTERADO) Se a mão foi encontrada mas o YOLO não, desenha um texto
+            if phone_found and not local_boxes:
+                 cv2.putText(frame, "Mao Detectada", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+            
             for box_coords in local_boxes:
                 x1, y1, x2, y2 = map(int, box_coords) 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
@@ -297,13 +321,13 @@ class MediaPipeMonitor(BaseMonitor):
             if phone_enabled_locked:
                 if phone_found:
                     self.phone_counter += 1 
-                    logging.debug(f"DMSCore(YOLO): Celular encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
+                    logging.debug(f"DMSCore(YOLO/Mao): Celular/Mão encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
                     if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
                         self.phone_alert_active = True
-                        events_list.append({"type": "DISTRACAO", "value": "Celular detectado", "timestamp": datetime.now().isoformat() + "Z"})
-                        logging.warning("DMSCore(YOLO): EVENTO DISTRACAO (CELULAR).")
+                        events_list.append({"type": "DISTRACAO", "value": "Celular/Mao detectada", "timestamp": datetime.now().isoformat() + "Z"})
+                        logging.warning("DMSCore(YOLO/Mao): EVENTO DISTRACAO (CELULAR/MAO).")
                 else:
-                    if self.phone_counter > 0: logging.debug("DMSCore(YOLO): Deteção celular reset.")
+                    if self.phone_counter > 0: logging.debug("DMSCore(YOLO/Mao): Deteção celular/mão reset.")
                     self.phone_counter = 0; self.phone_alert_active = False
 
         logging.debug("DMSCore(MediaPipe): Lock alerta libertado.")
@@ -313,7 +337,7 @@ class MediaPipeMonitor(BaseMonitor):
         if self.yawn_alert_active:
             cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         if phone_enabled_locked and self.phone_alert_active:
-             cv2.putText(frame, "ALERTA: CELULAR!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+             cv2.putText(frame, "ALERTA: CELULAR/MAO!", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
         total_time = time.time() - start_time_total
         logging.debug(f"DMSCore(MediaPipe): process_frame (MP Rápido) {total_time:.4f}s.")

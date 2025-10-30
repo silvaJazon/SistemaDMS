@@ -413,7 +413,7 @@
             try {
                 console.debug("Iniciando app, buscando config da API...");
                 const response = await fetch('/api/config');
-                if (!response.ok) throw new Error(`HTTP ${response.status} ao buscar config inicial`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 const data = await response.json();
                 if (data.error) throw new Error(data.error);
