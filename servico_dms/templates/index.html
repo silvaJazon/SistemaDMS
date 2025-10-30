@@ -59,7 +59,7 @@
                 <span>MAR: <span id="status-mar" class="font-mono text-lg text-blue-300">-</span></span> |
                 <span id="status-queue" class="queue-status queue-status-unknown font-mono text-lg">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
-            </section>
+        </section>
 
         <aside id="controls-container" class="lg:col-span-1 bg-gray-900 p-6 rounded-lg shadow-2xl space-y-6 overflow-y-auto">
 
@@ -89,7 +89,7 @@
                 <summary>Deteção de Celular (YOLO)</summary>
                 <div class="p-4 space-y-4">
                     <div class="flex items-center">
-                        <input type="checkbox" id="phone_detection_enabled" name="phone_detection_enabled" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
+                        <input type="checkbox" id="phone_detection_enabled" name="phone_detection_enabled" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2" checked>
                         <label for="phone_detection_enabled" class="ml-2 text-sm font-medium text-gray-300">Ativar Deteção de Celular</label>
                     </div>
 
@@ -107,6 +107,7 @@
 
                     </div> </div>
             </details>
+
             <details>
                 <summary>Configurações da Câmara</summary>
                 <div class="p-4 space-y-4">
@@ -172,9 +173,7 @@
         
         let initialApiSettings = {}; 
 
-        // ================== ALTERAÇÃO (Remove Yaw/Pitch/Roll) ==================
         const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar') };
-        // =======================================================================
         const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
 
         // --- Funções Auxiliares ---
@@ -230,8 +229,9 @@
             if (settings.hasOwnProperty('phone_detection_enabled')) {
                  if (phoneCheckbox) phoneCheckbox.checked = settings.phone_detection_enabled;
             } else {
-                 if (phoneCheckbox) phoneCheckbox.checked = false; 
-                 if (phoneCheckbox) console.warn("Apply: Setting 'phone_detection_enabled' não encontrado, usando 'false'.")
+                 // (REMOVIDO) O padrão agora é 'checked' (definido no HTML)
+                 // if (phoneCheckbox) phoneCheckbox.checked = false; 
+                 if (phoneCheckbox) console.warn("Apply: Setting 'phone_detection_enabled' não encontrado, usando padrão do HTML.")
             }
 
             updateControlStates();
@@ -254,7 +254,6 @@
                 const data = await response.json(); console.debug("Conf/Status recebido:", data);
                 
                 if (data.status) {
-                    // (ALTERADO) Itera apenas sobre os statusElements definidos (EAR, MAR)
                     for (const key in statusElements) {
                         if (statusElements[key]) { 
                             const decimals = (key === 'ear' || key === 'mar') ? 2 : 1; 
