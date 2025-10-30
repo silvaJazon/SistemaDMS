@@ -21,8 +21,7 @@ RUN apt-get update && \
 # Atualiza pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Copia e instala *apenas* as dependências
-# Isso é cacheado pelo Docker e só será re-executado se requirements.txt mudar
+# Copia e instala *todas* as dependências (app + dev)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -41,13 +40,15 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copia as dependências Python instaladas do estágio builder
-# (AVISO: Este método copia TUDO do site-packages. Uma abordagem
-# mais robusta usaria um venv, mas esta é mais simples para este caso.)
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
+
+# --- (NOVA LINHA CORRIGIDA) ---
+# Copia os executáveis (pytest, flake8, black) do estágio builder
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Cria diretórios necessários
 RUN mkdir /app/alerts
-RUN mkdir /app/config 
+RUN mkdir /app/config
 
 # Copia os arquivos do projeto
 COPY templates/ ./templates/
@@ -63,6 +64,4 @@ COPY __init__.py .
 EXPOSE 5000
 
 # Comando de inicialização
-# (Usamos CMD para que possa ser facilmente sobrescrito
-# por comandos 'make test' ou 'make lint')
 CMD ["python", "app.py"]
