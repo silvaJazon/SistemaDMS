@@ -47,9 +47,12 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 2. Carregar Modelo YOLOv8 ---
         try:
-            logging.info(">>> Carregando modelo YOLOv8n ('yolov8n.pt')...")
-            self.yolo_model = YOLO('yolov8n.pt')
-            logging.info(">>> Modelo YOLOv8n carregado.")
+            # ================== ALTERAÇÃO (Modelo 's') ==================
+            model_file = 'yolov8s.pt' # (ALTERADO de 'n' para 's')
+            logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
+            self.yolo_model = YOLO(model_file)
+            logging.info(f">>> Modelo {model_file} carregado.")
+            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -94,9 +97,6 @@ class MediaPipeMonitor(BaseMonitor):
 
     # --- Loop do Thread YOLO ---
     def _yolo_loop(self):
-        """
-        Loop executado no thread 'PhoneDetectionThread'.
-        """
         logging.info(">>> _yolo_loop (Thread) iniciado.")
         
         if self.stop_event.wait(timeout=3.0): return
@@ -112,27 +112,18 @@ class MediaPipeMonitor(BaseMonitor):
                 with self.yolo_lock:
                     self.last_yolo_boxes = []
                     self.phone_found_by_thread = False
-                
-                # ================== ALTERAÇÃO (Log Visível) ==================
                 logging.info("_yolo_loop: Deteção de celular DESATIVADA. A aguardar...")
-                # ============================================================
-                
                 if self.stop_event.wait(timeout=2.0): break
                 continue
 
-            # --- Execução da Deteção (Lenta) ---
             try:
-                logging.debug("_yolo_loop: A obter frame da câmara...") # Este pode ficar DEBUG
                 frame = self.cam_thread_ref.get_frame()
                 if frame is None:
                     logging.warning("_yolo_loop: Não obteve frame. A tentar novamente em 2s.")
                     if self.stop_event.wait(timeout=2.0): break
                     continue
                 
-                # ================== ALTERAÇÃO (Log Visível) ==================
                 logging.info("_yolo_loop: A executar inferência YOLO...")
-                # ============================================================
-                
                 results = self.yolo_model(frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=current_phone_confidence)
                 
                 current_boxes = []
@@ -147,9 +138,7 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_found_by_thread = phone_found
                     self.last_yolo_boxes = current_boxes
 
-                # ================== ALTERAÇÃO (Log Visível) ==================
                 logging.info(f"_yolo_loop: Inferência concluída. Celular encontrado: {phone_found}. Duração: {time.time() - start_time_yolo:.3f}s")
-                # ============================================================
 
             except Exception as e:
                 logging.error(f"_yolo_loop: Erro na inferência: {e}", exc_info=True)
@@ -298,7 +287,6 @@ class MediaPipeMonitor(BaseMonitor):
         return frame, events_list, status_data
 
     def update_settings(self, settings):
-        """Atualiza configurações."""
         logging.debug(f"DMSCore(MediaPipe): Tentando atualizar conf: {settings}")
         
         with self.lock:
@@ -329,7 +317,6 @@ class MediaPipeMonitor(BaseMonitor):
                 logging.error(f"Erro inesperado conf MediaPipe: {e}", exc_info=True); return False
 
     def get_settings(self):
-        """Obtém configurações."""
         logging.debug("DMSCore(MediaPipe): get_settings.")
         with self.lock:
             return {"ear_threshold": self.ear_threshold, "ear_frames": self.ear_frames,
