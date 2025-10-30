@@ -69,6 +69,17 @@ class MediaPipeMonitor(BaseMonitor):
                         break
             if self.yolo_cellphone_class_id == -1:
                  logging.warning("!!! Classe 'cell phone' não encontrada nos nomes do modelo YOLO.")
+            
+            # ================== ALTERAÇÃO 1 (Warm-up) ==================
+            logging.info(">>> Executando 'warm-up' do YOLOv8 (primeira inferência)...")
+            try:
+                # Cria uma imagem preta (320x240) para o warm-up
+                dummy_frame = np.zeros((YOLO_IMG_HEIGHT, YOLO_IMG_WIDTH, 3), dtype=np.uint8)
+                self.yolo_model(dummy_frame, verbose=False, imgsz=YOLO_IMG_WIDTH)
+                logging.info(">>> Warm-up do YOLOv8 concluído.")
+            except Exception as e:
+                logging.warning(f"Falha no warm-up do YOLO: {e}")
+            # ==========================================================
                  
         except Exception as e:
             logging.error(f"!!! ERRO FATAL YOLO: {e}", exc_info=True)
@@ -131,12 +142,20 @@ class MediaPipeMonitor(BaseMonitor):
                 
                 logging.info("_yolo_loop: A executar inferência YOLO...")
                 
-                # ================== ALTERAÇÃO 1 (Redimensionar) ==================
                 # Reduz o frame para acelerar a inferência
                 yolo_frame = cv2.resize(frame, (YOLO_IMG_WIDTH, YOLO_IMG_HEIGHT))
-                # ===============================================================
 
-                results = self.yolo_model(yolo_frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=current_phone_confidence)
+                # ================== ALTERAÇÃO 2 (Otimização) ==================
+                results = self.yolo_model(
+                    yolo_frame,
+                    verbose=False,
+                    classes=[self.yolo_cellphone_class_id],
+                    conf=current_phone_confidence,
+                    imgsz=YOLO_IMG_WIDTH, # Explicitamente diz o tamanho
+                    augment=False,      # Desliga aumentação
+                    half=False          # Desliga half-precision (CPU)
+                )
+                # ============================================================
                 
                 current_boxes = []
                 phone_found = False
@@ -144,14 +163,9 @@ class MediaPipeMonitor(BaseMonitor):
                     for box in results[0].boxes:
                         if int(box.cls) == self.yolo_cellphone_class_id:
                             phone_found = True
-                            
-                            # ================== ALTERAÇÃO 2 (Escalar Coordenadas) ==================
-                            # Pega nas coordenadas (x1, y1, x2, y2) do frame 320x240
                             x1, y1, x2, y2 = box.xyxy[0]
-                            # Escala-as de volta para o frame 640x480
                             scaled_box = [x1 * SCALE_X, y1 * SCALE_Y, x2 * SCALE_X, y2 * SCALE_Y]
                             current_boxes.append(scaled_box)
-                            # =======================================================================
                 
                 with self.yolo_lock:
                     self.phone_found_by_thread = phone_found
@@ -239,14 +253,11 @@ class MediaPipeMonitor(BaseMonitor):
                 local_boxes = self.last_yolo_boxes
                 phone_found = self.phone_found_by_thread
             
-            # ================== ALTERAÇÃO 3 (Desenhar) ==================
-            # O 'box_coords' já está escalado, só precisamos de o converter para int
             for box_coords in local_boxes:
                 x1, y1, x2, y2 = map(int, box_coords) 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
                 cv2.putText(frame, "Celular", (x1, y1 - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-            # ============================================================
 
         
         logging.debug("DMSCore(MediaPipe): Lock alerta...")
