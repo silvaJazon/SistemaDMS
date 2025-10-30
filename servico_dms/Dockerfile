@@ -59,6 +59,7 @@ COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
 COPY __init__.py . 
+COPY tests/ ./tests/
 
 # Expõe a porta padrão do Flask
 EXPOSE 5000
