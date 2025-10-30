@@ -1,5 +1,6 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
 # (VERSÃO: MediaPipe + YOLO)
+# (MODIFICADO: Persistência de config e graceful shutdown)
 
 import cv2
 import time
@@ -18,7 +19,6 @@ import signal
 from camera_thread import CameraThread
 from dms_base import BaseMonitor
 from dms_mediapipe import MediaPipeMonitor
-    
 from event_handler import EventHandler
 
 try:
@@ -38,6 +38,39 @@ logging.basicConfig(level=log_level,
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.WARNING)
 
+
+# --- (NOVO) Lógica de Persistência de Config (Roadmap 1.1) ---
+CONFIG_DIR = "/app/config"
+CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
+
+def load_config():
+    """Carrega o arquivo settings.json se ele existir."""
+    if not os.path.exists(CONFIG_FILE):
+        logging.warning(f"Arquivo de configuração '{CONFIG_FILE}' não encontrado. Usando padrões.")
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            logging.info(f"Configuração carregada de '{CONFIG_FILE}'.")
+            return config
+    except Exception as e:
+        logging.error(f"Erro ao carregar '{CONFIG_FILE}': {e}. Usando padrões.", exc_info=True)
+        return {}
+
+def save_config(settings_dict):
+    """Salva o dicionário de configurações em settings.json."""
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(settings_dict, f, indent=4)
+        logging.info(f"Configuração salva em '{CONFIG_FILE}'.")
+    except Exception as e:
+        logging.error(f"Erro ao salvar '{CONFIG_FILE}': {e}", exc_info=True)
+
+# --- Carrega Configurações ---
+config_from_file = load_config()
+
+
 # --- Configurações da Aplicação ---
 VIDEO_SOURCE = os.environ.get('VIDEO_SOURCE', "0")
 FRAME_WIDTH_DISPLAY = 640
@@ -46,14 +79,20 @@ JPEG_QUALITY = 75
 TARGET_FPS = 5
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
-INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 
+# (MODIFICADO) Usa valores do arquivo salvo ou do env, com fallback para padrões
+INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', config_from_file.get('rotation', '0')))
 DETECTION_BACKEND = "MEDIAPIPE"
 
-DEFAULT_EAR_THRESHOLD = 0.25
-DEFAULT_EAR_FRAMES = 7
-DEFAULT_MAR_THRESHOLD = 0.40
-DEFAULT_MAR_FRAMES = 10
+# (MODIFICADO) Padrões são usados se NADA for encontrado no arquivo de config
+DEFAULT_EAR_THRESHOLD = config_from_file.get('ear_threshold', 0.25)
+DEFAULT_EAR_FRAMES = config_from_file.get('ear_frames', 7)
+DEFAULT_MAR_THRESHOLD = config_from_file.get('mar_threshold', 0.40)
+DEFAULT_MAR_FRAMES = config_from_file.get('mar_frames', 10)
+# (Adiciona padrões de celular aqui também, se existirem no config)
+DEFAULT_PHONE_ENABLED = config_from_file.get('phone_detection_enabled', True)
+DEFAULT_PHONE_CONF = config_from_file.get('phone_confidence', 0.20)
+DEFAULT_PHONE_FRAMES = config_from_file.get('phone_frames', 5) # (Segundos)
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -115,7 +154,6 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 stop_event.wait(timeout=1.0)
                 continue
 
-            # (ALTERADO) Esta chamada agora é RÁPIDA. O YOLO corre em paralelo.
             processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -157,7 +195,6 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
             logging.debug(f"DetectionLoop: A esperar {wait_time:.3f}s...")
             stop_event.wait(timeout=wait_time)
         else:
-            # (REMOVIDO) O log de "LOOP LENTO" já não deve acontecer
             logging.debug("DetectionLoop: Loop lento, pausa (0.01s).")
             stop_event.wait(timeout=0.01)
 
@@ -292,6 +329,17 @@ def api_config():
 
             if dms_success and cam_success:
                 logging.info(f"/api/config POST: Configurações atualizadas.")
+                
+                # --- (NOVO) Salva a configuração persistente ---
+                try:
+                    all_current_settings = dms_monitor.get_settings()
+                    all_current_settings['brightness'] = cam_thread.get_brightness()
+                    all_current_settings['rotation'] = cam_thread.get_rotation()
+                    save_config(all_current_settings)
+                except Exception as e:
+                    logging.error(f"Falha ao salvar config persistente: {e}", exc_info=True)
+                # -----------------------------------------------
+
                 return jsonify({"success": True})
             else:
                 error_msg = "Failed settings"+(" (DMS)" if not dms_success else "")+(" (Cam)" if not cam_success else "")
@@ -345,19 +393,21 @@ if __name__ == '__main__':
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
+        # (MODIFICADO) Usa os padrões carregados (do arquivo ou os defaults)
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
             "mar_threshold": DEFAULT_MAR_THRESHOLD,
-            "mar_frames": DEFAULT_MAR_FRAMES
+            "mar_frames": DEFAULT_MAR_FRAMES,
+            "phone_detection_enabled": DEFAULT_PHONE_ENABLED,
+            "phone_confidence": DEFAULT_PHONE_CONF,
+            "phone_frames": DEFAULT_PHONE_FRAMES,
         }
         
-        # ================== ALTERAÇÃO (Passa o stop_event) ==================
         logging.info("A carregar o MediaPipeMonitor...")
         dms_monitor = MediaPipeMonitor(frame_size=frame_size,
-                                       stop_event=stop_event, # (NOVO)
+                                       stop_event=stop_event,
                                        default_settings=default_dms_settings)
-        # ===================================================================
 
         cam_thread = CameraThread(
             VIDEO_SOURCE,
@@ -382,8 +432,6 @@ if __name__ == '__main__':
 
         logging.info(">>> Primeiro frame recebido!")
 
-        # (ALTERADO) O dms_monitor agora precisa do cam_thread para o seu loop YOLO
-        # Vamos passar a referência após a câmara ter arrancado.
         try:
              dms_monitor.start_yolo_thread(cam_thread)
              logging.info(">>> Thread de deteção de celular (YOLO) iniciada.")
@@ -445,7 +493,6 @@ if __name__ == '__main__':
         if 'event_handler' in locals() and event_handler and event_handler.is_alive():
             threads_to_join.append(event_handler)
         
-        # (NOVO) Adiciona o thread YOLO ao encerramento, se existir
         if 'dms_monitor' in locals() and dms_monitor and hasattr(dms_monitor, 'phone_thread') and dms_monitor.phone_thread.is_alive():
              threads_to_join.append(dms_monitor.phone_thread)
 
@@ -458,4 +505,3 @@ if __name__ == '__main__':
                 logging.warning(f"!!! Timeout ao esperar thread '{t.name}'.")
 
         logging.info(">>> Serviço DMS terminado.")
-        os._exit(0)
