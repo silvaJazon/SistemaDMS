@@ -151,7 +151,7 @@ def create_placeholder_frame(text="Aguardando camera..."):
 
 # --- Threads Principais (detection_loop) ---
 def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
-    global output_frame_display, global_status_data
+    global output_frame_display, status_data_global
     logging.info(
         f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) "
         f"iniciado (Alvo: {TARGET_FPS} FPS)."
