@@ -5,6 +5,7 @@
 import abc
 import numpy as np
 import logging
+import threading # (NOVO)
 
 class BaseMonitor(abc.ABC):
     """
@@ -13,14 +14,16 @@ class BaseMonitor(abc.ABC):
     """
 
     @abc.abstractmethod
-    # ================== ALTERAÇÃO (Padrões Centralizados) ==================
-    def __init__(self, frame_size, default_settings: dict = None):
+    # ================== ALTERAÇÃO (Passar o stop_event) ==================
+    def __init__(self, frame_size, stop_event: threading.Event, default_settings: dict = None):
         """
         Inicializa o monitor.
         :param frame_size: Uma tupla (height, width) do frame de entrada.
+        :param stop_event: O evento global para sinalizar o encerramento.
         :param default_settings: (Opcional) Um dict com os padrões (ear_threshold, etc.)
         """
         self.frame_height, self.frame_width = frame_size
+        self.stop_event = stop_event # (NOVO)
         if default_settings is None: 
             default_settings = {}
         self.default_settings = default_settings 
