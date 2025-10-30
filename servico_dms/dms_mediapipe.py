@@ -14,7 +14,7 @@ from collections import deque
 
 from ultralytics import YOLO
 from dms_base import BaseMonitor
-from camera_thread import CameraThread # (NOVO) Importa tipo
+from camera_thread import CameraThread
 
 cv2.setUseOptimized(True)
 
@@ -66,7 +66,7 @@ class MediaPipeMonitor(BaseMonitor):
             raise RuntimeError(f"Erro YOLO: {e}")
 
         # --- 3. Contadores e Configurações ---
-        self.lock = threading.Lock() # Lock para contadores (EAR, MAR, Phone) E SETTINGS
+        self.lock = threading.Lock() 
         self.drowsiness_counter = 0
         self.yawn_counter = 0
         self.phone_counter = 0
@@ -87,7 +87,7 @@ class MediaPipeMonitor(BaseMonitor):
         # --- 4. Configuração do Thread YOLO ---
         self.cam_thread_ref: CameraThread = None
         self.phone_thread = None
-        self.yolo_lock = threading.Lock() # Lock para resultados (boxes, found)
+        self.yolo_lock = threading.Lock() 
         self.last_yolo_boxes = []
         self.phone_found_by_thread = False
 
@@ -104,32 +104,35 @@ class MediaPipeMonitor(BaseMonitor):
         while not self.stop_event.is_set():
             start_time_yolo = time.time()
             
-            # ================== CORREÇÃO (Leitura Thread-Safe) ==================
-            # Lê o estado da flag DENTRO do lock principal
             with self.lock:
                 phone_enabled = self.phone_detection_enabled
                 current_phone_confidence = self.phone_confidence
-            # ====================================================================
             
             if not phone_enabled or self.cam_thread_ref is None or self.yolo_cellphone_class_id == -1:
                 with self.yolo_lock:
                     self.last_yolo_boxes = []
                     self.phone_found_by_thread = False
-                logging.debug("_yolo_loop: Deteção desativada/câmara indisponível. A dormir 2s.")
+                
+                # ================== ALTERAÇÃO (Log Visível) ==================
+                logging.info("_yolo_loop: Deteção de celular DESATIVADA. A aguardar...")
+                # ============================================================
+                
                 if self.stop_event.wait(timeout=2.0): break
                 continue
 
             # --- Execução da Deteção (Lenta) ---
             try:
-                logging.debug("_yolo_loop: A obter frame da câmara...")
+                logging.debug("_yolo_loop: A obter frame da câmara...") # Este pode ficar DEBUG
                 frame = self.cam_thread_ref.get_frame()
                 if frame is None:
                     logging.warning("_yolo_loop: Não obteve frame. A tentar novamente em 2s.")
                     if self.stop_event.wait(timeout=2.0): break
                     continue
                 
-                logging.debug("_yolo_loop: A executar inferência YOLO...")
-                # (ALTERADO) Usa a confiança lida de forma segura
+                # ================== ALTERAÇÃO (Log Visível) ==================
+                logging.info("_yolo_loop: A executar inferência YOLO...")
+                # ============================================================
+                
                 results = self.yolo_model(frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=current_phone_confidence)
                 
                 current_boxes = []
@@ -144,7 +147,9 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_found_by_thread = phone_found
                     self.last_yolo_boxes = current_boxes
 
-                logging.debug(f"_yolo_loop: Inferência concluída. Celular encontrado: {phone_found}. Duração: {time.time() - start_time_yolo:.3f}s")
+                # ================== ALTERAÇÃO (Log Visível) ==================
+                logging.info(f"_yolo_loop: Inferência concluída. Celular encontrado: {phone_found}. Duração: {time.time() - start_time_yolo:.3f}s")
+                # ============================================================
 
             except Exception as e:
                 logging.error(f"_yolo_loop: Erro na inferência: {e}", exc_info=True)
@@ -158,9 +163,6 @@ class MediaPipeMonitor(BaseMonitor):
         logging.info(">>> _yolo_loop (Thread) terminado.")
 
     def start_yolo_thread(self, cam_thread_ref: CameraThread):
-        """
-        Recebe a referência da câmara e inicia o thread YOLO.
-        """
         self.cam_thread_ref = cam_thread_ref
         self.phone_thread = threading.Thread(target=self._yolo_loop, name="PhoneDetectionThread")
         self.phone_thread.daemon = True
@@ -184,16 +186,12 @@ class MediaPipeMonitor(BaseMonitor):
 
 
     def process_frame(self, frame, gray):
-        """
-        Analisa um frame (MediaPipe RÁPIDO + Leitura de resultados YOLO)
-        """
         logging.debug("DMSCore(MediaPipe): process_frame (MP Rápido) iniciado.")
         start_time_total = time.time()
         events_list = []
         status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
         face_found_this_frame = False
         
-        # --- Lógica de Deteção Facial (MediaPipe) ---
         try:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results_mp = self.face_mesh.process(frame_rgb)
@@ -222,15 +220,11 @@ class MediaPipeMonitor(BaseMonitor):
                 logging.error(f"DMSCore(MediaPipe): Erro ao processar landmarks: {e}", exc_info=True)
                 face_found_this_frame = False
         
-        # --- Desenho e Leitura dos Resultados YOLO ---
         local_boxes = []
         phone_found = False
         
-        # ================== CORREÇÃO (Leitura Thread-Safe) ==================
-        # Lê o estado da flag DENTRO do lock principal
         with self.lock:
             phone_enabled_locked = self.phone_detection_enabled
-        # ====================================================================
         
         if phone_enabled_locked:
             with self.yolo_lock:
@@ -244,7 +238,6 @@ class MediaPipeMonitor(BaseMonitor):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
         
-        # --- Lógica de Alerta (Combinada) ---
         logging.debug("DMSCore(MediaPipe): Lock alerta...")
         with self.lock:
             logging.debug("DMSCore(MediaPipe): Lock alerta OK.")
@@ -279,10 +272,9 @@ class MediaPipeMonitor(BaseMonitor):
                 self.drowsiness_counter = 0; self.drowsy_alert_active = False
                 self.yawn_counter = 0; self.yawn_alert_active = False
 
-            # (ALTERADO) Lógica de Alerta (Celular)
             if phone_enabled_locked:
                 if phone_found:
-                    self.phone_counter += 1
+                    self.phone_counter += 1 
                     logging.debug(f"DMSCore(YOLO): Celular encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
                     if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
                         self.phone_alert_active = True
@@ -294,7 +286,6 @@ class MediaPipeMonitor(BaseMonitor):
 
         logging.debug("DMSCore(MediaPipe): Lock alerta libertado.")
 
-        # Desenha alertas
         if self.drowsy_alert_active:
             cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         if self.yawn_alert_active:
@@ -310,7 +301,6 @@ class MediaPipeMonitor(BaseMonitor):
         """Atualiza configurações."""
         logging.debug(f"DMSCore(MediaPipe): Tentando atualizar conf: {settings}")
         
-        # A escrita das settings já está protegida pelo self.lock (correto)
         with self.lock:
             try:
                 self.ear_threshold = float(settings.get('ear_threshold', self.ear_threshold))
