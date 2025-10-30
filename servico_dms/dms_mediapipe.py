@@ -1,5 +1,5 @@
 # Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
-# (VERSÃO: Multithread - MP Rápido + YOLO Lento)
+# (VERSÃO: Multithread - MP Rápido + YOLO Lento Otimizado)
 
 import cv2
 import mediapipe as mp
@@ -22,6 +22,14 @@ cv2.setUseOptimized(True)
 MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
+
+# (NOVO) Define o tamanho da imagem de inferência do YOLO
+YOLO_IMG_WIDTH = 320
+YOLO_IMG_HEIGHT = 240
+# Fatores de escala (640/320 = 2.0)
+SCALE_X = 640 / YOLO_IMG_WIDTH
+SCALE_Y = 480 / YOLO_IMG_HEIGHT
+
 
 class MediaPipeMonitor(BaseMonitor):
     """
@@ -47,12 +55,10 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 2. Carregar Modelo YOLOv8 ---
         try:
-            # ================== ALTERAÇÃO (Modelo 's') ==================
-            model_file = 'yolov8s.pt' # (ALTERADO de 'n' para 's')
+            model_file = 'yolov8s.pt'
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
-            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -124,7 +130,13 @@ class MediaPipeMonitor(BaseMonitor):
                     continue
                 
                 logging.info("_yolo_loop: A executar inferência YOLO...")
-                results = self.yolo_model(frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=current_phone_confidence)
+                
+                # ================== ALTERAÇÃO 1 (Redimensionar) ==================
+                # Reduz o frame para acelerar a inferência
+                yolo_frame = cv2.resize(frame, (YOLO_IMG_WIDTH, YOLO_IMG_HEIGHT))
+                # ===============================================================
+
+                results = self.yolo_model(yolo_frame, verbose=False, classes=[self.yolo_cellphone_class_id], conf=current_phone_confidence)
                 
                 current_boxes = []
                 phone_found = False
@@ -132,7 +144,14 @@ class MediaPipeMonitor(BaseMonitor):
                     for box in results[0].boxes:
                         if int(box.cls) == self.yolo_cellphone_class_id:
                             phone_found = True
-                            current_boxes.append(box.xyxy[0])
+                            
+                            # ================== ALTERAÇÃO 2 (Escalar Coordenadas) ==================
+                            # Pega nas coordenadas (x1, y1, x2, y2) do frame 320x240
+                            x1, y1, x2, y2 = box.xyxy[0]
+                            # Escala-as de volta para o frame 640x480
+                            scaled_box = [x1 * SCALE_X, y1 * SCALE_Y, x2 * SCALE_X, y2 * SCALE_Y]
+                            current_boxes.append(scaled_box)
+                            # =======================================================================
                 
                 with self.yolo_lock:
                     self.phone_found_by_thread = phone_found
@@ -220,11 +239,14 @@ class MediaPipeMonitor(BaseMonitor):
                 local_boxes = self.last_yolo_boxes
                 phone_found = self.phone_found_by_thread
             
+            # ================== ALTERAÇÃO 3 (Desenhar) ==================
+            # O 'box_coords' já está escalado, só precisamos de o converter para int
             for box_coords in local_boxes:
-                x1, y1, x2, y2 = map(int, box_coords)
+                x1, y1, x2, y2 = map(int, box_coords) 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
                 cv2.putText(frame, "Celular", (x1, y1 - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+            # ============================================================
 
         
         logging.debug("DMSCore(MediaPipe): Lock alerta...")
