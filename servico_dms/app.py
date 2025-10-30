@@ -1,6 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# (VERSÃO: Híbrido + Pose Suave + Offsets + Distração Opcional)
-# (ALTERADO) Refatorado para usar a classe base BaseMonitor
+# (VERSÃO: MediaPipe + YOLO)
 
 import cv2
 import time
@@ -17,16 +16,10 @@ import signal
 
 # Importa os nossos módulos
 from camera_thread import CameraThread
-# (ALTERADO) Importa a implementação específica (DlibMonitor) e a base
+# (ALTERADO) Importa a base e APENAS o MediaPipeMonitor
 from dms_base import BaseMonitor
-from dms_core import DlibMonitor 
-# (NOVO) Importa a implementação MediaPipe
-try:
-    from dms_mediapipe import MediaPipeMonitor
-    HAS_MEDIAPIPE = True
-except ImportError as e:
-    logging.warning(f"Não foi possível importar MediaPipeMonitor: {e}. MediaPipe não estará disponível.")
-    HAS_MEDIAPIPE = False
+from dms_mediapipe import MediaPipeMonitor
+# (REMOVIDO) DlibMonitor
     
 from event_handler import EventHandler
 
@@ -58,17 +51,14 @@ TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 INITIAL_ROTATION = int(os.environ.get('ROTATE_FRAME', '0'))
 
-# (CORRIGIDO) Adiciona .strip() para remover espaços em branco
-DETECTION_BACKEND = os.environ.get('DETECTION_BACKEND', 'DLIB').upper().strip()
+# (ALTERADO) Backend é fixo
+DETECTION_BACKEND = "MEDIAPIPE"
 
-# ================== ALTERAÇÃO (Padrões Centralizados) ==================
 # Configurações Padrão de Deteção (centralizadas)
 DEFAULT_EAR_THRESHOLD = 0.25
 DEFAULT_EAR_FRAMES = 7
 DEFAULT_MAR_THRESHOLD = 0.40
 DEFAULT_MAR_FRAMES = 10
-# =======================================================================
-
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -81,7 +71,7 @@ cam_thread = None
 detection_thread = None
 event_handler = None
 event_queue = None
-dms_monitor: BaseMonitor = None # (ALTERADO) Tipo é a classe Base
+dms_monitor: BaseMonitor = None # Tipo é a classe Base
 
 app = Flask(__name__)
 
@@ -98,7 +88,7 @@ def create_placeholder_frame(text="Aguardando camera..."):
     return frame
 
 # --- Threads Principais ---
-def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref): # (ALTERADO) Tipo da referência
+def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
     """Loop principal de deteção (Usa a interface BaseMonitor)."""
     global output_frame_display, status_data_global
     logging.info(f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) iniciado (Alvo: {TARGET_FPS} FPS).")
@@ -132,7 +122,6 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 stop_event.wait(timeout=1.0)
                 continue
 
-            # (SEM ALTERAÇÃO) Chama o método da interface, não importa a implementação
             processed_frame, events, status_data = dms_monitor_ref.process_frame(frame.copy(), gray)
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -189,7 +178,7 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
 def index():
     """Serve a página de calibração."""
     cam_source_desc = cam_thread.source_description if cam_thread else "Indisponível"
-    # (NOVO) Passa o backend ativo para o template
+    # (ALTERADO) Passa o backend (fixo) para o template
     return render_template("index.html", source_desc=cam_source_desc,
                            width=FRAME_WIDTH_DISPLAY, height=FRAME_HEIGHT_DISPLAY,
                            active_backend=DETECTION_BACKEND)
@@ -269,7 +258,7 @@ def video_feed():
 # --- Rotas da API ---
 @app.route("/api/config", methods=['GET', 'POST'])
 def api_config():
-    """API para ler/atualizar configurações (Distração Opcional)."""
+    """API para ler/atualizar configurações."""
     global dms_monitor
     logging.debug(f"Rota /api/config (Método: {request.method})")
     if dms_monitor is None or not cam_thread or not event_queue:
@@ -278,12 +267,11 @@ def api_config():
 
     if request.method == 'GET':
         try:
-            # (SEM ALTERAÇÃO) Chama o método da interface
             current_settings = dms_monitor.get_settings()
             current_settings['brightness'] = cam_thread.get_brightness()
             current_settings['rotation'] = cam_thread.get_rotation()
             
-            # (NOVO) Adiciona o backend ativo
+            # Adiciona o backend ativo
             current_settings['active_backend'] = DETECTION_BACKEND
 
             logging.debug("api_config GET: Lock status...")
@@ -311,7 +299,6 @@ def api_config():
             logging.debug(f"/api/config POST: Recebido {new_settings}")
             if not new_settings: return jsonify({"success": False, "error": "No data received"}), 400
 
-            # (SEM ALTERAÇÃO) Chama o método da interface
             dms_success = dms_monitor.update_settings(new_settings)
 
             cam_success = True # Câmara
@@ -378,41 +365,23 @@ if __name__ == '__main__':
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
         
-        # ================== ALTERAÇÃO (Padrões Centralizados) ==================
-        # Cria dicionário de padrões para passar aos monitores
+        # Cria dicionário de padrões para passar ao monitor
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
             "mar_threshold": DEFAULT_MAR_THRESHOLD,
             "mar_frames": DEFAULT_MAR_FRAMES
-            # (Nota: Padrões de distração são definidos internamente nos backends)
         }
-        # =======================================================================
         
-        # (ALTERADO) Lógica para escolher o backend
-        if DETECTION_BACKEND == 'MEDIAPIPE':
-            if HAS_MEDIAPIPE:
-                # (ALTERADO) Passa os padrões
-                dms_monitor = MediaPipeMonitor(frame_size=frame_size,
-                                               default_settings=default_dms_settings)
-            else:
-                logging.error("!!! DETECTION_BACKEND='MEDIAPIPE' mas a importação falhou. A usar DLIB.")
-                DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-                # (ALTERADO) Passa os padrões
-                dms_monitor = DlibMonitor(frame_size=frame_size,
-                                          default_settings=default_dms_settings)
-        
-        elif DETECTION_BACKEND == 'DLIB':
-            # (ALTERADO) Passa os padrões
-            dms_monitor = DlibMonitor(frame_size=frame_size,
-                                      default_settings=default_dms_settings)
-        
-        else:
-            logging.error(f"!!! DETECTION_BACKEND '{DETECTION_BACKEND}' desconhecido. A usar DLIB.")
-            DETECTION_BACKEND = 'DLIB' # Corrige a variável global
-            # (ALTERADO) Passa os padrões
-            dms_monitor = DlibMonitor(frame_size=frame_size,
-                                      default_settings=default_dms_settings)
+        # ================== ALTERAÇÃO (Carregamento Fixo) ==================
+        # Carrega diretamente o MediaPipeMonitor
+        if not HAS_MEDIAPIPE:
+             logging.error("!!! MediaPipe não foi importado com sucesso. A parar.")
+             raise ImportError("MediaPipeMonitor não encontrado.")
+             
+        dms_monitor = MediaPipeMonitor(frame_size=frame_size,
+                                       default_settings=default_dms_settings)
+        # ===================================================================
 
         cam_thread = CameraThread(
             VIDEO_SOURCE,
