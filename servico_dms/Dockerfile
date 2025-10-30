@@ -32,12 +32,10 @@ RUN apt-get update && \
 # Verifica a versão do CMake (deve ser >= 3.25.1)
 RUN which cmake && cmake --version
 
-# (NOVO) Atualiza pip, setuptools e wheel
+# Atualiza pip, setuptools e wheel
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Instala dependências do requirements.txt (SEM dlib, SEM cmake)
-# (ALTERADO) O Dlib e o MediaPipe estão agora no requirements.txt (se necessário)
-# (MAS o YOLO/ultralytics será instalado)
+# Instala dependências do requirements.txt (incluindo ultralytics)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Instala o pybind11 (necessário para compilar o dlib)
@@ -47,17 +45,12 @@ RUN pip install --no-cache-dir --no-build-isolation pybind11
 RUN CMAKE_ARGS="-DCMAKE_POLICY_VERSION_MINIMUM=3.5" \
     pip install --no-cache-dir --no-build-isolation dlib==19.24.2
 
+# --- (REMOVIDO) Estágio de Download do Modelo (Dlib) ---
+# RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" ...
 
-# --- Estágio de Download do Modelo (Dlib) ---
+# --- (REMOVIDO) Estágio de Download do Modelo (YOLO) ---
+# RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
-# Descarrega o modelo de 68 pontos de referência faciais
-RUN curl -L "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" -o landmarks.dat.bz2 && \
-    bzip2 -d landmarks.dat.bz2 && \
-    mv landmarks.dat shape_predictor_68_face_landmarks.dat
-
-# (NOVO) Pré-download (opcional) do modelo YOLOv8n
-# Isto evita que o download ocorra no primeiro arranque do container
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 
 # --- Estágio Final ---
 
@@ -65,13 +58,20 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 RUN mkdir /app/alerts
 COPY templates/ ./templates/
 
-# (NOVO) Copia os novos arquivos do projeto
+# Copia os arquivos do projeto
 COPY app.py .
 COPY dms_base.py .
 COPY dms_core.py .
 COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
+
+# ================== ALTERAÇÃO ==================
+# (NOVO) Copia os modelos locais (muito mais rápido)
+COPY shape_predictor_68_face_landmarks.dat .
+COPY yolov8n.pt .
+# ===============================================
+
 # Expõe a porta padrão do Flask
 EXPOSE 5000
 
