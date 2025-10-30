@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/
+
+# Docker Volumes (Dados de Runtime)
+config_dms/
+alertas_dms/
+*.db
+
+# OS
+.DS_Store
+Thumbs.db

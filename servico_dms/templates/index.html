@@ -6,7 +6,7 @@
     <title>SistemaDMS - Calibração</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* ... [Estilos CSS permanecem os mesmos] ... */
+        /* ... [Estilos CSS (sem alteração)] ... */
         input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; background: #4a5568; border-radius: 9999px; outline: none; opacity: 0.9; transition: opacity .2s; }
         input[type="range"]:hover:not(:disabled) { opacity: 1; }
         input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; background: #4299e1; border-radius: 50%; cursor: pointer; }
@@ -187,12 +187,15 @@
             const isPhoneEnabled = phoneCheckbox ? phoneCheckbox.checked : false; 
             console.debug(`updateControlStates: Default=${isDefaultProfile}, PhoneEnabled=${isPhoneEnabled}`);
 
-            allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
-            if (phoneCheckbox) phoneCheckbox.disabled = !isDefaultProfile;
+            // (MODIFICADO) Sliders de deteção agora são controlados pelo 'loadProfile',
+            // mas 'brightness' e 'rotation' estão sempre ativos.
+            // A lógica de 'disabled' do perfil foi simplificada.
+            // allDetectionSliders.forEach(slider => { slider.disabled = !isDefaultProfile; });
+            // if (phoneCheckbox) phoneCheckbox.disabled = !isDefaultProfile;
 
             if (phoneControlsGroup) {
                 const phoneSliders = phoneControlsGroup.querySelectorAll('input[type="range"]');
-                if (isDefaultProfile && isPhoneEnabled) {
+                if (isPhoneEnabled) { // (MODIFICADO) Só depende do checkbox
                     phoneControlsGroup.classList.remove('opacity-50', 'disabled-group');
                     phoneSliders.forEach(s => s.disabled = false);
                 } else {
@@ -305,7 +308,8 @@
                 const key = localStorage.key(i);
                 if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
                     try { const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
-                        profiles[profileName] = { ...initialApiSettings, ...JSON.parse(localStorage.getItem(key)) };
+                        // (MODIFICADO) Perfis são apenas *overrides* dos padrões, não 'initialApiSettings'
+                        profiles[profileName] = JSON.parse(localStorage.getItem(key));
                     } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
                 }
             } return profiles;
@@ -342,8 +346,14 @@
                 settingsToLoad = initialApiSettings; 
                 console.debug("Carregando Padrão (da API)."); 
             }
-            else { const profiles = getSavedProfiles(); settingsToLoad = profiles[selectedName];
-                if(settingsToLoad) { console.debug(`Carregando '${selectedName}'.`); }
+            else { 
+                const profiles = getSavedProfiles(); 
+                const profileSettings = profiles[selectedName];
+                if(profileSettings) { 
+                    console.debug(`Carregando '${selectedName}'.`); 
+                    // (MODIFICADO) Junta o padrão com o perfil salvo
+                    settingsToLoad = { ...initialApiSettings, ...profileSettings };
+                }
                 else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             }
             if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
@@ -364,16 +374,20 @@
                 updateControlStates();
             }
 
-            if (profileSelect.value === "__default__" || target.name === 'brightness' || target.name === 'rotation') {
-                 if (target.type === 'range') {
-                     const valueSpan = document.getElementById(`${target.id}_value`);
-                     if(valueSpan) {
-                         const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
-                         valueSpan.textContent = formatNumber(target.value, decimals);
-                     }
-                 }
-                postSettings(); 
+            // --- (MODIFICADO) Correção 1.3 ---
+            // O 'if' que verificava 'profileSelect.value' foi removido.
+            // Qualquer mudança em qualquer controle agora é enviada.
+            
+            if (target.type === 'range') {
+                const valueSpan = document.getElementById(`${target.id}_value`);
+                if(valueSpan) {
+                    const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
+                    valueSpan.textContent = formatNumber(target.value, decimals);
+                }
             }
+            // Envia a configuração para a API (backend)
+            postSettings();
+            // ------------------------------------
         });
 
         sliders.forEach(slider => {
@@ -418,17 +432,10 @@
                 const data = await response.json();
                 if (data.error) throw new Error(data.error);
 
+                // (MODIFICADO) Remove dados de status/runtime dos 'initialApiSettings'
+                const runtimeKeys = ['status', 'queue_depth', 'queue_max_size', 'active_backend'];
                 initialApiSettings = { ...data };
-                delete initialApiSettings.status; 
-                delete initialApiSettings.queue_depth; 
-                delete initialApiSettings.queue_max_size; 
-                delete initialApiSettings.distraction_detection_enabled;
-                delete initialApiSettings.distraction_angle;
-                delete initialApiSettings.distraction_frames;
-                delete initialApiSettings.pitch_up_threshold;
-                delete initialApiSettings.pitch_down_offset;
-                delete initialApiSettings.yaw_center_offset;
-                delete initialApiSettings.pitch_center_offset;
+                runtimeKeys.forEach(k => delete initialApiSettings[k]);
 
                 console.debug("Configuração inicial recebida da API:", initialApiSettings);
 
@@ -451,7 +458,7 @@
 
         initializeApp();
 
-        // Stream Error Handling
+        // Stream Error Handling (sem alteração)
         var stream = document.getElementById("stream"); let errorTimeout = null;
         stream.onerror = function(event) { console.error("Erro stream (onerror). Evento:", event); stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; if (!errorTimeout) { console.warn("Tentando recarregar stream em 5s..."); errorTimeout = setTimeout(function() { var timestamp = new Date().getTime(); var newSrc = "{{ url_for('video_feed') }}?" + timestamp; console.log("Tentando src:", newSrc); stream.src = newSrc; errorTimeout = null; }, 5000); } else console.log("Timeout recarga ativo."); };
         stream.onload = function() { console.debug("Stream carregado (onload). Limpando timeout erro."); if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; } }

@@ -16,7 +16,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Passa a variável ROTATE_FRAME (definida no Makefile) para o contentor.
       - ROTATE_FRAME=${ROTATE_FRAME:-0}
-      # (REMOVIDO) DETECTION_BACKEND
     ports:
       # Mapeamento de portas: Liga a porta 5000 do Pi à porta 5000 do contentor.
       - "5000:5000"
@@ -26,3 +25,5 @@ services:
     volumes:
       # Mapeia a pasta local './alertas_dms' para a pasta '/app/alerts' dentro do contentor
       - ./alertas_dms:/app/alerts
+      # (NOVO) Mapeia a pasta local './config_dms' para '/app/config' para persistir 'settings.json'
+      - ./config_dms:/app/config

@@ -1,5 +1,6 @@
 # Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
 # (VERSÃO: Híbrido Otimizado - Deteta Mão (MP), depois Celular (YOLO-s) no recorte)
+# (MODIFICADO: Lógica de alerta de celular baseada em tempo)
 
 import cv2
 import mediapipe as mp
@@ -51,7 +52,7 @@ class MediaPipeMonitor(BaseMonitor):
         try:
             self.hands = mp.solutions.hands.Hands(
                 static_image_mode=False,
-                max_num_hands=2, # (Corrigido) Procura 2 mãos
+                max_num_hands=2,
                 min_detection_confidence=0.5
             )
             logging.info(">>> Modelos MediaPipe Hands carregados (max_num_hands=2).")
@@ -61,12 +62,10 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 3. Carregar Modelo YOLOv8 (Thread Fundo) ---
         try:
-            # ================== ALTERAÇÃO (Modelo 's') ==================
-            model_file = 'yolov8s.pt' # (ALTERADO) Voltámos para o 's' (Small)
+            model_file = 'models/yolov8s.pt'
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
-            # ==========================================================
             
             self.yolo_cellphone_class_id = -1
             if self.yolo_model.names:
@@ -99,7 +98,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.lock = threading.Lock() 
         self.drowsiness_counter = 0
         self.yawn_counter = 0
-        self.phone_counter = 0
+        # (REMOVIDO) self.phone_counter = 0 (Agora usa timestamp)
         
         self.drowsy_alert_active = False
         self.yawn_alert_active = False
@@ -110,16 +109,17 @@ class MediaPipeMonitor(BaseMonitor):
         self.mar_threshold = self.default_settings.get('mar_threshold', 0.40)
         self.mar_frames = self.default_settings.get('mar_frames', 10)
         
-        self.phone_detection_enabled = True
-        self.phone_confidence = 0.20
-        self.phone_frames = 5      
+        self.phone_detection_enabled = self.default_settings.get('phone_detection_enabled', True)
+        self.phone_confidence = self.default_settings.get('phone_confidence', 0.20)
+        self.phone_frames = self.default_settings.get('phone_frames', 5) # (Interpretado como SEGUNDOS)
 
         # --- 5. Configuração do Thread YOLO ---
         self.cam_thread_ref: CameraThread = None
         self.phone_thread = None
         self.yolo_lock = threading.Lock() 
         self.last_yolo_boxes = []
-        self.phone_found_by_thread = False
+        # (NOVO) Armazena o timestamp da *primeira* detecção contínua
+        self.phone_detected_time = None 
 
 
     # --- Loop do Thread YOLO ---
@@ -138,7 +138,7 @@ class MediaPipeMonitor(BaseMonitor):
             if not phone_enabled or self.cam_thread_ref is None or self.yolo_cellphone_class_id == -1:
                 with self.yolo_lock:
                     self.last_yolo_boxes = []
-                    self.phone_found_by_thread = False
+                    self.phone_detected_time = None # (NOVO) Reseta o tempo
                 logging.info("_yolo_loop: Deteção de celular DESATIVADA. A aguardar...")
                 if self.stop_event.wait(timeout=2.0): break
                 continue
@@ -157,7 +157,7 @@ class MediaPipeMonitor(BaseMonitor):
                 # --- 1. Inferência MediaPipe Hands ---
                 results_hands = self.hands.process(frame_rgb)
                 
-                phone_found_final = False
+                phone_found_this_loop = False
                 current_boxes = [] 
 
                 if results_hands.multi_hand_landmarks:
@@ -201,27 +201,43 @@ class MediaPipeMonitor(BaseMonitor):
                         if results_yolo and results_yolo[0].boxes:
                             for box in results_yolo[0].boxes:
                                 if int(box.cls) == self.yolo_cellphone_class_id:
-                                    phone_found_final = True
-                                    current_boxes.append([x_min, y_min, x_max, y_max]) 
+                                    phone_found_this_loop = True
+                                    # (NOVO) Ajusta as coordenadas da box do recorte para o frame total
+                                    box_coords_global = [int(box.xyxy[0][0] + x_min), int(box.xyxy[0][1] + y_min),
+                                                         int(box.xyxy[0][2] + x_min), int(box.xyxy[0][3] + y_min)]
+                                    current_boxes.append(box_coords_global)
                                     break 
-                    
-                        if phone_found_final:
+                        if phone_found_this_loop:
                              break 
                 
                 # --- 5. Atualizar os resultados (thread-safe) ---
                 with self.yolo_lock:
-                    self.phone_found_by_thread = phone_found_final
-                    self.last_yolo_boxes = current_boxes
+                    self.last_yolo_boxes = current_boxes if phone_found_this_loop else []
+                    
+                    # (NOVO) Lógica de tempo
+                    current_time = time.time()
+                    if phone_found_this_loop:
+                        if self.phone_detected_time is None:
+                            # Inicia o cronômetro na primeira detecção
+                            self.phone_detected_time = current_time
+                            logging.info("_yolo_loop: Detecção de celular INICIADA.")
+                        # Se já estava definido, continua contando (não faz nada)
+                    else:
+                        # Se não encontrou, reseta o cronômetro
+                        if self.phone_detected_time is not None:
+                             logging.info("_yolo_loop: Detecção de celular INTERROMPIDA.")
+                        self.phone_detected_time = None
 
-                logging.info(f"_yolo_loop: Inferência concluída. Mão/Celular Híbrido: {phone_found_final}. Duração: {time.time() - start_time_yolo:.3f}s")
+                logging.info(f"_yolo_loop: Inferência concluída. Mão/Celular Híbrido: {phone_found_this_loop}. Duração: {time.time() - start_time_yolo:.3f}s")
 
             except Exception as e:
                 logging.error(f"_yolo_loop: Erro na inferência: {e}", exc_info=True)
                 with self.yolo_lock:
-                    self.phone_found_by_thread = False
+                    self.phone_detected_time = None
                     self.last_yolo_boxes = []
 
-            sleep_time = 2.0
+            # (MODIFICADO) Reduz o tempo de espera para atualizações mais rápidas
+            sleep_time = 1.0 
             if self.stop_event.wait(timeout=sleep_time):
                 break
         
@@ -285,16 +301,16 @@ class MediaPipeMonitor(BaseMonitor):
                 logging.error(f"DMSCore(MediaPipe): Erro ao processar landmarks: {e}", exc_info=True)
                 face_found_this_frame = False
         
+        # (MODIFICADO) Lê o tempo e as boxes da thread YOLO
         local_boxes = []
-        phone_found = False
-        
+        current_phone_detected_time = None
         with self.lock:
             phone_enabled_locked = self.phone_detection_enabled
         
         if phone_enabled_locked:
             with self.yolo_lock:
                 local_boxes = self.last_yolo_boxes 
-                phone_found = self.phone_found_by_thread
+                current_phone_detected_time = self.phone_detected_time
             
             for box_coords in local_boxes:
                 x1, y1, x2, y2 = map(int, box_coords) 
@@ -337,17 +353,22 @@ class MediaPipeMonitor(BaseMonitor):
                 self.drowsiness_counter = 0; self.drowsy_alert_active = False
                 self.yawn_counter = 0; self.yawn_alert_active = False
 
+            # (MODIFICADO) Lógica de celular baseada em tempo
             if phone_enabled_locked:
-                if phone_found:
-                    self.phone_counter += 1 
-                    logging.debug(f"DMSCore(YOLO/Mao): Celular/Mão encontrado (lido do thread), cont={self.phone_counter}/{self.phone_frames}")
-                    if self.phone_counter >= self.phone_frames and not self.phone_alert_active:
+                if current_phone_detected_time is not None:
+                    elapsed = time.time() - current_phone_detected_time
+                    phone_alert_seconds = self.phone_frames # 'phone_frames' é lido como segundos
+                    
+                    logging.debug(f"DMSCore(YOLO): Celular detectado por {elapsed:.1f}s (Alvo: {phone_alert_seconds}s)")
+
+                    if elapsed >= phone_alert_seconds and not self.phone_alert_active:
                         self.phone_alert_active = True
                         events_list.append({"type": "DISTRACAO", "value": "Celular na mao", "timestamp": datetime.now().isoformat() + "Z"})
                         logging.warning("DMSCore(YOLO/Mao): EVENTO DISTRACAO (CELULAR NA MAO).")
                 else:
-                    if self.phone_counter > 0: logging.debug("DMSCore(YOLO/Mao): Deteção celular/mão reset.")
-                    self.phone_counter = 0; self.phone_alert_active = False
+                    # Se o tempo de detecção for None, reseta o alerta
+                    if self.phone_alert_active: logging.debug("DMSCore(YOLO/Mao): Deteção celular reset.")
+                    self.phone_alert_active = False
 
         logging.debug("DMSCore(MediaPipe): Lock alerta libertado.")
 
@@ -374,16 +395,16 @@ class MediaPipeMonitor(BaseMonitor):
                 
                 self.phone_detection_enabled = bool(settings.get('phone_detection_enabled', self.phone_detection_enabled))
                 self.phone_confidence = float(settings.get('phone_confidence', self.phone_confidence))
-                self.phone_frames = int(settings.get('phone_frames', self.phone_frames))
+                self.phone_frames = int(settings.get('phone_frames', self.phone_frames)) # (Segundos)
                 
                 distraction_status = "ATIVADA" if self.phone_detection_enabled else "DESATIVADA"
-                logging.info(f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Celular:{distraction_status} [Conf>{self.phone_confidence}({self.phone_frames}f)]")
+                logging.info(f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold}({self.ear_frames}f), MAR>{self.mar_threshold}({self.mar_frames}f), Celular:{distraction_status} [Conf>{self.phone_confidence}({self.phone_frames}s)]") # (s) de segundos
 
+                # (MODIFICADO) Reseta o estado de alerta se a detecção for desativada
                 if not self.phone_detection_enabled:
-                    self.phone_counter = 0
                     self.phone_alert_active = False
                     with self.yolo_lock:
-                         self.phone_found_by_thread = False
+                         self.phone_detected_time = None
                          self.last_yolo_boxes = []
 
                 return True
@@ -399,5 +420,5 @@ class MediaPipeMonitor(BaseMonitor):
                     "mar_threshold": self.mar_threshold, "mar_frames": self.mar_frames,
                     "phone_detection_enabled": self.phone_detection_enabled,
                     "phone_confidence": self.phone_confidence,
-                    "phone_frames": self.phone_frames,
+                    "phone_frames": self.phone_frames, # (Segundos)
                    }
