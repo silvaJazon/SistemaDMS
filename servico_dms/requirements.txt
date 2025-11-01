@@ -1,16 +1,9 @@
-opencv-python-headless==4.8.0.76
+# Bibliotecas Leves (Aplicação e Testes)
+# Estas podem mudar frequentemente (ex: adicionar 'paho-mqtt' aqui)
 Flask==2.3.3
-numpy<2
-scipy==1.11.3
 waitress==2.1.2
-mediapipe==0.10.9
 
-# Fixa as versões do Torch/Ultralytics
-torch==2.1.2
-torchvision==0.16.2
-ultralytics==8.2.2
-
-# (NOVO) Ferramentas de Qualidade e Teste
+# Ferramentas de Qualidade e Teste
 pytest==8.2.2
 flake8==7.1.0
 black==24.4.2

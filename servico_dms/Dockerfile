@@ -1,15 +1,13 @@
 # ========================================================================
 # Documentação: Dockerfile para o Serviço DMS (Versão Multi-Stage)
-# Otimizado para cache de dependências e imagem final limpa.
+# (MODIFICADO) Otimizado para cache, separando 'base-requirements.txt'
 # ========================================================================
 
 # --- Estágio 1: Builder ---
-# Constrói o ambiente com as dependências
 FROM python:3.9-slim-bookworm AS builder
 WORKDIR /app
 
-# Instala dependências do sistema necessárias para compilar pacotes Python (se houver)
-# e as dependências de runtime do OpenCV (libgl1)
+# Instala dependências do sistema
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -21,17 +19,27 @@ RUN apt-get update && \
 # Atualiza pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Copia e instala *todas* as dependências (app + dev)
+# --- (NOVA LÓGICA DE CACHE) ---
+
+# 1. Instala o numpy primeiro (para o fix aarch64)
+RUN pip install --no-cache-dir numpy
+
+# 2. Copia e instala as bibliotecas PESADAS
+# Esta camada SÓ será reconstruída se 'base-requirements.txt' mudar
+COPY base-requirements.txt .
+RUN pip install --no-cache-dir -r base-requirements.txt
+
+# 3. Copia e instala as bibliotecas LEVES
+# Esta camada SÓ será reconstruída se 'requirements.txt' mudar
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 
 # --- Estágio 2: Final ---
-# Cria a imagem final com o código da aplicação
 FROM python:3.9-slim-bookworm AS final
 WORKDIR /app
 
-# Instala *apenas* as dependências de RUNTIME (muito mais rápido)
+# Instala *apenas* as dependências de RUNTIME
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libgl1-mesa-glx \
@@ -41,8 +49,6 @@ RUN apt-get update && \
 
 # Copia as dependências Python instaladas do estágio builder
 COPY --from=builder /usr/local/lib/python3.9/site-packages/ /usr/local/lib/python3.9/site-packages/
-
-# --- (NOVA LINHA CORRIGIDA) ---
 # Copia os executáveis (pytest, flake8, black) do estágio builder
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
@@ -58,8 +64,10 @@ COPY dms_base.py .
 COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
-COPY __init__.py . 
+COPY __init__.py .
 COPY tests/ ./tests/
+# (NOVO) Copia o novo arquivo de requisitos para a imagem final (apenas por referência)
+COPY base-requirements.txt .
 
 # Expõe a porta padrão do Flask
 EXPOSE 5000

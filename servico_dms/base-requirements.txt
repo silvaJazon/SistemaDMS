@@ -1,0 +1,8 @@
+# Bibliotecas Pesadas (IA e Processamento)
+# Estas raramente mudam e são lentas para instalar.
+opencv-python-headless==4.9.0.80
+scipy==1.11.3
+mediapipe==0.10.9
+torch==2.1.2
+torchvision==0.16.2
+ultralytics==8.2.2
