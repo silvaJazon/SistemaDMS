@@ -47,7 +47,7 @@ class MediaPipeMonitor(BaseMonitor):
         try:
             self.face_mesh = mp.solutions.face_mesh.FaceMesh(
                 max_num_faces=1,
-                refine_landmarks=True,
+                refine_landmarks=False,
                 min_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
@@ -278,10 +278,27 @@ class MediaPipeMonitor(BaseMonitor):
                 with self.yolo_lock:
                     self.phone_detected_time = None
                     self.last_yolo_boxes = []
+            
+            # --- LÓGICA DE TEMPO MODIFICADA ---
+            TARGET_YOLO_CYCLE_TIME = 1.0 # Alvo de 1 ciclo por segundo
+            
+            processing_time = time.time() - start_time_yolo
+            wait_time = TARGET_YOLO_CYCLE_TIME - processing_time
+            
+            logging.info(
+                f"_yolo_loop: Inferência concluída. "
+                f"Híbrido: {phone_found_this_loop}. "
+                f"Duração: {processing_time:.3f}s. Espera: {max(0, wait_time):.3f}s"
+            )
 
-            sleep_time = 1.0
-            if self.stop_event.wait(timeout=sleep_time):
-                break
+            if wait_time > 0:
+                if self.stop_event.wait(timeout=wait_time):
+                    break
+            else:
+                # O loop está lento, não espera
+                if self.stop_event.wait(timeout=0.01):
+                    break
+            # ------------------------------------
 
         logging.info(">>> _yolo_loop (Thread) terminado.")
 

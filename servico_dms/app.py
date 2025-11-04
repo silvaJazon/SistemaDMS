@@ -104,14 +104,14 @@ INITIAL_ROTATION = int(
 DETECTION_BACKEND = "MEDIAPIPE"
 
 # (MODIFICADO) Padrões são usados se NADA for encontrado no arquivo de config
-DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.25)
-DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 7)
+DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.30)
+DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 2)
 DEFAULT_MAR_THRESHOLD = config_from_file.get("mar_threshold", 0.40)
-DEFAULT_MAR_FRAMES = config_from_file.get("mar_frames", 10)
+DEFAULT_MAR_FRAMES = config_from_file.get("mar_frames", 2)
 # (Adiciona padrões de celular aqui também, se existirem no config)
 DEFAULT_PHONE_ENABLED = config_from_file.get("phone_detection_enabled", True)
-DEFAULT_PHONE_CONF = config_from_file.get("phone_confidence", 0.20)
-DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 5)  # (Segundos)
+DEFAULT_PHONE_CONF = config_from_file.get("phone_confidence", 0.30)
+DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 1)  # (Segundos)
 
 # --- Variáveis Globais ---
 output_frame_display = None
@@ -346,7 +346,7 @@ def generate_video_stream():
             logging.error(f"generate_video_stream: Erro inesperado: {e}", exc_info=True)
             break
 
-        target_stream_time = 1 / 20
+        target_stream_time = 1 / 5
         current_time = time.time()
         sleep_time = target_stream_time - (current_time - last_frame_time)
         if sleep_time > 0:
