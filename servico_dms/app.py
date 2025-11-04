@@ -1,6 +1,7 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# (VERSÃO: MediaPipe + YOLO)
-# (MODIFICADO: Persistência de config e graceful shutdown)
+# (ROADMAP 2.0: Implementado Multiprocessing)
+# (CORRIGIDO: Separado 'threading.Event' de 'multiprocessing.Event' para prevenir crash 'cannot pickle lock')
+# (CORRIGIDO: Adicionada verificação de 'isinstance' para prevenir crash 'TypeError: str object')
 
 import cv2
 import time
@@ -17,7 +18,8 @@ from flask import (
     request,
     send_from_directory,
 )
-import queue
+import queue # Fila da thread de eventos (interna)
+import multiprocessing as mp # (NOVO)
 import json
 # from datetime import datetime (F401 - Removido)
 import signal
@@ -93,7 +95,9 @@ VIDEO_SOURCE = os.environ.get("VIDEO_SOURCE", "0")
 FRAME_WIDTH_DISPLAY = 640
 FRAME_HEIGHT_DISPLAY = 480
 JPEG_QUALITY = 75
-TARGET_FPS = 5
+
+# A 'detection_loop' é super leve, 15FPS é fácil
+TARGET_FPS = 15
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 
@@ -118,13 +122,17 @@ output_frame_display = None
 output_frame_lock = threading.Lock()
 status_data_global = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
 status_data_lock = threading.Lock()
-stop_event = threading.Event()
+
+# --- (CORRIGIDO) Eventos de Paragem Separados ---
+thread_stop_event = threading.Event() # Para threads (Câmara, DetectionLoop, EventHandler)
+mp_stop_event = mp.Event()         # Para processos (CV Worker)
+# -----------------------------------------------
 
 cam_thread = None
 detection_thread = None
 event_handler = None
-event_queue = None
-dms_monitor: BaseMonitor = None
+dms_monitor = None # (MODIFICADO) Agora será o 'MediaPipeMonitorProcess'
+cv_process = None # (NOVO) O processo de CV
 
 app = Flask(__name__)
 
@@ -149,69 +157,97 @@ def create_placeholder_frame(text="Aguardando camera..."):
     return frame
 
 
-# --- Threads Principais (detection_loop) ---
-def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
+# --- (MODIFICADO) Threads Principais (detection_loop) ---
+def detection_loop(cam_thread_ref, dms_monitor_ref, event_queue_ref):
+    """
+    Esta loop agora é 100% LEVE.
+    1. Pega o frame da câmara.
+    2. Envia o frame para o Processo de CV (não-bloqueante).
+    3. Pega os últimos resultados do Processo de CV (não-bloqueante).
+    4. Desenha os resultados no frame.
+    5. Envia o frame para o stream de vídeo.
+    """
     global output_frame_display, status_data_global
     logging.info(
-        f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) "
+        f">>> Loop de deteção (Modo: Multiprocess) "
         f"iniciado (Alvo: {TARGET_FPS} FPS)."
     )
-    # last_process_time = time.time() (F841 - Removido)
+    
     frame_count = 0
 
-    while not stop_event.is_set():
+    # (CORRIGIDO) Usa o 'thread_stop_event'
+    while not thread_stop_event.is_set():
         start_time = time.time()
         logging.debug("DetectionLoop: Topo do loop.")
 
         if not cam_thread_ref or not cam_thread_ref.is_alive():
             logging.error("!!! Thread da câmara não ativa. A parar.")
             break
+        
+        if not dms_monitor_ref or not dms_monitor_ref.is_alive():
+            logging.error("!!! Processo de CV não ativo. A parar.")
+            thread_stop_event.set() # Termina a aplicação
+            break
 
         logging.debug("DetectionLoop: A chamar get_frame()...")
         frame = cam_thread_ref.get_frame()
 
         if frame is None:
-            if not stop_event.is_set():
+            # (CORRIGIDO) Usa o 'thread_stop_event'
+            if not thread_stop_event.is_set():
                 logging.debug("Frame não recebido.")
-            stop_event.wait(timeout=0.1)
+            thread_stop_event.wait(timeout=0.1)
             continue
         logging.debug("DetectionLoop: get_frame() retornou frame.")
 
         try:
-            logging.debug("DetectionLoop: A converter p/ cinzento...")
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # --- (MODIFICADO) PASSO 1: Envia o frame para o processo de CV ---
+            # 'process_frame' agora é só um 'put_nowait' para a fila de entrada
+            dms_monitor_ref.process_frame(frame.copy())
+            
+            # --- PASSO 2: Pega os últimos resultados e eventos ---
+            # 'get_results' é um 'get_nowait' da fila de saída
+            # 'results' pode ter um atraso (ex: 1.0s), mas é o resultado mais recente
+            results = dms_monitor_ref.get_results()
+            
+            processed_frame = frame # Começa com o frame original
+            events = []
+            status_data = status_data_global # Mantém o status antigo se não houver novo
+            
+            if results:
+                # Se o processo de CV enviou novos dados, atualiza
+                status_data, events, annotations = results
+                
+                logging.debug("DetectionLoop: Novos resultados recebidos do Processo CV.")
 
-            logging.debug("DetectionLoop: A chamar process_frame()...")
-            if dms_monitor_ref is None:
-                logging.error("!!! dms_monitor_ref (BaseMonitor) não inicializado!")
-                stop_event.wait(timeout=1.0)
-                continue
+                # --- PASSO 3: Desenha os resultados (aqui na thread principal) ---
+                # A thread principal (leve) faz o desenho, não o processo (pesado)
+                processed_frame = dms_monitor_ref.draw_annotations(frame, annotations)
 
-            processed_frame, events, status_data = dms_monitor_ref.process_frame(
-                frame.copy(), gray
-            )
-            logging.debug("DetectionLoop: process_frame() retornou.")
+                # Atualiza o status global
+                with status_data_lock:
+                    status_data_global = status_data.copy()
+            else:
+                # Se não há resultados novos (worker está ocupado),
+                # apenas desenha as anotações antigas
+                logging.debug("DetectionLoop: Sem resultados, a desenhar anotações antigas.")
+                processed_frame = dms_monitor_ref.draw_annotations(frame, None)
 
-            logging.debug("DetectionLoop: A adquirir output_frame_lock...")
+
+            # --- PASSO 4: Atualiza o stream de vídeo ---
             with output_frame_lock:
-                logging.debug("DetectionLoop: output_frame_lock adquirido.")
                 output_frame_display = processed_frame.copy()
-            logging.debug("DetectionLoop: output_frame_lock libertado.")
 
             frame_count += 1
             if frame_count % 100 == 0:
                 logging.debug(f"Loop deteção: Frame {frame_count}.")
 
-            logging.debug("DetectionLoop: A adquirir status_data_lock...")
-            with status_data_lock:
-                logging.debug("DetectionLoop: status_data_lock adquirido.")
-                status_data_global = status_data.copy()
-            logging.debug("DetectionLoop: status_data_lock libertado.")
-
+            # --- PASSO 5: Envia eventos para a fila de eventos (SQLite) ---
             if events:
                 logging.debug(f"DetectionLoop: A processar {len(events)} eventos...")
                 for event in events:
                     try:
+                        # (O frame original 'frame' é usado para a evidência)
                         event_queue_ref.put(
                             {"event_data": event, "frame": frame.copy()},
                             block=False,
@@ -223,14 +259,11 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                         logging.error(f"Erro fila: {q_err}")
 
         except cv2.error as cv_err:
-            logging.error(
-                f"Erro OpenCV (shape: {frame.shape if frame is not None else 'None'}): {cv_err}",
-                exc_info=True,
-            )
-            stop_event.wait(timeout=1.0)
+            logging.error(f"Erro OpenCV: {cv_err}", exc_info=True)
+            thread_stop_event.wait(timeout=1.0)
         except Exception as e:
             logging.error(f"!!! Erro no process_frame: {e}", exc_info=True)
-            stop_event.wait(timeout=1.0)
+            thread_stop_event.wait(timeout=1.0)
 
         processing_time = time.time() - start_time
         wait_time = TARGET_FRAME_TIME - processing_time
@@ -240,10 +273,12 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
 
         if wait_time > 0:
             logging.debug(f"DetectionLoop: A esperar {wait_time:.3f}s...")
-            stop_event.wait(timeout=wait_time)
+            # (CORRIGIDO) Usa o 'thread_stop_event'
+            thread_stop_event.wait(timeout=wait_time)
         else:
             logging.debug("DetectionLoop: Loop lento, pausa (0.01s).")
-            stop_event.wait(timeout=0.01)
+            # (CORRIGIDO) Usa o 'thread_stop_event'
+            thread_stop_event.wait(timeout=0.01)
 
     logging.info(">>> Loop de deteção terminado.")
 
@@ -273,7 +308,8 @@ def generate_video_stream():
     frame_yield_count = 0
     logging.debug("generate_video_stream: Iniciando.")
 
-    while not stop_event.is_set():
+    # (CORRIGIDO) Usa o 'thread_stop_event'
+    while not thread_stop_event.is_set():
         frame_to_encode = None
         use_placeholder = False
         logging.debug("generate_video_stream: A adquirir output_frame_lock...")
@@ -320,7 +356,7 @@ def generate_video_stream():
                     logging.error(
                         "generate_video_stream: Falha codificar placeholder. Saltando frame."
                     )
-                    stop_event.wait(timeout=0.1)
+                    thread_stop_event.wait(timeout=0.1)
                     continue
             frame_bytes = bytearray(encodedImage)
             logging.debug(
@@ -341,7 +377,7 @@ def generate_video_stream():
                 f"shape={frame_to_encode.shape}): {e}",
                 exc_info=True,
             )
-            stop_event.wait(timeout=0.5)
+            thread_stop_event.wait(timeout=0.5)
         except Exception as e:
             logging.error(f"generate_video_stream: Erro inesperado: {e}", exc_info=True)
             break
@@ -350,7 +386,8 @@ def generate_video_stream():
         current_time = time.time()
         sleep_time = target_stream_time - (current_time - last_frame_time)
         if sleep_time > 0:
-            stop_event.wait(timeout=sleep_time)
+            # (CORRIGIDO) Usa o 'thread_stop_event'
+            thread_stop_event.wait(timeout=sleep_time)
         last_frame_time = time.time()
 
     logging.info(f"generate_video_stream: Terminado após {frame_yield_count} frames.")
@@ -367,7 +404,7 @@ def video_feed():
     )
 
 
-# --- Rotas da API (api_config, api_alerts, serve_alert_image) ---
+# --- (MODIFICADO) Rotas da API (api_config) ---
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     global dms_monitor
@@ -379,6 +416,22 @@ def api_config():
     if request.method == "GET":
         try:
             current_settings = dms_monitor.get_settings()
+            
+            # --- (CORRIGIDO) Verifica se o 'get_settings' falhou ---
+            if not isinstance(current_settings, dict):
+                 logging.warning(f"api_config GET: Não obteve settings (recebeu {type(current_settings)}). A usar config do ficheiro.")
+                 current_settings = load_config() # Fallback 1: Ficheiro
+                 if not isinstance(current_settings, dict) or not current_settings:
+                    logging.warning("api_config GET: Ficheiro de config vazio. A usar defaults.")
+                    # Fallback 2: Defaults
+                    current_settings = {
+                        "ear_threshold": DEFAULT_EAR_THRESHOLD, "ear_frames": DEFAULT_EAR_FRAMES,
+                        "mar_threshold": DEFAULT_MAR_THRESHOLD, "mar_frames": DEFAULT_MAR_FRAMES,
+                        "phone_detection_enabled": DEFAULT_PHONE_ENABLED,
+                        "phone_confidence": DEFAULT_PHONE_CONF, "phone_frames": DEFAULT_PHONE_FRAMES,
+                    }
+            # ----------------------------------------------------
+
             current_settings["brightness"] = cam_thread.get_brightness()
             current_settings["rotation"] = cam_thread.get_rotation()
             current_settings["active_backend"] = DETECTION_BACKEND
@@ -410,6 +463,7 @@ def api_config():
             if not new_settings:
                 return jsonify({"success": False, "error": "No data received"}), 400
 
+            # (MODIFICADO) 'update_settings' agora envia para uma fila
             dms_success = dms_monitor.update_settings(new_settings)
 
             cam_success = True
@@ -427,10 +481,15 @@ def api_config():
 
                 # --- (NOVO) Salva a configuração persistente ---
                 try:
-                    all_current_settings = dms_monitor.get_settings()
-                    all_current_settings["brightness"] = cam_thread.get_brightness()
-                    all_current_settings["rotation"] = cam_thread.get_rotation()
-                    save_config(all_current_settings)
+                    # (MODIFICADO) Pega nos settings que acabámos de enviar
+                    settings_to_save = dms_monitor.get_last_sent_settings()
+                    if settings_to_save:
+                        settings_to_save["brightness"] = cam_thread.get_brightness()
+                        settings_to_save["rotation"] = cam_thread.get_rotation()
+                        save_config(settings_to_save)
+                    else:
+                        logging.warning("Não foi possível salvar settings, 'get_last_sent_settings' falhou.")
+                        
                 except Exception as e:
                     logging.error(
                         f"Falha ao salvar config persistente: {e}", exc_info=True
@@ -490,11 +549,12 @@ def serve_alert_image(filepath):
         return "Internal server error", 500
 
 
-# --- Encerramento Gracioso (shutdown_handler) ---
+# --- (CORRIGIDO) Encerramento Gracioso (shutdown_handler) ---
 def shutdown_handler(signum, frame):
-    if not stop_event.is_set():
+    if not thread_stop_event.is_set():
         logging.info(f">>> Sinal {signal.Signals(signum).name} recebido. A encerrar...")
-        stop_event.set()
+        thread_stop_event.set()
+        mp_stop_event.set() # Também para o processo
 
 
 # --- Ponto de Entrada Principal ---
@@ -507,9 +567,20 @@ if __name__ == "__main__":
             f">>> Serviço DMS (Backend: {DETECTION_BACKEND}) a iniciar... "
             f"(Log: {logging.getLevelName(logging.getLogger().level)})"
         )
+        
+        # (NOVO) Define o método de arranque para 'spawn' ou 'fork'
+        # 'spawn' é mais seguro e compatível com CUDA/GPU
+        try:
+            mp.set_start_method('spawn') 
+            logging.info(">>> Método de multiprocessing definido para 'spawn'.")
+        except RuntimeError:
+            logging.warning(">>> Método de multiprocessing já definido, a ignorar.")
+            pass
+
 
         event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
-        event_handler = EventHandler(queue=event_queue, stop_event=stop_event)
+        # (CORRIGIDO) Passa o 'thread_stop_event'
+        event_handler = EventHandler(queue=event_queue, stop_event=thread_stop_event)
         event_handler.start()
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
@@ -525,19 +596,21 @@ if __name__ == "__main__":
             "phone_frames": DEFAULT_PHONE_FRAMES,
         }
 
-        logging.info("A carregar o MediaPipeMonitor...")
+        logging.info("A carregar o MediaPipeMonitor (Processo)...")
+        # (CORRIGIDO) Passa o 'mp_stop_event'
         dms_monitor = MediaPipeMonitor(
             frame_size=frame_size,
-            stop_event=stop_event,
+            stop_event=mp_stop_event, # <--- EVENTO DE PROCESSO
             default_settings=default_dms_settings,
         )
 
+        # (CORRIGIDO) Passa o 'thread_stop_event'
         cam_thread = CameraThread(
             VIDEO_SOURCE,
             frame_width=FRAME_WIDTH_DISPLAY,
             frame_height=FRAME_HEIGHT_DISPLAY,
             rotation_degrees=INITIAL_ROTATION,
-            stop_event=stop_event,
+            stop_event=thread_stop_event, # <--- EVENTO DE THREAD
         )
         cam_thread.start()
 
@@ -545,7 +618,8 @@ if __name__ == "__main__":
         start_wait_cam = time.time()
 
         while cam_thread.get_frame() is None and cam_thread.is_alive():
-            if stop_event.wait(timeout=0.2):
+            # (CORRIGIDO) Usa o 'thread_stop_event'
+            if thread_stop_event.wait(timeout=0.2):
                 raise SystemExit("Encerrado init câmara.")
             if time.time() - start_wait_cam > 15:
                 raise RuntimeError("Timeout câmara.")
@@ -556,12 +630,12 @@ if __name__ == "__main__":
         logging.info(">>> Primeiro frame recebido!")
 
         try:
-            dms_monitor.start_yolo_thread(cam_thread)
-            logging.info(">>> Thread de deteção de celular (YOLO) iniciada.")
-        except AttributeError as e:
-            logging.warning(f"Não foi possível iniciar o thread YOLO: {e}")
+            # (MODIFICADO) 'start_yolo_thread' agora chama-se 'start_process'
+            cv_process = dms_monitor.start_process()
+            logging.info(">>> Processo de CV (FaceMesh+Hands+YOLO) iniciado.")
         except Exception as e:
-            logging.error(f"Erro ao iniciar thread YOLO: {e}", exc_info=True)
+            logging.error(f"Erro ao iniciar processo CV: {e}", exc_info=True)
+            raise # Erro fatal se o processo de CV não arrancar
 
         detection_thread = threading.Thread(
             target=detection_loop,
@@ -589,10 +663,12 @@ if __name__ == "__main__":
                 )
             except OSError as e:
                 logging.error(f"!!! ERRO FATAL Flask: {e}", exc_info=True)
-                stop_event.set()
+                thread_stop_event.set()
+                mp_stop_event.set()
             except Exception as e:
                 logging.error(f"!!! ERRO FATAL Flask: {e}", exc_info=True)
-                stop_event.set()
+                thread_stop_event.set()
+                mp_stop_event.set()
 
     except (KeyboardInterrupt, SystemExit) as e:
         logging.info(f">>> {type(e).__name__} recebido. A encerrar...")
@@ -601,13 +677,23 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"!!! ERRO FATAL não capturado: {e}", exc_info=True)
     finally:
-        if not stop_event.is_set():
-            logging.warning("stop_event não estava definido no finally, definindo agora.")
-            stop_event.set()
+        # (CORRIGIDO) Define ambos os eventos
+        if not thread_stop_event.is_set():
+            logging.warning("thread_stop_event não estava definido no finally, definindo agora.")
+            thread_stop_event.set()
+        if not mp_stop_event.is_set():
+            logging.warning("mp_stop_event não estava definido no finally, definindo agora.")
+            mp_stop_event.set()
+
 
         logging.info(">>> A iniciar encerramento final...")
-        threads_to_join = []
+        
+        # (MODIFICADO) Termina o processo de CV primeiro
+        if "dms_monitor" in locals() and dms_monitor:
+            logging.info("A enviar sinal de paragem para o processo de CV...")
+            dms_monitor.stop() # Isto chama mp_stop_event.set()
 
+        threads_to_join = []
         if (
             "detection_thread" in locals()
             and detection_thread
@@ -618,21 +704,19 @@ if __name__ == "__main__":
             threads_to_join.append(cam_thread)
         if "event_handler" in locals() and event_handler and event_handler.is_alive():
             threads_to_join.append(event_handler)
-
-        if (
-            "dms_monitor" in locals()
-            and dms_monitor
-            and hasattr(dms_monitor, "phone_thread")
-            and dms_monitor.phone_thread.is_alive()
-        ):
-            threads_to_join.append(dms_monitor.phone_thread)
-
+            
         for t in threads_to_join:
             logging.info(f"A aguardar thread '{t.name}'...")
-            timeout = 2 if getattr(t, "daemon", False) else 5
-            t.join(timeout=timeout)
-
+            t.join(timeout=2.0)
             if t.is_alive():
                 logging.warning(f"!!! Timeout ao esperar thread '{t.name}'.")
+
+        # (MODIFICADO) Agora espera pelo 'join' do processo de CV
+        if "cv_process" in locals() and cv_process and cv_process.is_alive():
+            logging.info(f"A aguardar processo '{cv_process.name}'...")
+            cv_process.join(timeout=5.0)
+            if cv_process.is_alive():
+                logging.warning(f"!!! Timeout ao esperar processo '{cv_process.name}'. A forçar terminação.")
+                cv_process.terminate()
 
         logging.info(">>> Serviço DMS terminado.")

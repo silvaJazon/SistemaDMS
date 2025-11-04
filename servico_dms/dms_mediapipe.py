@@ -1,21 +1,20 @@
 # Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
-# (VERSÃO: Híbrido Otimizado - Deteta Mão (MP), depois Celular (YOLO-s) no recorte)
-# (MODIFICADO: Lógica de alerta de celular baseada em tempo)
+# (ROADMAP 2.0: Convertido para Multiprocessing)
+# (CORRIGIDO: Removido 'task_done' e 'half=True' para prevenir crashes)
 
 import cv2
 import mediapipe as mp
 import numpy as np
 import logging
-# import math (F401 - Removido)
 import threading
+import multiprocessing # (CORRIGIDO) Sem alias 'mp'
 from scipy.spatial import distance as dist
 from datetime import datetime
 import time
-# from collections import deque (F401 - Removido)
+import queue # Fila de threads (para comunicação interna)
 
 from ultralytics import YOLO
 from dms_base import BaseMonitor
-from camera_thread import CameraThread
 
 cv2.setUseOptimized(True)
 
@@ -24,276 +23,57 @@ MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
 
+NULL_LANDMARKS = np.zeros((6, 2), dtype="int")
+NULL_LANDMARKS_MOUTH = np.zeros((8, 2), dtype="int")
 
-class MediaPipeMonitor(BaseMonitor):
+# --- Nível de Log para o Processo Filho ---
+def setup_logging(log_level):
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - DMS(Worker) - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+# --- O PROCESSO DE CV ---
+
+class _CVWorkerProcess(multiprocessing.Process):
     """
-    Implementação Multithread:
-    - Thread 1 (Principal): MediaPipe Face Mesh (EAR/MAR)
-    - Thread 2 (Fundo): Híbrido Otimizado:
-        1. MediaPipe Hands (Rápido)
-        2. Se Mão encontrada -> YOLOv8s no recorte da Mão (Rápido)
+    Este processo corre num núcleo de CPU separado.
+    Faz TODO o trabalho pesado de CV.
     """
-
-    def __init__(
-        self, frame_size, stop_event: threading.Event, default_settings: dict = None
-    ):
-        super().__init__(frame_size, stop_event, default_settings)
-        logging.info(
-            "A inicializar o MediaPipeMonitor Core "
-            "(Modo: Híbrido Otimizado MP-Mão + YOLO-Recorte)..."
-        )
-
-        # --- 1. Inicializa o MediaPipe FaceMesh (Thread Principal) ---
-        try:
-            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            )
-            logging.info(">>> Modelos MediaPipe FaceMesh carregados.")
-        except Exception as e:
-            logging.error(f"!!! ERRO FATAL MediaPipe (FaceMesh): {e}", exc_info=True)
-            raise RuntimeError(f"Erro MediaPipe (FaceMesh): {e}")
-
-        # --- 2. Inicializa o MediaPipe Hands (Thread Fundo) ---
-        try:
-            self.hands = mp.solutions.hands.Hands(
-                static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5
-            )
-            logging.info(">>> Modelos MediaPipe Hands carregados (max_num_hands=2).")
-        except Exception as e:
-            logging.error(f"!!! ERRO FATAL MediaPipe (Hands): {e}", exc_info=True)
-            raise RuntimeError(f"Erro MediaPipe (Hands): {e}")
-
-        # --- 3. Carregar Modelo YOLOv8 (Thread Fundo) ---
-        try:
-            model_file = "models/yolov8s.pt"
-            logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
-            self.yolo_model = YOLO(model_file)
-            logging.info(f">>> Modelo {model_file} carregado.")
-
-            self.yolo_cellphone_class_id = -1
-            if self.yolo_model.names:
-                for class_id, name in self.yolo_model.names.items():
-                    if name == "cell phone":
-                        self.yolo_cellphone_class_id = class_id
-                        logging.info(
-                            f"Classe 'cell phone' encontrada no YOLO. ID: {class_id}"
-                        )
-                        break
-            if self.yolo_cellphone_class_id == -1:
-                logging.warning(
-                    "!!! Classe 'cell phone' não encontrada nos nomes do modelo YOLO."
-                )
-
-            logging.info(">>> Executando 'warm-up' (primeira inferência)...")
-            try:
-                dummy_frame_rgb = np.zeros(
-                    (self.frame_height, self.frame_width, 3), dtype=np.uint8
-                )
-                self.hands.process(dummy_frame_rgb)
-                logging.info(">>> Warm-up (Hands) concluído.")
-
-                dummy_crop_rgb = np.zeros((320, 320, 3), dtype=np.uint8)
-                self.yolo_model(dummy_crop_rgb, verbose=False, imgsz=320)
-                logging.info(">>> Warm-up (YOLO-Recorte) concluído.")
-
-            except Exception as e:
-                logging.warning(f"Falha no warm-up: {e}")
-
-        except Exception as e:
-            logging.error(f"!!! ERRO FATAL YOLO: {e}", exc_info=True)
-            raise RuntimeError(f"Erro YOLO: {e}")
-
-        # --- 4. Contadores e Configurações ---
-        self.lock = threading.Lock()
+    def __init__(self, frame_size, default_settings, stop_event,
+                 input_queue, output_queue,
+                 settings_in_queue, settings_out_queue,
+                 log_level):
+        super().__init__(name="CVWorkerProcess")
+        self.daemon = True
+        
+        self.frame_height, self.frame_width = frame_size
+        self.log_level = log_level
+        
+        self.stop_event = stop_event
+        self.input_queue = input_queue
+        self.output_queue = output_queue
+        self.settings_in_queue = settings_in_queue
+        self.settings_out_queue = settings_out_queue
+        
+        self.face_mesh = None
+        self.hands = None
+        self.yolo_model = None
+        self.yolo_cellphone_class_id = -1
+        
+        self.settings = default_settings.copy()
+        
         self.drowsiness_counter = 0
         self.yawn_counter = 0
-
+        self.phone_detected_time = None
         self.drowsy_alert_active = False
         self.yawn_alert_active = False
         self.phone_alert_active = False
+        self._phone_event_sent = False
 
-        self.ear_threshold = self.default_settings.get("ear_threshold", 0.25)
-        self.ear_frames = self.default_settings.get("ear_frames", 7)
-        self.mar_threshold = self.default_settings.get("mar_threshold", 0.40)
-        self.mar_frames = self.default_settings.get("mar_frames", 10)
-
-        self.phone_detection_enabled = self.default_settings.get(
-            "phone_detection_enabled", True
-        )
-        self.phone_confidence = self.default_settings.get("phone_confidence", 0.20)
-        self.phone_frames = self.default_settings.get(
-            "phone_frames", 5
-        )  # (Interpretado como SEGUNDOS)
-
-        # --- 5. Configuração do Thread YOLO ---
-        self.cam_thread_ref: CameraThread = None
-        self.phone_thread = None
-        self.yolo_lock = threading.Lock()
-        self.last_yolo_boxes = []
-        # (NOVO) Armazena o timestamp da *primeira* detecção contínua
-        self.phone_detected_time = None
-
-    # --- Loop do Thread YOLO ---
-    def _yolo_loop(self):
-        logging.info(">>> _yolo_loop (Thread Híbrido) iniciado.")
-
-        if self.stop_event.wait(timeout=3.0):
-            return
-
-        while not self.stop_event.is_set():
-            start_time_yolo = time.time()
-
-            with self.lock:
-                phone_enabled = self.phone_detection_enabled
-                current_phone_confidence = self.phone_confidence
-
-            if (
-                not phone_enabled
-                or self.cam_thread_ref is None
-                or self.yolo_cellphone_class_id == -1
-            ):
-                with self.yolo_lock:
-                    self.last_yolo_boxes = []
-                    self.phone_detected_time = None  # (NOVO) Reseta o tempo
-                logging.info("_yolo_loop: Deteção de celular DESATIVADA. A aguardar...")
-                if self.stop_event.wait(timeout=2.0):
-                    break
-                continue
-
-            try:
-                frame = self.cam_thread_ref.get_frame()
-                if frame is None:
-                    logging.warning(
-                        "_yolo_loop: Não obteve frame. A tentar novamente em 2s."
-                    )
-                    if self.stop_event.wait(timeout=2.0):
-                        break
-                    continue
-
-                logging.debug("_yolo_loop: A executar inferência (1. Mãos)...")
-
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-                # --- 1. Inferência MediaPipe Hands ---
-                results_hands = self.hands.process(frame_rgb)
-
-                phone_found_this_loop = False
-                current_boxes = []
-
-                if results_hands.multi_hand_landmarks:
-                    logging.info(
-                        f"_yolo_loop: Mãos(MP) encontradas "
-                        f"({len(results_hands.multi_hand_landmarks)}). "
-                        "Verificando se há um celular (YOLO)..."
-                    )
-
-                    for hand_landmarks in results_hands.multi_hand_landmarks:
-                        # --- 2. Calcular a Bounding Box da Mão ---
-                        h, w, _ = frame.shape
-                        x_min, y_min = w, h
-                        x_max, y_max = 0, 0
-                        for lm in hand_landmarks.landmark:
-                            x, y = int(lm.x * w), int(lm.y * h)
-                            if x < x_min:
-                                x_min = x
-                            if x > x_max:
-                                x_max = x
-                            if y < y_min:
-                                y_min = y
-                            if y > y_max:
-                                y_max = y
-
-                        padding = 60
-                        x_min = max(0, x_min - padding)
-                        y_min = max(0, y_min - padding)
-                        x_max = min(w, x_max + padding)
-                        y_max = min(h, y_max + padding)
-
-                        if x_min >= x_max or y_min >= y_max:
-                            continue
-
-                        # --- 3. Recortar (Crop) a imagem original ---
-                        hand_crop = frame[y_min:y_max, x_min:x_max]
-
-                        # --- 4. Executar YOLO *apenas* no recorte ---
-                        if hand_crop.size == 0:
-                            logging.warning(
-                                "_yolo_loop: Recorte da mão resultou em imagem vazia."
-                            )
-                            continue
-
-                        results_yolo = self.yolo_model(
-                            hand_crop,
-                            verbose=False,
-                            classes=[self.yolo_cellphone_class_id],
-                            conf=current_phone_confidence,
-                            imgsz=320,
-                            augment=False,
-                            half=False,
-                        )
-
-                        if results_yolo and results_yolo[0].boxes:
-                            for box in results_yolo[0].boxes:
-                                if int(box.cls) == self.yolo_cellphone_class_id:
-                                    phone_found_this_loop = True
-                                    box_coords_global = [
-                                        int(box.xyxy[0][0] + x_min),
-                                        int(box.xyxy[0][1] + y_min),
-                                        int(box.xyxy[0][2] + x_min),
-                                        int(box.xyxy[0][3] + y_min),
-                                    ]
-                                    current_boxes.append(box_coords_global)
-                                    break
-                        if phone_found_this_loop:
-                            break
-
-                # --- 5. Atualizar os resultados (thread-safe) ---
-                with self.yolo_lock:
-                    self.last_yolo_boxes = current_boxes if phone_found_this_loop else []
-
-                    # (NOVO) Lógica de tempo
-                    current_time = time.time()
-                    if phone_found_this_loop:
-                        if self.phone_detected_time is None:
-                            # Inicia o cronômetro na primeira detecção
-                            self.phone_detected_time = current_time
-                            logging.info("_yolo_loop: Detecção de celular INICIADA.")
-                    else:
-                        # Se não encontrou, reseta o cronômetro
-                        if self.phone_detected_time is not None:
-                            logging.info("_yolo_loop: Detecção de celular INTERROMPIDA.")
-                        self.phone_detected_time = None
-
-                logging.info(
-                    f"_yolo_loop: Inferência concluída. "
-                    f"Mão/Celular Híbrido: {phone_found_this_loop}. "
-                    f"Duração: {time.time() - start_time_yolo:.3f}s"
-                )
-
-            except Exception as e:
-                logging.error(f"_yolo_loop: Erro na inferência: {e}", exc_info=True)
-                with self.yolo_lock:
-                    self.phone_detected_time = None
-                    self.last_yolo_boxes = []
-
-            sleep_time = 1.0
-            if self.stop_event.wait(timeout=sleep_time):
-                break
-
-        logging.info(">>> _yolo_loop (Thread) terminado.")
-
-    def start_yolo_thread(self, cam_thread_ref: CameraThread):
-        self.cam_thread_ref = cam_thread_ref
-        self.phone_thread = threading.Thread(
-            target=self._yolo_loop, name="PhoneDetectionThread"
-        )
-        self.phone_thread.daemon = True
-        self.phone_thread.start()
-
-    # --- Funções de Cálculo (permanecem iguais) ---
+    # --- Funções de Cálculo (internas ao worker) ---
     def _eye_aspect_ratio(self, eye_landmarks):
         A = dist.euclidean(eye_landmarks[1], eye_landmarks[5])
         B = dist.euclidean(eye_landmarks[2], eye_landmarks[4])
@@ -313,263 +93,415 @@ class MediaPipeMonitor(BaseMonitor):
             coords[i] = (int(lm.x * self.frame_width), int(lm.y * self.frame_height))
         return coords
 
-    def process_frame(self, frame, gray):
-        logging.debug("DMSCore(MediaPipe): process_frame (MP Rápido) iniciado.")
-        start_time_total = time.time()
-        events_list = []
-        status_data = {"ear": "-", "mar": "-", "yaw": "-", "pitch": "-", "roll": "-"}
-        face_found_this_frame = False
-
+    def _load_models(self):
+        """Carrega os modelos de CV (chamado dentro do 'run')."""
         try:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results_mp = self.face_mesh.process(frame_rgb)
-        except Exception as e:
-            logging.error(f"DMSCore(MediaPipe): Erro .process(): {e}", exc_info=True)
-            return frame, events_list, status_data
+            logging.info("A carregar MediaPipe (FaceMesh, Hands)...")
+            self.face_mesh = mp.solutions.face_mesh.FaceMesh(
+                max_num_faces=1, refine_landmarks=True,
+                min_detection_confidence=0.5, min_tracking_confidence=0.5
+            )
+            self.hands = mp.solutions.hands.Hands(
+                static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5
+            )
+            
+            model_file = "models/yolov8n.pt" # Modelo NANO
+            logging.info(f"A carregar YOLO ('{model_file}')...")
+            self.yolo_model = YOLO(model_file)
+            
+            if self.yolo_model.names:
+                for class_id, name in self.yolo_model.names.items():
+                    if name == "cell phone":
+                        self.yolo_cellphone_class_id = class_id
+                        break
+            logging.info(f"Classe 'cell phone' ID: {self.yolo_cellphone_class_id}")
 
-        if results_mp.multi_face_landmarks:
-            face_landmarks = results_mp.multi_face_landmarks[0].landmark
-            face_found_this_frame = True
+            logging.info("A executar 'warm-up'...")
+            dummy_frame_rgb = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
+            self.face_mesh.process(dummy_frame_rgb)
+            self.hands.process(dummy_frame_rgb)
+            dummy_crop_rgb = np.zeros((320, 320, 3), dtype=np.uint8)
+            # (CORRIGIDO) 'half=False' para CPU
+            self.yolo_model(dummy_crop_rgb, verbose=False, imgsz=320, half=False) 
+            logging.info("Modelos de CV carregados e aquecidos.")
+            return True
+        except Exception as e:
+            logging.error(f"!!! ERRO FATAL AO CARREGAR MODELOS: {e}", exc_info=True)
+            return False
+
+    def _check_for_settings_update(self):
+        """Verifica se há novos settings vindos do app.py (não-bloqueante)."""
+        try:
+            # 1. Há um pedido para enviar os settings atuais?
+            if not self.settings_out_queue.empty():
+                _ = self.settings_out_queue.get_nowait() # Limpa o pedido
+                self.settings_out_queue.put(self.settings.copy())
+                logging.debug("Settings atuais enviados para o processo principal.")
+
+            # 2. Há um pedido para atualizar os settings?
+            if not self.settings_in_queue.empty():
+                new_settings = self.settings_in_queue.get_nowait()
+                self.settings.update(new_settings)
+                logging.info(f"Settings atualizados: {self.settings}")
+                
+                if not self.settings.get("phone_detection_enabled", True):
+                    self.phone_alert_active = False
+                    self.phone_detected_time = None
+
+        except queue.Empty:
+            pass # Normal
+        except Exception as e:
+            logging.warning(f"Erro ao verificar settings: {e}")
+
+    def run(self):
+        """O loop principal do processo de CV."""
+        setup_logging(self.log_level)
+        
+        if not self._load_models():
+            self.stop_event.set()
+            return
+
+        frame_counter_skip = 0
+        YOLO_FRAME_SKIP = 3 # O mesmo throttle
+
+        while not self.stop_event.is_set():
+            
+            self._check_for_settings_update()
+            
+            frame_bgr = None
+            try:
+                frame_bgr = self.input_queue.get(timeout=1.0)
+            except queue.Empty:
+                logging.debug("Fila de input vazia, a aguardar...")
+                continue
+            
+            start_time_total = time.time()
+
+            local_left_eye = NULL_LANDMARKS.copy()
+            local_right_eye = NULL_LANDMARKS.copy()
+            local_mouth = NULL_LANDMARKS_MOUTH.copy()
+            local_boxes = []
+            local_ear, local_mar = 0.5, 0.0
+            new_events_list = []
+            face_found = False
+            phone_found_this_loop = False
+            
+            phone_enabled = self.settings.get("phone_detection_enabled", True)
+            current_phone_confidence = self.settings.get("phone_confidence", 0.20)
+            ear_thresh = self.settings.get("ear_threshold", 0.25)
+            ear_frames_thresh = self.settings.get("ear_frames", 7)
+            mar_thresh = self.settings.get("mar_threshold", 0.40)
+            mar_frames_thresh = self.settings.get("mar_frames", 10)
+            phone_seconds_thresh = self.settings.get("phone_frames", 5)
 
             try:
-                left_eye_pts = self._get_landmarks_from_result(
-                    face_landmarks, MP_LEFT_EYE_IDX
-                )
-                right_eye_pts = self._get_landmarks_from_result(
-                    face_landmarks, MP_RIGHT_EYE_IDX
-                )
-                mouth_pts = self._get_landmarks_from_result(
-                    face_landmarks, MP_MOUTH_IDX
-                )
-                ear_left = self._eye_aspect_ratio(left_eye_pts)
-                ear_right = self._eye_aspect_ratio(right_eye_pts)
-                ear = (ear_left + ear_right) / 2.0
-                mar = self._mouth_aspect_ratio(mouth_pts)
-                status_data["ear"] = f"{ear:.2f}"
-                status_data["mar"] = f"{mar:.2f}"
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-                cv2.drawContours(frame, [cv2.convexHull(left_eye_pts)], -1, (0, 255, 0), 1)
-                cv2.drawContours(
-                    frame, [cv2.convexHull(right_eye_pts)], -1, (0, 255, 0), 1
-                )
-                cv2.drawContours(
-                    frame, [cv2.convexHull(mouth_pts)], -1, (0, 255, 255), 1
-                )
+                # 4.1. Inferência FaceMesh (EAR/MAR)
+                results_mp = self.face_mesh.process(frame_rgb)
+                if results_mp.multi_face_landmarks:
+                    face_landmarks = results_mp.multi_face_landmarks[0].landmark
+                    face_found = True
+                    local_left_eye = self._get_landmarks_from_result(face_landmarks, MP_LEFT_EYE_IDX)
+                    local_right_eye = self._get_landmarks_from_result(face_landmarks, MP_RIGHT_EYE_IDX)
+                    local_mouth = self._get_landmarks_from_result(face_landmarks, MP_MOUTH_IDX)
+                    local_ear = (self._eye_aspect_ratio(local_left_eye) + self._eye_aspect_ratio(local_right_eye)) / 2.0
+                    local_mar = self._mouth_aspect_ratio(local_mouth)
 
-            except Exception as e:
-                logging.error(
-                    f"DMSCore(MediaPipe): Erro ao processar landmarks: {e}",
-                    exc_info=True,
-                )
-                face_found_this_frame = False
+                # 4.2. Inferência Híbrida (Mãos + YOLO) (COM THROTTLE)
+                frame_counter_skip += 1
+                if frame_counter_skip % YOLO_FRAME_SKIP == 0 and phone_enabled and self.yolo_cellphone_class_id != -1:
+                    logging.debug("A executar inferência YOLO/Hands...")
+                    results_hands = self.hands.process(frame_rgb)
+                    if results_hands.multi_hand_landmarks:
+                        for hand_landmarks in results_hands.multi_hand_landmarks:
+                            h, w, _ = frame_bgr.shape
+                            x_min, y_min = w, h
+                            x_max, y_max = 0, 0
+                            for lm in hand_landmarks.landmark:
+                                x, y = int(lm.x * w), int(lm.y * h)
+                                x_min, x_max = min(x_min, x), max(x_max, x)
+                                y_min, y_max = min(y_min, y), max(y_max, y)
 
-        local_boxes = []
-        current_phone_detected_time = None
-        with self.lock:
-            phone_enabled_locked = self.phone_detection_enabled
+                            padding = 60
+                            x_min, y_min = max(0, x_min - padding), max(0, y_min - padding)
+                            x_max, y_max = min(w, x_max + padding), min(h, y_max + padding)
 
-        if phone_enabled_locked:
-            with self.yolo_lock:
-                local_boxes = self.last_yolo_boxes
-                current_phone_detected_time = self.phone_detected_time
+                            if x_min >= x_max or y_min >= y_max: continue
+                            hand_crop = frame_bgr[y_min:y_max, x_min:x_max]
+                            if hand_crop.size == 0: continue
 
-            for box_coords in local_boxes:
-                x1, y1, x2, y2 = map(int, box_coords)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
-                cv2.putText(
-                    frame,
-                    "Celular (na Mao)",
-                    (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 0, 255),
-                    2,
-                )
-
-        logging.debug("DMSCore(MediaPipe): Lock alerta...")
-        with self.lock:
-            logging.debug("DMSCore(MediaPipe): Lock alerta OK.")
-
-            if face_found_this_frame:
-                # Sonolência
-                if ear < self.ear_threshold:
-                    self.drowsiness_counter += 1
-                    logging.debug(
-                        f"DMSCore(MediaPipe): EAR baixo ({ear:.3f}<{self.ear_threshold}), "
-                        f"cont={self.drowsiness_counter}/{self.ear_frames}"
-                    )
-                    if (
-                        self.drowsiness_counter >= self.ear_frames
-                        and not self.drowsy_alert_active
-                    ):
-                        self.drowsy_alert_active = True
-                        events_list.append(
-                            {
-                                "type": "SONOLENCIA",
-                                "value": f"EAR: {ear:.2f}",
+                            results_yolo = self.yolo_model(
+                                hand_crop, verbose=False,
+                                classes=[self.yolo_cellphone_class_id],
+                                conf=current_phone_confidence,
+                                imgsz=320, augment=False, 
+                                half=False # (CORRIGIDO) half=False para CPU
+                            )
+                            if results_yolo and results_yolo[0].boxes:
+                                for box in results_yolo[0].boxes:
+                                    if int(box.cls) == self.yolo_cellphone_class_id:
+                                        phone_found_this_loop = True
+                                        local_boxes.append([int(c) for c in box.xyxy[0]])
+                                        break
+                            if phone_found_this_loop: break
+                
+                # --- 5. Lógica de Alerta ---
+                current_time = time.time()
+                
+                if face_found:
+                    if local_ear < ear_thresh:
+                        self.drowsiness_counter += 1
+                        if (self.drowsiness_counter >= ear_frames_thresh and not self.drowsy_alert_active):
+                            self.drowsy_alert_active = True
+                            new_events_list.append({
+                                "type": "SONOLENCIA", "value": f"EAR: {local_ear:.2f}",
                                 "timestamp": datetime.now().isoformat() + "Z",
-                            }
-                        )
-                        logging.warning("DMSCore(MediaPipe): EVENTO SONOLENCIA.")
+                            })
+                            logging.warning("EVENTO SONOLENCIA.")
+                    else:
+                        self.drowsiness_counter = 0
+                        self.drowsy_alert_active = False
+                    
+                    if local_mar > mar_thresh:
+                        self.yawn_counter += 1
+                        if (self.yawn_counter >= mar_frames_thresh and not self.yawn_alert_active):
+                            self.yawn_alert_active = True
+                            new_events_list.append({
+                                "type": "BOCEJO", "value": f"MAR: {local_mar:.2f}",
+                                "timestamp": datetime.now().isoformat() + "Z",
+                            })
+                            logging.warning("EVENTO BOCEJO.")
+                    else:
+                        self.yawn_counter = 0
+                        self.yawn_alert_active = False
                 else:
-                    if self.drowsiness_counter > 0:
-                        logging.debug("DMSCore(MediaPipe): Sonolência reset.")
                     self.drowsiness_counter = 0
                     self.drowsy_alert_active = False
-
-                # Bocejo
-                if mar > self.mar_threshold:
-                    self.yawn_counter += 1
-                    logging.debug(
-                        f"DMSCore(MediaPipe): MAR alto ({mar:.3f}>{self.mar_threshold}), "
-                        f"cont={self.yawn_counter}/{self.mar_frames}"
-                    )
-                    if (
-                        self.yawn_counter >= self.mar_frames
-                        and not self.yawn_alert_active
-                    ):
-                        self.yawn_alert_active = True
-                        events_list.append(
-                            {
-                                "type": "BOCEJO",
-                                "value": f"MAR: {mar:.2f}",
-                                "timestamp": datetime.now().isoformat() + "Z",
-                            }
-                        )
-                        logging.warning("DMSCore(MediaPipe): EVENTO BOCEJO.")
-                else:
-                    if self.yawn_counter > 0:
-                        logging.debug("DMSCore(MediaPipe): Bocejo reset.")
                     self.yawn_counter = 0
                     self.yawn_alert_active = False
 
-            else:
-                logging.debug("DMSCore(MediaPipe): Nenhuma face encontrada.")
-                self.drowsiness_counter = 0
-                self.drowsy_alert_active = False
-                self.yawn_counter = 0
-                self.yawn_alert_active = False
-
-            # (MODIFICADO) Lógica de celular baseada em tempo
-            if phone_enabled_locked:
-                if current_phone_detected_time is not None:
-                    elapsed = time.time() - current_phone_detected_time
-                    phone_alert_seconds = self.phone_frames
-
-                    logging.debug(
-                        f"DMSCore(YOLO): Celular detectado por {elapsed:.1f}s "
-                        f"(Alvo: {phone_alert_seconds}s)"
-                    )
-
-                    if elapsed >= phone_alert_seconds and not self.phone_alert_active:
-                        self.phone_alert_active = True
-                        events_list.append(
-                            {
-                                "type": "DISTRACAO",
-                                "value": "Celular na mao",
-                                "timestamp": datetime.now().isoformat() + "Z",
-                            }
-                        )
-                        logging.warning("DMSCore(YOLO/Mao): EVENTO DISTRACAO (CELULAR NA MAO).")
-                else:
-                    if self.phone_alert_active:
-                        logging.debug("DMSCore(YOLO/Mao): Deteção celular reset.")
-                    self.phone_alert_active = False
-
-        logging.debug("DMSCore(MediaPipe): Lock alerta libertado.")
-
-        if self.drowsy_alert_active:
-            cv2.putText(
-                frame,
-                "ALERTA: SONOLENCIA!",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 255),
-                2,
-            )
-        if self.yawn_alert_active:
-            cv2.putText(
-                frame,
-                "ALERTA: BOCEJO!",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2,
-            )
-        if phone_enabled_locked and self.phone_alert_active:
-            cv2.putText(
-                frame,
-                "ALERTA: CELULAR/MAO!",
-                (10, 90),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 0, 255),
-                2,
-            )
-
-        total_time = time.time() - start_time_total
-        logging.debug(f"DMSCore(MediaPipe): process_frame (MP Rápido) {total_time:.4f}s.")
-        return frame, events_list, status_data
-
-    def update_settings(self, settings):
-        logging.debug(f"DMSCore(MediaPipe): Tentando atualizar conf: {settings}")
-
-        with self.lock:
-            try:
-                self.ear_threshold = float(
-                    settings.get("ear_threshold", self.ear_threshold)
-                )
-                self.ear_frames = int(settings.get("ear_frames", self.ear_frames))
-                self.mar_threshold = float(
-                    settings.get("mar_threshold", self.mar_threshold)
-                )
-                self.mar_frames = int(settings.get("mar_frames", self.mar_frames))
-
-                self.phone_detection_enabled = bool(
-                    settings.get("phone_detection_enabled", self.phone_detection_enabled)
-                )
-                self.phone_confidence = float(
-                    settings.get("phone_confidence", self.phone_confidence)
-                )
-                self.phone_frames = int(
-                    settings.get("phone_frames", self.phone_frames)
-                )  # (Segundos)
-
-                distraction_status = (
-                    "ATIVADA" if self.phone_detection_enabled else "DESATIVADA"
-                )
-                logging.info(
-                    f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold}({self.ear_frames}f), "
-                    f"MAR>{self.mar_threshold}({self.mar_frames}f), "
-                    f"Celular:{distraction_status} "
-                    f"[Conf>{self.phone_confidence}({self.phone_frames}s)]"
-                )
-
-                if not self.phone_detection_enabled:
-                    self.phone_alert_active = False
-                    with self.yolo_lock:
+                if phone_enabled:
+                    if phone_found_this_loop:
+                        if self.phone_detected_time is None:
+                            self.phone_detected_time = current_time
+                        elapsed = current_time - self.phone_detected_time
+                        if elapsed >= phone_seconds_thresh and not self.phone_alert_active:
+                            self.phone_alert_active = True
+                            logging.warning("EVENTO DISTRACAO (CELULAR NA MAO) ATIVADO.")
+                    else:
                         self.phone_detected_time = None
-                        self.last_yolo_boxes = []
+                        self.phone_alert_active = False
+                else:
+                    self.phone_detected_time = None
+                    self.phone_alert_active = False
+                
+                if self.phone_alert_active and not self._phone_event_sent:
+                    self._phone_event_sent = True 
+                    new_events_list.append({
+                        "type": "DISTRACAO", "value": "Celular na mao",
+                        "timestamp": datetime.now().isoformat() + "Z",
+                    })
+                    logging.warning("Gerando EVENTO DISTRACAO.")
+                elif not self.phone_alert_active and self._phone_event_sent:
+                    self._phone_event_sent = False
+                
+                # --- 6. Preparar dados de saída ---
+                status_data = {"ear": f"{local_ear:.2f}", "mar": f"{local_mar:.2f}", "yaw": "-", "pitch": "-", "roll": "-"}
+                annotations = {
+                    "l_eye": local_left_eye, "r_eye": local_right_eye,
+                    "mouth": local_mouth, "boxes": local_boxes,
+                    "d_alert": self.drowsy_alert_active,
+                    "y_alert": self.yawn_alert_active,
+                    "p_alert": self.phone_alert_active,
+                    "p_enabled": phone_enabled
+                }
+                
+                # --- 7. Enviar resultados para o processo principal ---
+                try:
+                    # (CORRIGIDO) Envolve a limpeza da fila num try-except
+                    try:
+                        while not self.output_queue.empty():
+                            self.output_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    
+                    self.output_queue.put_nowait((status_data, new_events_list, annotations))
+                except queue.Full:
+                    logging.warning("Fila de output cheia, app.py está lento?")
+                    pass
 
-                return True
-            except (ValueError, TypeError) as e:
-                logging.error(f"Erro conf MediaPipe (valor inválido?): {e}")
-                return False
+                logging.info(f"Inferência (Face+Hands+YOLO) completa. Duração: {time.time() - start_time_total:.3f}s")
+                
             except Exception as e:
-                logging.error(f"Erro inesperado conf MediaPipe: {e}", exc_info=True)
-                return False
+                logging.error(f"Erro na inferência: {e}", exc_info=True)
+                self.phone_detected_time = None
+            
+            # (CORRIGIDO) Removida a chamada 'self.input_queue.task_done()'
+            
+        logging.info(">>> _cv_worker_loop (Single Worker Thread) terminado.")
 
-    def get_settings(self):
-        logging.debug("DMSCore(MediaPipe): get_settings.")
-        with self.lock:
-            return {
-                "ear_threshold": self.ear_threshold,
-                "ear_frames": self.ear_frames,
-                "mar_threshold": self.mar_threshold,
-                "mar_frames": self.mar_frames,
-                "phone_detection_enabled": self.phone_detection_enabled,
-                "phone_confidence": self.phone_confidence,
-                "phone_frames": self.phone_frames,
-            }
+
+# --- A CLASSE DE CONTROLO (usada por app.py) ---
+
+class MediaPipeMonitor(BaseMonitor):
+    """
+    Esta classe corre no processo principal (app.py) e gere
+    o processo _CVWorkerProcess.
+    """
+    
+    def __init__(self, frame_size, stop_event: multiprocessing.Event, default_settings: dict):
+        self.frame_height, self.frame_width = frame_size
+        self.stop_event = stop_event
+        self.default_settings = default_settings
+        self.log_level = logging.getLogger().level
+
+        self.input_queue = multiprocessing.Queue(maxsize=1)
+        self.output_queue = multiprocessing.Queue(maxsize=1)
+        self.settings_in_queue = multiprocessing.Queue(maxsize=1)
+        self.settings_out_queue = multiprocessing.Queue(maxsize=1)
+        
+        self.worker_process = None
+        
+        self.last_annotations = {
+            "l_eye": NULL_LANDMARKS.copy(), "r_eye": NULL_LANDMARKS.copy(),
+            "mouth": NULL_LANDMARKS_MOUTH.copy(), "boxes": [],
+            "d_alert": False, "y_alert": False, "p_alert": False, "p_enabled": True
+        }
+        self.last_sent_settings = default_settings.copy()
+
+    def start_process(self):
+        """Inicia o processo de CV."""
+        logging.info("A iniciar o processo _CVWorkerProcess...")
+        self.worker_process = _CVWorkerProcess(
+            frame_size=(self.frame_height, self.frame_width),
+            default_settings=self.default_settings,
+            stop_event=self.stop_event,
+            input_queue=self.input_queue,
+            output_queue=self.output_queue,
+            settings_in_queue=self.settings_in_queue,
+            settings_out_queue=self.settings_out_queue,
+            log_level=self.log_level
+        )
+        self.worker_process.start()
+        return self.worker_process
+
+    def is_alive(self):
+        """Verifica se o processo de CV está a correr."""
+        return self.worker_process is not None and self.worker_process.is_alive()
+
+    def stop(self):
+        """Sinaliza ao processo de CV para parar."""
+        logging.info("A enviar sinal de paragem para o MediaPipeMonitor...")
+        self.stop_event.set()
+        try:
+            while not self.input_queue.empty(): self.input_queue.get_nowait()
+        except Exception: pass
+        try:
+            while not self.output_queue.empty(): self.output_queue.get_nowait()
+        except Exception: pass
+        
+
+    # --- Funções de Interface (chamadas por app.py) ---
+
+    def process_frame(self, frame: np.ndarray):
+        """(LEVE) Apenas enfileira o frame para o processo de CV."""
+        try:
+            while not self.input_queue.empty():
+                self.input_queue.get_nowait()
+            self.input_queue.put_nowait(frame)
+            logging.debug("Frame enviado para o processo de CV.")
+        except queue.Full:
+            logging.warning("Fila de input de CV cheia, frame descartado.")
+        except Exception as e:
+            logging.error(f"Erro ao enfileirar frame: {e}")
+        
+        pass 
+    
+    def get_results(self):
+        """(LEVE) Pega os últimos resultados do processo de CV (não-bloqueante)."""
+        try:
+            results = self.output_queue.get_nowait() 
+            if results:
+                self.last_annotations = results[2] # Guarda o dict 'annotations'
+            return results
+        except queue.Empty:
+            return None # Sem novos resultados
+        except Exception as e:
+            logging.warning(f"Erro ao ler fila de output: {e}")
+            return None
+
+    def draw_annotations(self, frame, annotations=None):
+        """(LEVE) Desenha as *últimas* anotações conhecidas no frame atual."""
+        if annotations is None:
+            annotations = self.last_annotations
+        
+        try:
+            if annotations["l_eye"].any():
+                cv2.drawContours(frame, [cv2.convexHull(annotations["l_eye"])], -1, (0, 255, 0), 1)
+            if annotations["r_eye"].any():
+                cv2.drawContours(frame, [cv2.convexHull(annotations["r_eye"])], -1, (0, 255, 0), 1)
+            if annotations["mouth"].any():
+                cv2.drawContours(frame, [cv2.convexHull(annotations["mouth"])], -1, (0, 255, 255), 1)
+
+            if annotations["p_enabled"]:
+                for box_coords in annotations["boxes"]:
+                    x1, y1, x2, y2 = map(int, box_coords)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 255), 2)
+                    cv2.putText(
+                        frame, "Celular (na Mao)", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2,
+                    )
+            
+            if annotations["d_alert"]:
+                cv2.putText(frame, "ALERTA: SONOLENCIA!", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if annotations["y_alert"]:
+                cv2.putText(frame, "ALERTA: BOCEJO!", (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            if annotations["p_enabled"] and annotations["p_alert"]:
+                cv2.putText(frame, "ALERTA: CELULAR/MAO!", (10, 90),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+        
+        except Exception as e:
+            logging.error(f"Erro ao desenhar anotações: {e}", exc_info=True)
+            
+        return frame
+
+
+    def update_settings(self, settings: dict) -> bool:
+        """(LEVE) Envia novos settings para o processo de CV."""
+        try:
+            while not self.settings_in_queue.empty():
+                self.settings_in_queue.get_nowait()
+            self.settings_in_queue.put_nowait(settings)
+            self.last_sent_settings = settings.copy()
+            logging.debug("Novos settings enviados para o processo de CV.")
+            return True
+        except queue.Full:
+            logging.warning("Fila de settings cheia.")
+            return False
+        except Exception as e:
+            logging.error(f"Erro ao enviar settings: {e}")
+            return False
+            
+    def get_last_sent_settings(self):
+        """(LEVE) Retorna o último dict de settings enviado."""
+        return self.last_sent_settings
+
+    def get_settings(self) -> dict:
+        """(LEVE) Pede os settings atuais ao processo de CV."""
+        try:
+            while not self.settings_out_queue.empty():
+                self.settings_out_queue.get_nowait()
+            self.settings_out_queue.put_nowait("GET")
+            
+            try:
+                settings = self.settings_out_queue.get(timeout=0.5) # Espera 500ms
+                return settings
+            except queue.Empty:
+                logging.warning("Timeout ao pedir settings ao processo de CV.")
+                return None
+        except Exception as e:
+            logging.error(f"Erro ao pedir settings: {e}")
+            return None
