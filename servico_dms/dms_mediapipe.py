@@ -1,17 +1,13 @@
-# Documentação: Núcleo do SistemaDMS (Implementação MediaPipe + YOLOv8)
-# (VERSÃO: Híbrido Otimizado - Deteta Mão (MP), depois Celular (YOLO-s) no recorte)
-# (MODIFICADO: Lógica de alerta de celular baseada em tempo)
+# Documentação: Núcleo do SistemaDMS
 
 import cv2
 import mediapipe as mp
 import numpy as np
 import logging
-# import math (F401 - Removido)
 import threading
 from scipy.spatial import distance as dist
 from datetime import datetime
 import time
-# from collections import deque (F401 - Removido)
 
 from ultralytics import YOLO
 from dms_base import BaseMonitor
@@ -19,7 +15,7 @@ from camera_thread import CameraThread
 
 cv2.setUseOptimized(True)
 
-# --- Índices MediaPipe (permanecem iguais) ---
+# --- Índices MediaPipe ---
 MP_LEFT_EYE_IDX = [33, 160, 158, 133, 153, 144]
 MP_RIGHT_EYE_IDX = [362, 385, 387, 263, 380, 373]
 MP_MOUTH_IDX = [78, 81, 13, 311, 308, 402, 14, 87]
@@ -115,17 +111,17 @@ class MediaPipeMonitor(BaseMonitor):
         self.yawn_alert_active = False
         self.phone_alert_active = False
 
-        self.ear_threshold = self.default_settings.get("ear_threshold", 0.25)
-        self.ear_frames = self.default_settings.get("ear_frames", 7)
+        self.ear_threshold = self.default_settings.get("ear_threshold", 0.30)
+        self.ear_frames = self.default_settings.get("ear_frames", 2)
         self.mar_threshold = self.default_settings.get("mar_threshold", 0.40)
-        self.mar_frames = self.default_settings.get("mar_frames", 10)
+        self.mar_frames = self.default_settings.get("mar_frames", 2)
 
         self.phone_detection_enabled = self.default_settings.get(
             "phone_detection_enabled", True
         )
-        self.phone_confidence = self.default_settings.get("phone_confidence", 0.20)
+        self.phone_confidence = self.default_settings.get("phone_confidence", 0.30)
         self.phone_frames = self.default_settings.get(
-            "phone_frames", 5
+            "phone_frames", 1
         )  # (Interpretado como SEGUNDOS)
 
         # --- 5. Configuração do Thread YOLO ---
@@ -133,7 +129,6 @@ class MediaPipeMonitor(BaseMonitor):
         self.phone_thread = None
         self.yolo_lock = threading.Lock()
         self.last_yolo_boxes = []
-        # (NOVO) Armazena o timestamp da *primeira* detecção contínua
         self.phone_detected_time = None
 
     # --- Loop do Thread YOLO ---
@@ -184,7 +179,7 @@ class MediaPipeMonitor(BaseMonitor):
                 current_boxes = []
 
                 if results_hands.multi_hand_landmarks:
-                    logging.info(
+                    logging.debug(
                         f"_yolo_loop: Mãos(MP) encontradas "
                         f"({len(results_hands.multi_hand_landmarks)}). "
                         "Verificando se há um celular (YOLO)..."
@@ -254,20 +249,20 @@ class MediaPipeMonitor(BaseMonitor):
                 with self.yolo_lock:
                     self.last_yolo_boxes = current_boxes if phone_found_this_loop else []
 
-                    # (NOVO) Lógica de tempo
+                    # Lógica de tempo
                     current_time = time.time()
                     if phone_found_this_loop:
                         if self.phone_detected_time is None:
                             # Inicia o cronômetro na primeira detecção
                             self.phone_detected_time = current_time
-                            logging.info("_yolo_loop: Detecção de celular INICIADA.")
+                            logging.debug("_yolo_loop: Detecção de celular INICIADA.")
                     else:
                         # Se não encontrou, reseta o cronômetro
                         if self.phone_detected_time is not None:
-                            logging.info("_yolo_loop: Detecção de celular INTERROMPIDA.")
+                            logging.debug("_yolo_loop: Detecção de celular INTERROMPIDA.")
                         self.phone_detected_time = None
 
-                logging.info(
+                logging.debug(
                     f"_yolo_loop: Inferência concluída. "
                     f"Mão/Celular Híbrido: {phone_found_this_loop}. "
                     f"Duração: {time.time() - start_time_yolo:.3f}s"
@@ -279,13 +274,13 @@ class MediaPipeMonitor(BaseMonitor):
                     self.phone_detected_time = None
                     self.last_yolo_boxes = []
             
-            # --- LÓGICA DE TEMPO MODIFICADA ---
+    
             TARGET_YOLO_CYCLE_TIME = 1.0 # Alvo de 1 ciclo por segundo
             
             processing_time = time.time() - start_time_yolo
             wait_time = TARGET_YOLO_CYCLE_TIME - processing_time
             
-            logging.info(
+            logging.debug(
                 f"_yolo_loop: Inferência concluída. "
                 f"Híbrido: {phone_found_this_loop}. "
                 f"Duração: {processing_time:.3f}s. Espera: {max(0, wait_time):.3f}s"
@@ -310,7 +305,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.phone_thread.daemon = True
         self.phone_thread.start()
 
-    # --- Funções de Cálculo (permanecem iguais) ---
+    # --- Funções de Cálculo ---
     def _eye_aspect_ratio(self, eye_landmarks):
         A = dist.euclidean(eye_landmarks[1], eye_landmarks[5])
         B = dist.euclidean(eye_landmarks[2], eye_landmarks[4])
@@ -330,7 +325,7 @@ class MediaPipeMonitor(BaseMonitor):
             coords[i] = (int(lm.x * self.frame_width), int(lm.y * self.frame_height))
         return coords
 
-    def process_frame(self, frame, gray):
+    def process_frame(self, frame, frame_rgb):
         logging.debug("DMSCore(MediaPipe): process_frame (MP Rápido) iniciado.")
         start_time_total = time.time()
         events_list = []
@@ -338,8 +333,7 @@ class MediaPipeMonitor(BaseMonitor):
         face_found_this_frame = False
 
         try:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results_mp = self.face_mesh.process(frame_rgb)
+            results_mp = self.face_mesh.process(frame_rgb) 
         except Exception as e:
             logging.error(f"DMSCore(MediaPipe): Erro .process(): {e}", exc_info=True)
             return frame, events_list, status_data

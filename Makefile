@@ -9,7 +9,7 @@ COMPOSE_FILE := docker-compose.yml
 SERVICO := servico_dms   # Nome do serviço principal
 
 # Valores padrão (podem ser sobrescritos na linha de comando)
-LOG_LEVEL ?= INFO
+LOG_LEVEL ?= WARNING
 ROTATE_FRAME ?= 0
 
 # --- Variáveis Internas ---

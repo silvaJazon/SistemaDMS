@@ -6,14 +6,14 @@ services:
   servico_dms:
     # Constrói a imagem a partir da pasta ./servico_dms
     build: ./servico_dms
-    image: jazonbatista/fluxoai-dms:latest # Novo nome de imagem
+    image: jazonbatista/fluxoai-dms:latest # Nome de imagem
     container_name: fluxoai-servico_dms
     restart: unless-stopped
     environment:
       # O script vai ler esta variável para saber qual câmara usar.
       - VIDEO_SOURCE=0
       # Passa a variável LOG_LEVEL (definida no Makefile) para o contentor.
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_LEVEL=${LOG_LEVEL:-WARNING}
       # Passa a variável ROTATE_FRAME (definida no Makefile) para o contentor.
       - ROTATE_FRAME=${ROTATE_FRAME:-0}
     ports:
@@ -25,5 +25,5 @@ services:
     volumes:
       # Mapeia a pasta local './alertas_dms' para a pasta '/app/alerts' dentro do contentor
       - ./alertas_dms:/app/alerts
-      # (NOVO) Mapeia a pasta local './config_dms' para '/app/config' para persistir 'settings.json'
+      # Mapeia a pasta local './config_dms' para '/app/config' para persistir 'settings.json'
       - ./config_dms:/app/config

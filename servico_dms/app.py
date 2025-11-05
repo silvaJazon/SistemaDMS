@@ -1,6 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-# (VERSÃO: MediaPipe + YOLO)
-# (MODIFICADO: Persistência de config e graceful shutdown)
+
 
 import cv2
 import time
@@ -8,7 +7,6 @@ import os
 import numpy as np
 import threading
 import logging
-# import sys (F401 - Removido)
 from flask import (
     Flask,
     Response,
@@ -19,7 +17,6 @@ from flask import (
 )
 import queue
 import json
-# from datetime import datetime (F401 - Removido)
 import signal
 
 # Importa os nossos módulos
@@ -38,18 +35,31 @@ except ImportError:
 cv2.setUseOptimized(True)
 
 # --- Configuração do Logging ---
-default_log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-log_level = logging.DEBUG if default_log_level == "DEBUG" else logging.INFO
+# 1. O padrão de recurso (fallback) é WARNING
+default_log_level_str = os.environ.get("LOG_LEVEL", "WARNING").upper()
+
+# 2. Mapa para converter a string para o objeto logging
+log_levels_map = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+# 3. Usa o mapa; se a string for inválida, usa o padrão (WARNING)
+log_level = log_levels_map.get(default_log_level_str, logging.WARNING)
+
+# 4. Aplica o nível de log determinado
 logging.basicConfig(
     level=log_level,
     format="%(asctime)s - DMS - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("werkzeug")
-log.setLevel(logging.WARNING)
+log.setLevel(logging.WARNING) # Mantém o log do servidor web silencioso
 
 
-# --- (NOVO) Lógica de Persistência de Config (Roadmap 1.1) ---
 CONFIG_DIR = "/app/config"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 
@@ -92,23 +102,22 @@ config_from_file = load_config()
 VIDEO_SOURCE = os.environ.get("VIDEO_SOURCE", "0")
 FRAME_WIDTH_DISPLAY = 640
 FRAME_HEIGHT_DISPLAY = 480
-JPEG_QUALITY = 75
-TARGET_FPS = 5
+JPEG_QUALITY = 60
+TARGET_FPS = 30
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 
-# (MODIFICADO) Usa valores do arquivo salvo ou do env, com fallback para padrões
+# Configurações iniciais (podem ser sobrescritas via API)
 INITIAL_ROTATION = int(
     os.environ.get("ROTATE_FRAME", config_from_file.get("rotation", "0"))
 )
 DETECTION_BACKEND = "MEDIAPIPE"
 
-# (MODIFICADO) Padrões são usados se NADA for encontrado no arquivo de config
+# Padrões são usados se NADA for encontrado no arquivo de config
 DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.30)
 DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 2)
 DEFAULT_MAR_THRESHOLD = config_from_file.get("mar_threshold", 0.40)
 DEFAULT_MAR_FRAMES = config_from_file.get("mar_frames", 2)
-# (Adiciona padrões de celular aqui também, se existirem no config)
 DEFAULT_PHONE_ENABLED = config_from_file.get("phone_detection_enabled", True)
 DEFAULT_PHONE_CONF = config_from_file.get("phone_confidence", 0.30)
 DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 1)  # (Segundos)
@@ -156,7 +165,6 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
         f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) "
         f"iniciado (Alvo: {TARGET_FPS} FPS)."
     )
-    # last_process_time = time.time() (F841 - Removido)
     frame_count = 0
 
     while not stop_event.is_set():
@@ -178,8 +186,8 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
         logging.debug("DetectionLoop: get_frame() retornou frame.")
 
         try:
-            logging.debug("DetectionLoop: A converter p/ cinzento...")
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            logging.debug("DetectionLoop: A converter BGR p/ RGB...")
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             logging.debug("DetectionLoop: A chamar process_frame()...")
             if dms_monitor_ref is None:
@@ -188,7 +196,7 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 continue
 
             processed_frame, events, status_data = dms_monitor_ref.process_frame(
-                frame.copy(), gray
+                frame.copy(), frame_rgb
             )
             logging.debug("DetectionLoop: process_frame() retornou.")
 
@@ -346,7 +354,7 @@ def generate_video_stream():
             logging.error(f"generate_video_stream: Erro inesperado: {e}", exc_info=True)
             break
 
-        target_stream_time = 1 / 5
+        target_stream_time = 1 / 15
         current_time = time.time()
         sleep_time = target_stream_time - (current_time - last_frame_time)
         if sleep_time > 0:
@@ -425,7 +433,7 @@ def api_config():
             if dms_success and cam_success:
                 logging.info("/api/config POST: Configurações atualizadas.")
 
-                # --- (NOVO) Salva a configuração persistente ---
+                # ---Salva a configuração persistente ---
                 try:
                     all_current_settings = dms_monitor.get_settings()
                     all_current_settings["brightness"] = cam_thread.get_brightness()
@@ -514,7 +522,7 @@ if __name__ == "__main__":
 
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
 
-        # (MODIFICADO) Usa os padrões carregados (do arquivo ou os defaults)
+        # Carrega as Configurações padrão do DMS
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
