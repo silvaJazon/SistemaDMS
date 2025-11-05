@@ -1,10 +1,7 @@
 # Documentação: Classe Base Abstrata para Monitores DMS
-# Define a interface que todos os backends de deteção (Dlib, MediaPipe, etc.)
-# devem implementar.
 
 import abc
 import numpy as np
-# import logging (F401 - Removido)
 import threading
 
 
@@ -29,15 +26,14 @@ class BaseMonitor(abc.ABC):
         if default_settings is None:
             default_settings = {}
         self.default_settings = default_settings
-        # O log real virá da subclasse (ex: "Inicializando DlibMonitor...")
 
     @abc.abstractmethod
-    def process_frame(self, frame: np.ndarray, gray: np.ndarray):
+    def process_frame(self, frame: np.ndarray, frame_rgb: np.ndarray):
         """
         Processa um único frame para detetar sonolência, distração, etc.
 
         :param frame: O frame de vídeo original (BGR).
-        :param gray: O frame de vídeo em escala de cinza.
+        :param frame_rgb: O frame de vídeo em formato RGB (otimizado p/ MediaPipe).
         :return: Uma tupla (processed_frame, events_list, status_data)
                  - processed_frame: O frame com anotações de depuração (olhos, rosto, etc.)
                  - events_list: Uma lista de dicionários de eventos (ex: {"type": "SONOLENCIA", ...})

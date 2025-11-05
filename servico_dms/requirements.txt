@@ -1,5 +1,4 @@
-# Bibliotecas Leves (Aplicação e Testes)
-# Estas podem mudar frequentemente (ex: adicionar 'paho-mqtt' aqui)
+# Bibliotecas Leves
 Flask==2.3.3
 waitress==2.1.2
 

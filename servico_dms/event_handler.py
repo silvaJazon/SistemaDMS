@@ -8,7 +8,6 @@ import queue
 import logging
 import os
 import cv2
-# import json (F401 - Removido)
 from datetime import datetime
 import sqlite3
 import time  # Para o retry

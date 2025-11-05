@@ -1,6 +1,6 @@
 # ========================================================================
 # Documentação: Dockerfile para o Serviço DMS (Versão Multi-Stage)
-# (MODIFICADO) Otimizado para cache, separando 'base-requirements.txt'
+# Otimizado para cache, separando 'base-requirements.txt'
 # ========================================================================
 
 # --- Estágio 1: Builder ---
@@ -18,8 +18,6 @@ RUN apt-get update && \
 
 # Atualiza pip
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# --- (NOVA LÓGICA DE CACHE) ---
 
 # 1. Instala o numpy primeiro (para o fix aarch64)
 RUN pip install --no-cache-dir numpy
@@ -66,7 +64,6 @@ COPY camera_thread.py .
 COPY event_handler.py .
 COPY __init__.py .
 COPY tests/ ./tests/
-# (NOVO) Copia o novo arquivo de requisitos para a imagem final (apenas por referência)
 COPY base-requirements.txt .
 
 # Expõe a porta padrão do Flask
