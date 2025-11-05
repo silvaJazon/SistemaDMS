@@ -30,7 +30,7 @@ class MediaPipeMonitor(BaseMonitor):
     - Thread 1 (Principal): MediaPipe Face Mesh (EAR/MAR)
     - Thread 2 (Fundo): Híbrido Otimizado:
         1. MediaPipe Hands (Rápido)
-        2. Se Mão encontrada -> YOLOv8s no recorte da Mão (Rápido)
+        2. Se Mão encontrada -> YOLOvxxo recorte da Mão (Rápido)
     """
 
     def __init__(
@@ -67,7 +67,7 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 3. Carregar Modelo YOLOv8 (Thread Fundo) ---
         try:
-            model_file = "models/yolov8s.pt"
+            model_file = "models/yolov8n.pt"
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")
@@ -115,7 +115,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.yawn_reset_counter = 0 # NOVO: Contador de reset para Bocejo
 
         # --- NOVAS VARIÁVEIS DE CALIBRAÇÃO ---
-        self.calibration_state = "IDLE"  # Estados: 'IDLE', 'CALIBRATING', 'DONE'
+        self.calibration_state = self.default_settings.get("calibration_state", "IDLE")
         self.calibration_samples = []
         self.CALIBRATION_FRAMES_TARGET = 100 
         # -------------------------------------
