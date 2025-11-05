@@ -1,4 +1,5 @@
 # Documentação: Núcleo do SistemaDMS
+# (Versão com estabilização de EAR (Grace Period))
 
 import cv2
 import mediapipe as mp
@@ -106,6 +107,9 @@ class MediaPipeMonitor(BaseMonitor):
         self.lock = threading.Lock()
         self.drowsiness_counter = 0
         self.yawn_counter = 0
+        
+        # Novo contador para estabilização (Grace Period)
+        self.drowsiness_reset_counter = 0
 
         self.drowsy_alert_active = False
         self.yawn_alert_active = False
@@ -113,6 +117,11 @@ class MediaPipeMonitor(BaseMonitor):
 
         self.ear_threshold = self.default_settings.get("ear_threshold", 0.30)
         self.ear_frames = self.default_settings.get("ear_frames", 2)
+        
+        # Novo limiar de frames para o reset (Grace Period)
+        # (Quantos frames de olhos ABERTOS são necessários para resetar o alerta)
+        self.ear_reset_frames = self.default_settings.get("ear_reset_frames", 5) 
+
         self.mar_threshold = self.default_settings.get("mar_threshold", 0.40)
         self.mar_frames = self.default_settings.get("mar_frames", 2)
 
@@ -402,13 +411,21 @@ class MediaPipeMonitor(BaseMonitor):
             logging.debug("DMSCore(MediaPipe): Lock alerta OK.")
 
             if face_found_this_frame:
-                # Sonolência
+                
+                # Sonolência (Lógica de estabilização com Grace Period)
                 if ear < self.ear_threshold:
+                    # Olhos fechados (EAR baixo), incrementa contador de sonolência
                     self.drowsiness_counter += 1
+                    
+                    # Como os olhos estão fechados, reinicia o contador de "olhos abertos" (grace period)
+                    self.drowsiness_reset_counter = 0 
+                    
                     logging.debug(
                         f"DMSCore(MediaPipe): EAR baixo ({ear:.3f}<{self.ear_threshold}), "
                         f"cont={self.drowsiness_counter}/{self.ear_frames}"
                     )
+                    
+                    # Ativa o alerta se o contador de sonolência atingir o limite
                     if (
                         self.drowsiness_counter >= self.ear_frames
                         and not self.drowsy_alert_active
@@ -422,11 +439,30 @@ class MediaPipeMonitor(BaseMonitor):
                             }
                         )
                         logging.warning("DMSCore(MediaPipe): EVENTO SONOLENCIA.")
+                
                 else:
-                    if self.drowsiness_counter > 0:
-                        logging.debug("DMSCore(MediaPipe): Sonolência reset.")
-                    self.drowsiness_counter = 0
-                    self.drowsy_alert_active = False
+                    # Olhos abertos (EAR >= threshold)
+                    
+                    # Incrementa o contador de "olhos abertos" (grace period)
+                    self.drowsiness_reset_counter += 1
+                    
+                    logging.debug(
+                        f"DMSCore(MediaPipe): EAR OK ({ear:.3f}). "
+                        f"Contagem para reset: {self.drowsiness_reset_counter}/{self.ear_reset_frames}"
+                    )
+
+                    # Apenas reinicia o alerta se os olhos estiverem abertos
+                    # por um número 'ear_reset_frames' consecutivo.
+                    if self.drowsiness_reset_counter >= self.ear_reset_frames:
+                        if self.drowsiness_counter > 0 or self.drowsy_alert_active:
+                            logging.debug("DMSCore(MediaPipe): Sonolência RESETADA (Grace period).")
+                        
+                        self.drowsiness_counter = 0
+                        self.drowsy_alert_active = False
+                    
+                    # Nota: Se o reset_counter ainda não atingiu o limite, 
+                    # self.drowsiness_counter e self.drowsy_alert_active são mantidos.
+                    # Isto previne que um único frame "bom" cancele o alerta.
 
                 # Bocejo
                 if mar > self.mar_threshold:
@@ -456,8 +492,10 @@ class MediaPipeMonitor(BaseMonitor):
 
             else:
                 logging.debug("DMSCore(MediaPipe): Nenhuma face encontrada.")
+                # Se nenhuma face for encontrada, reinicia tudo (incluindo o grace period)
                 self.drowsiness_counter = 0
                 self.drowsy_alert_active = False
+                self.drowsiness_reset_counter = 0 
                 self.yawn_counter = 0
                 self.yawn_alert_active = False
 
@@ -533,6 +571,11 @@ class MediaPipeMonitor(BaseMonitor):
                     settings.get("ear_threshold", self.ear_threshold)
                 )
                 self.ear_frames = int(settings.get("ear_frames", self.ear_frames))
+    
+                self.ear_reset_frames = int(
+                    settings.get("ear_reset_frames", self.ear_reset_frames)
+                )
+
                 self.mar_threshold = float(
                     settings.get("mar_threshold", self.mar_threshold)
                 )
@@ -553,6 +596,7 @@ class MediaPipeMonitor(BaseMonitor):
                 )
                 logging.info(
                     f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold}({self.ear_frames}f), "
+                    f"EAR_Reset>{self.ear_reset_frames}f, " # Log atualizado
                     f"MAR>{self.mar_threshold}({self.mar_frames}f), "
                     f"Celular:{distraction_status} "
                     f"[Conf>{self.phone_confidence}({self.phone_frames}s)]"
@@ -578,6 +622,7 @@ class MediaPipeMonitor(BaseMonitor):
             return {
                 "ear_threshold": self.ear_threshold,
                 "ear_frames": self.ear_frames,
+                "ear_reset_frames": self.ear_reset_frames, # Adicionada a nova configuração
                 "mar_threshold": self.mar_threshold,
                 "mar_frames": self.mar_frames,
                 "phone_detection_enabled": self.phone_detection_enabled,
