@@ -1,5 +1,5 @@
 # Documentação: Aplicação Principal Flask para o SistemaDMS
-
+# (Atualizado para incluir Gestor MQTT)
 
 import cv2
 import time
@@ -24,10 +24,10 @@ from camera_thread import CameraThread
 from dms_base import BaseMonitor
 from dms_mediapipe import MediaPipeMonitor
 from event_handler import EventHandler
+from mqtt_uploader import MQTTUploader # <-- NOVO IMPORT
 
 try:
     from waitress import serve
-
     HAS_WAITRESS = True
 except ImportError:
     HAS_WAITRESS = False
@@ -35,10 +35,7 @@ except ImportError:
 cv2.setUseOptimized(True)
 
 # --- Configuração do Logging ---
-# 1. O padrão de recurso (fallback) é WARNING
 default_log_level_str = os.environ.get("LOG_LEVEL", "WARNING").upper()
-
-# 2. Mapa para converter a string para o objeto logging
 log_levels_map = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -46,18 +43,14 @@ log_levels_map = {
     "ERROR": logging.ERROR,
     "CRITICAL": logging.CRITICAL,
 }
-
-# 3. Usa o mapa; se a string for inválida, usa o padrão (WARNING)
 log_level = log_levels_map.get(default_log_level_str, logging.WARNING)
-
-# 4. Aplica o nível de log determinado
 logging.basicConfig(
     level=log_level,
     format="%(asctime)s - DMS - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("werkzeug")
-log.setLevel(logging.WARNING) # Mantém o log do servidor web silencioso
+log.setLevel(logging.WARNING)
 
 
 CONFIG_DIR = "/app/config"
@@ -67,9 +60,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 def load_config():
     """Carrega o arquivo settings.json se ele existir."""
     if not os.path.exists(CONFIG_FILE):
-        logging.warning(
-            f"Arquivo de configuração '{CONFIG_FILE}' não encontrado. Usando padrões."
-        )
+        logging.warning(f"Arquivo '{CONFIG_FILE}' não encontrado. Usando padrões.")
         return {}
     try:
         with open(CONFIG_FILE, "r") as f:
@@ -77,9 +68,7 @@ def load_config():
             logging.info(f"Configuração carregada de '{CONFIG_FILE}'.")
             return config
     except Exception as e:
-        logging.error(
-            f"Erro ao carregar '{CONFIG_FILE}': {e}. Usando padrões.", exc_info=True
-        )
+        logging.error(f"Erro ao carregar '{CONFIG_FILE}': {e}. Usando padrões.")
         return {}
 
 
@@ -107,24 +96,36 @@ TARGET_FPS = 30
 TARGET_FRAME_TIME = 1.0 / TARGET_FPS
 EVENT_QUEUE_MAX_SIZE = 100
 
-# Configurações iniciais (podem ser sobrescritas via API)
 INITIAL_ROTATION = int(
     os.environ.get("ROTATE_FRAME", config_from_file.get("rotation", "0"))
 )
 DETECTION_BACKEND = "MEDIAPIPE"
 
-# Padrões são usados se NADA for encontrado no arquivo de config
+# Padrões DMS
 DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.30)
 DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 2)
-DEFAULT_EAR_CALIB_FACTOR = config_from_file.get("ear_calibration_factor", 0.80) # NOVO
+DEFAULT_EAR_CALIB_FACTOR = config_from_file.get("ear_calibration_factor", 0.80)
 DEFAULT_MAR_THRESHOLD = config_from_file.get("mar_threshold", 0.40)
 DEFAULT_MAR_FRAMES = config_from_file.get("mar_frames", 2)
 DEFAULT_PHONE_ENABLED = config_from_file.get("phone_detection_enabled", True)
 DEFAULT_PHONE_CONF = config_from_file.get("phone_confidence", 0.30)
-DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 1)  # (Segundos)
+DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 1)
+
+# --- NOVO: Padrões MQTT ---
+DEFAULT_MQTT_ENABLED = config_from_file.get("mqtt_enabled", False)
+DEFAULT_MQTT_BROKER = config_from_file.get("mqtt_broker", "broker.hivemq.com")
+DEFAULT_MQTT_PORT = config_from_file.get("mqtt_port", 1883)
+# Gera um ID de dispositivo único se não estiver configurado
+DEFAULT_MQTT_DEVICE_ID = config_from_file.get(
+    "mqtt_device_id", f"dms_device_{int(time.time()) % 10000}"
+)
+DEFAULT_MQTT_FLEET_ID = config_from_file.get("mqtt_fleet_id", "default_fleet")
+DEFAULT_MQTT_USERNAME = config_from_file.get("mqtt_username", "")
+DEFAULT_MQTT_PASSWORD = config_from_file.get("mqtt_password", "")
+DEFAULT_MQTT_RETENTION_DAYS = config_from_file.get("mqtt_retention_days", 10)
 
 
-# --- Gerenciador de Brilho Automático (NOVA CLASSE) ---
+# --- Gerenciador de Brilho Automático (AutoBrightnessManager) ---
 class AutoBrightnessManager:
     """
     Gerencia o ajuste automático de brilho com base no sucesso da deteção.
@@ -135,7 +136,6 @@ class AutoBrightnessManager:
         self.consecutive_failures = 0
         
         # --- Constantes de Ajuste ---
-        # (Ajuste estes valores conforme necessário)
         self.FAILURE_THRESHOLD = 50  # Nº de frames sem rosto antes de agir
         self.BRIGHTNESS_STEP = 5.0   # O "tamanho" do passo de ajuste
         self.BRIGHTNESS_MIN = 0.0    # Valor mínimo de brilho
@@ -200,15 +200,10 @@ class AutoBrightnessManager:
             return
             
         # --- HORA DE AGIR ---
-        # Atingimos o limite de falhas. Vamos ajustar o brilho.
-        
-        # Reseta o contador para dar tempo à câmera de se ajustar
         self.consecutive_failures = 0 
         
-        # Calcula o próximo brilho na "varredura"
         self.current_brightness += (self.search_direction * self.BRIGHTNESS_STEP)
 
-        # Verifica os limites (Min e Max)
         if self.current_brightness >= self.BRIGHTNESS_MAX:
             self.current_brightness = self.BRIGHTNESS_MAX
             self.search_direction = -1 # Inverte a direção
@@ -222,7 +217,6 @@ class AutoBrightnessManager:
         logging.info(f"AutoBrightness: Rosto não detectado. Ajustando brilho para {self.current_brightness}")
         
         try:
-            # Envia o comando para a câmera
             self.cam_thread.update_brightness(self.current_brightness)
         except Exception as e:
              logging.error(f"AutoBrightness: Erro ao definir brilho: {e}")
@@ -240,7 +234,8 @@ detection_thread = None
 event_handler = None
 event_queue = None
 dms_monitor: BaseMonitor = None
-brightness_manager: "AutoBrightnessManager" = None # <-- Definição global
+brightness_manager: "AutoBrightnessManager" = None
+mqtt_thread: "MQTTUploader" = None # <-- NOVO GLOBAL
 
 app = Flask(__name__)
 
@@ -255,19 +250,11 @@ def create_placeholder_frame(text="Aguardando camera..."):
         )
     except cv2.error as e:
         logging.warning(f"Erro ao desenhar texto no placeholder: {e}")
-        cv2.rectangle(
-            frame,
-            (10, FRAME_HEIGHT_DISPLAY // 2 - 20),
-            (FRAME_WIDTH_DISPLAY - 10, FRAME_HEIGHT_DISPLAY // 2 + 20),
-            (50, 50, 50),
-            -1,
-        )
     return frame
 
 
 # --- Threads Principais (detection_loop) ---
 def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
-    # 'global' é necessário aqui pois estamos DENTRO de uma função
     global output_frame_display, status_data_global, brightness_manager
     logging.info(
         f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) "
@@ -303,16 +290,13 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 stop_event.wait(timeout=1.0)
                 continue
 
-            # Captura o novo valor 'face_found'
             processed_frame, events, status_data, face_found = dms_monitor_ref.process_frame(
                 frame.copy(), frame_rgb
             )
             logging.debug("DetectionLoop: process_frame() retornou.")
 
-            # --- NOVO BLOCO: Atualiza o AutoBrightnessManager ---
             if brightness_manager:
                 brightness_manager.update_status(face_found)
-            # ---------------------------------------------------
 
             logging.debug("DetectionLoop: A adquirir output_frame_lock...")
             with output_frame_lock:
@@ -345,10 +329,7 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                         logging.error(f"Erro fila: {q_err}")
 
         except cv2.error as cv_err:
-            logging.error(
-                f"Erro OpenCV (shape: {frame.shape if frame is not None else 'None'}): {cv_err}",
-                exc_info=True,
-            )
+            logging.error(f"Erro OpenCV: {cv_err}", exc_info=True)
             stop_event.wait(timeout=1.0)
         except Exception as e:
             logging.error(f"!!! Erro no process_frame: {e}", exc_info=True)
@@ -411,37 +392,23 @@ def generate_video_stream():
         logging.debug("generate_video_stream: output_frame_lock libertado.")
 
         if frame_to_encode is None:
-            logging.warning("generate_video_stream: frame_to_encode é None, usando placeholder.")
             frame_to_encode = placeholder.copy()
             use_placeholder = True
         try:
             if not isinstance(frame_to_encode, np.ndarray) or frame_to_encode.size == 0:
-                logging.error(
-                    f"generate_video_stream: Frame inválido (tipo: {type(frame_to_encode)}). "
-                    "Usando placeholder."
-                )
                 frame_to_encode = placeholder.copy()
                 use_placeholder = True
 
             logging.debug("generate_video_stream: A codificar frame...")
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
             (flag, encodedImage) = cv2.imencode(".jpg", frame_to_encode, encode_param)
-            logging.debug(
-                f"generate_video_stream: Codificação {'bem-sucedida' if flag else 'falhou'}."
-            )
 
             if not flag:
-                logging.warning(
-                    f"generate_video_stream: Falha codificar (ph={use_placeholder}). "
-                    "Tentando placeholder."
-                )
                 (flag, encodedImage) = cv2.imencode(
                     ".jpg", placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), 50]
                 )
                 if not flag:
-                    logging.error(
-                        "generate_video_stream: Falha codificar placeholder. Saltando frame."
-                    )
+                    logging.error("generate_video_stream: Falha codificar placeholder.")
                     stop_event.wait(timeout=0.1)
                     continue
             frame_bytes = bytearray(encodedImage)
@@ -458,11 +425,7 @@ def generate_video_stream():
             logging.info("generate_video_stream: Cliente desconectou.")
             break
         except cv2.error as e:
-            logging.error(
-                f"generate_video_stream: Erro OpenCV codificar (ph={use_placeholder}, "
-                f"shape={frame_to_encode.shape}): {e}",
-                exc_info=True,
-            )
+            logging.error(f"generate_video_stream: Erro OpenCV: {e}", exc_info=True)
             stop_event.wait(timeout=0.5)
         except Exception as e:
             logging.error(f"generate_video_stream: Erro inesperado: {e}", exc_info=True)
@@ -502,8 +465,6 @@ def api_start_calibration():
         return jsonify({"error": "Service not initialized"}), 503
 
     try:
-        # Envia o comando "start_calibration" para o monitor
-        # O monitor irá alterar o seu estado interno
         dms_monitor.update_settings({"start_calibration": True})
         
         logging.info("Calibração de EAR iniciada via API.")
@@ -515,32 +476,50 @@ def api_start_calibration():
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
-    # 'global' é necessário aqui pois estamos DENTRO de uma função
-    global dms_monitor, brightness_manager
+    global dms_monitor, brightness_manager, mqtt_thread # <-- mqtt_thread adicionado
+    
     logging.debug(f"Rota /api/config (Método: {request.method})")
     
-    # Verifica se 'brightness_manager' foi inicializado
-    if dms_monitor is None or not cam_thread or not event_queue or brightness_manager is None:
+    # Verifica se os serviços estão prontos
+    if (
+        dms_monitor is None 
+        or not cam_thread 
+        or not event_queue 
+        or brightness_manager is None
+        or mqtt_thread is None # <-- NOVO
+    ):
         logging.warning("/api/config: Serviço não inicializado.")
         return jsonify({"error": "Service not fully initialized"}), 503
 
     if request.method == "GET":
         try:
             current_settings = dms_monitor.get_settings()
+            
+            # Configurações da Câmara
             current_settings["brightness"] = cam_thread.get_brightness()
             current_settings["rotation"] = cam_thread.get_rotation()
             current_settings["active_backend"] = DETECTION_BACKEND
-
-            # --- NOVO: Retorna o status do auto-brilho ---
             current_settings["auto_brightness"] = brightness_manager.is_enabled()
-            # -----------------------------------------------
+            
+            # --- NOVO: Configurações MQTT ---
+            with mqtt_thread.config_lock:
+                current_settings["mqtt_enabled"] = mqtt_thread.config.get("mqtt_enabled")
+                current_settings["mqtt_broker"] = mqtt_thread.config.get("mqtt_broker")
+                current_settings["mqtt_port"] = mqtt_thread.config.get("mqtt_port")
+                current_settings["mqtt_device_id"] = mqtt_thread.config.get("mqtt_device_id")
+                current_settings["mqtt_fleet_id"] = mqtt_thread.config.get("mqtt_fleet_id")
+                current_settings["mqtt_username"] = mqtt_thread.config.get("mqtt_username")
+                current_settings["mqtt_password"] = mqtt_thread.config.get("mqtt_password")
+                current_settings["mqtt_retention_days"] = mqtt_thread.config.get("mqtt_retention_days")
+            # -------------------------------
 
+            # Status Runtime
             logging.debug("api_config GET: Lock status...")
             with status_data_lock:
                 logging.debug("api_config GET: Lock status OK.")
                 current_settings["status"] = status_data_global.copy()
             logging.debug("api_config GET: Lock status libertado.")
-
+            
             try:
                 current_settings["queue_depth"] = event_queue.qsize()
                 current_settings["queue_max_size"] = event_queue.maxsize
@@ -551,6 +530,7 @@ def api_config():
 
             logging.debug(f"/api/config GET: Retornando {current_settings}")
             return jsonify(current_settings)
+            
         except Exception as e:
             logging.error(f"Erro inesperado /api/config GET: {e}", exc_info=True)
             return jsonify({"error": "Internal server error reading config"}), 500
@@ -562,21 +542,21 @@ def api_config():
             if not new_settings:
                 return jsonify({"success": False, "error": "No data received"}), 400
 
-            # --- NOVO BLOCO: Controla o auto-brilho ---
+            # --- Gestão Auto-Brilho ---
             if "auto_brightness" in new_settings:
                 try:
                     brightness_manager.set_enabled(bool(new_settings["auto_brightness"]))
                 except Exception as e:
                      logging.error(f"Erro ao definir auto_brightness: {e}")
-                
-                # Se o modo automático foi ativado, remove o ajuste manual de
-                # brilho da requisição para evitar conflitos.
                 if new_settings["auto_brightness"]:
                     new_settings.pop("brightness", None)
-            # ---------------------------------------------------
-
+            
+            # --- Atualiza Módulos ---
+            
+            # 1. Configurações DMS
             dms_success = dms_monitor.update_settings(new_settings)
 
+            # 2. Configurações Câmara
             cam_success = True
             try:
                 if "brightness" in new_settings:
@@ -587,17 +567,44 @@ def api_config():
                 logging.error(f"Erro atualizar conf câmara: {e}")
                 cam_success = False
 
+            # --- NOVO: 3. Configurações MQTT ---
+            # Filtra apenas as chaves MQTT que foram recebidas
+            mqtt_keys = [
+                "mqtt_enabled", "mqtt_broker", "mqtt_port", "mqtt_device_id",
+                "mqtt_fleet_id", "mqtt_username", "mqtt_password", "mqtt_retention_days"
+            ]
+            mqtt_updates = {k: new_settings[k] for k in mqtt_keys if k in new_settings}
+            
+            if mqtt_updates:
+                try:
+                    # Converte tipos de dados
+                    if "mqtt_port" in mqtt_updates:
+                        mqtt_updates["mqtt_port"] = int(mqtt_updates["mqtt_port"])
+                    if "mqtt_retention_days" in mqtt_updates:
+                        mqtt_updates["mqtt_retention_days"] = int(mqtt_updates["mqtt_retention_days"])
+                    if "mqtt_enabled" in mqtt_updates:
+                        mqtt_updates["mqtt_enabled"] = bool(mqtt_updates["mqtt_enabled"])
+                        
+                    mqtt_thread.update_config(mqtt_updates)
+                except Exception as e:
+                    logging.error(f"Erro ao atualizar config MQTT: {e}", exc_info=True)
+            # ------------------------------------
+
             if dms_success and cam_success:
                 logging.info("/api/config POST: Configurações atualizadas.")
 
-                # ---Salva a configuração persistente ---
+                # --- Salva a configuração persistente ---
                 try:
+                    # Pega todas as configurações atuais de todos os módulos
                     all_current_settings = dms_monitor.get_settings()
                     all_current_settings["brightness"] = cam_thread.get_brightness()
                     all_current_settings["rotation"] = cam_thread.get_rotation()
-                    
-                    # Salva o status do auto-brilho também
                     all_current_settings["auto_brightness"] = brightness_manager.is_enabled()
+                    
+                    # Adiciona configs MQTT
+                    with mqtt_thread.config_lock:
+                        for k in mqtt_keys:
+                            all_current_settings[k] = mqtt_thread.config.get(k)
                     
                     save_config(all_current_settings)
                 except Exception as e:
@@ -608,11 +615,7 @@ def api_config():
 
                 return jsonify({"success": True})
             else:
-                error_msg = (
-                    "Failed settings"
-                    + (" (DMS)" if not dms_success else "")
-                    + (" (Cam)" if not cam_success else "")
-                )
+                error_msg = f"Failed (DMS: {dms_success}, Cam: {cam_success})"
                 logging.warning(f"/api/config POST: Falha: {error_msg}")
                 return jsonify({"success": False, "error": error_msg}), 500
         except Exception as e:
@@ -670,9 +673,6 @@ def shutdown_handler(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-    
-    # A linha 'global brightness_manager' foi REMOVIDA daqui,
-    # pois este bloco já é o escopo global.
 
     try:
         logging.info(
@@ -684,13 +684,33 @@ if __name__ == "__main__":
         event_handler = EventHandler(queue=event_queue, stop_event=stop_event)
         event_handler.start()
 
+        # --- NOVO: Inicia o MQTT Uploader ---
+        logging.info("A inicializar o MQTTUploader...")
+        mqtt_initial_config = {
+            "mqtt_enabled": DEFAULT_MQTT_ENABLED,
+            "mqtt_broker": DEFAULT_MQTT_BROKER,
+            "mqtt_port": DEFAULT_MQTT_PORT,
+            "mqtt_device_id": DEFAULT_MQTT_DEVICE_ID,
+            "mqtt_fleet_id": DEFAULT_MQTT_FLEET_ID,
+            "mqtt_username": DEFAULT_MQTT_USERNAME,
+            "mqtt_password": DEFAULT_MQTT_PASSWORD,
+            "mqtt_retention_days": DEFAULT_MQTT_RETENTION_DAYS,
+        }
+        # A var global 'mqtt_thread' é definida aqui
+        mqtt_thread = MQTTUploader(
+            event_handler_ref=event_handler,
+            stop_event=stop_event,
+            initial_config=mqtt_initial_config
+        )
+        mqtt_thread.start()
+        # -----------------------------------
+
         frame_size = (FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY)
 
-        # Carrega as Configurações padrão do DMS
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
-            "ear_calibration_factor": DEFAULT_EAR_CALIB_FACTOR, # ADICIONADO
+            "ear_calibration_factor": DEFAULT_EAR_CALIB_FACTOR,
             "mar_threshold": DEFAULT_MAR_THRESHOLD,
             "mar_frames": DEFAULT_MAR_FRAMES,
             "phone_detection_enabled": DEFAULT_PHONE_ENABLED,
@@ -716,28 +736,20 @@ if __name__ == "__main__":
 
         logging.info("A aguardar o primeiro frame...")
         start_wait_cam = time.time()
-
         while cam_thread.get_frame() is None and cam_thread.is_alive():
             if stop_event.wait(timeout=0.2):
                 raise SystemExit("Encerrado init câmara.")
             if time.time() - start_wait_cam > 15:
                 raise RuntimeError("Timeout câmara.")
-
         if not cam_thread.is_alive():
             raise RuntimeError("Thread câmara terminou.")
-
         logging.info(">>> Primeiro frame recebido!")
 
-        # --- NOVO: Inicializa o Gerenciador de Brilho ---
         logging.info("A inicializar o AutoBrightnessManager...")
-        # Esta atribuição modifica a variável global 'brightness_manager'
         brightness_manager = AutoBrightnessManager(cam_thread)
-        
-        # Opcional: Carrega o estado 'auto_brightness' do arquivo de config
         if config_from_file.get("auto_brightness", False):
              brightness_manager.set_enabled(True)
-        # ------------------------------------------------
-
+        
         try:
             dms_monitor.start_yolo_thread(cam_thread)
             logging.info(">>> Thread de deteção de celular (YOLO) iniciada.")
@@ -755,13 +767,11 @@ if __name__ == "__main__":
         detection_thread.start()
 
         logging.info(">>> A iniciar servidor web porta 5000...")
-
         if HAS_WAITRESS:
             logging.info("A usar Waitress.")
             serve(app, host="0.0.0.0", port=5000, threads=8)
         else:
-            logging.warning("Waitress não encontrado.")
-            logging.warning("A usar Flask dev server.")
+            logging.warning("Waitress não encontrado. A usar Flask dev server.")
             try:
                 app.run(
                     host="0.0.0.0",
@@ -801,6 +811,8 @@ if __name__ == "__main__":
             threads_to_join.append(cam_thread)
         if "event_handler" in locals() and event_handler and event_handler.is_alive():
             threads_to_join.append(event_handler)
+        if "mqtt_thread" in locals() and mqtt_thread and mqtt_thread.is_alive(): # <-- NOVO
+            threads_to_join.append(mqtt_thread)
 
         if (
             "dms_monitor" in locals()
