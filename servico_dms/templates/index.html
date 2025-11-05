@@ -126,8 +126,14 @@
             <details>
                 <summary>Configurações da Câmara</summary>
                 <div class="p-4 space-y-4">
+
+                    <div class="flex items-center">
+                        <input type="checkbox" id="auto_brightness" name="auto_brightness" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
+                        <label for="auto_brightness" class="ml-2 text-sm font-medium text-gray-300">Ativar Brilho Automático</label>
+                    </div>
+
                     <div class="control-group">
-                        <label for="brightness">Brilho <span class="info-icon" title="Ajusta brilho.">ⓘ</span></label>
+                        <label for="brightness">Brilho <span class="info-icon" title="Ajusta brilho (manual).">ⓘ</span></label>
                         <div class="input-row"><input type="range" id="brightness" name="brightness" min="-64" max="64" step="1"><span class="slider-value" id="brightness_value">0</span></div>
                     </div>
                     <div class="control-group">
@@ -184,13 +190,17 @@
         const deleteProfileButton = document.getElementById('delete_profile_button');
         const updateProfileButton = document.getElementById('update_profile_button');
 
-        // --- NOVOS Seletores de Calibração ---
+        // --- Seletores de Calibração ---
         const calibrateButton = document.getElementById('calibrate_button');
         const calibStatus = document.getElementById('status-calibration');
         const earThresholdGroup = document.getElementById('ear_threshold').closest('.control-group');
         const earThresholdSlider = document.getElementById('ear_threshold');
         const earThresholdValue = document.getElementById('ear_threshold_value');
-        // ------------------------------------
+        
+        // --- MODIFICAÇÃO 2 (JavaScript) ---
+        // Adicionado seletor para o novo checkbox
+        const autoBrightnessCheckbox = document.getElementById('auto_brightness');
+        // --- Fim da Modificação 2 ---
 
         const PROFILE_STORAGE_PREFIX = 'dms_profile_';
         
@@ -211,17 +221,14 @@
             const isPhoneEnabled = phoneCheckbox ? phoneCheckbox.checked : false; 
             console.debug(`updateControlStates: Default=${isDefaultProfile}, PhoneEnabled=${isPhoneEnabled}`);
 
-            // --- MODIFICADO: Desativar o slider EAR Threshold ---
-            // Ele agora é controlado apenas pelo backend
             if (earThresholdGroup) {
                 earThresholdGroup.classList.add('opacity-60', 'disabled-group');
                 earThresholdSlider.disabled = true;
             }
-            // ----------------------------------------------------
 
             if (phoneControlsGroup) {
                 const phoneSliders = phoneControlsGroup.querySelectorAll('input[type="range"]');
-                if (isPhoneEnabled) { // (MODIFICADO) Só depende do checkbox
+                if (isPhoneEnabled) { 
                     phoneControlsGroup.classList.remove('opacity-50', 'disabled-group');
                     phoneSliders.forEach(s => s.disabled = false);
                 } else {
@@ -230,8 +237,20 @@
                 }
             }
 
-            brightnessSlider.disabled = false;
-            rotationSelect.disabled = false;
+            // --- MODIFICAÇÃO 3 (JavaScript) ---
+            // Desativa o slider de Brilho Manual se o automático estiver ligado
+            const isAutoBrightness = autoBrightnessCheckbox ? autoBrightnessCheckbox.checked : false;
+            const brightnessGroup = brightnessSlider.closest('.control-group');
+
+            brightnessSlider.disabled = isAutoBrightness;
+            rotationSelect.disabled = false; // Rotação é sempre manual
+
+            if (isAutoBrightness) {
+                brightnessGroup.classList.add('opacity-50', 'disabled-group');
+            } else {
+                brightnessGroup.classList.remove('opacity-50', 'disabled-group');
+            }
+            // --- Fim da Modificação 3 ---
 
             updateProfileButton.disabled = isDefaultProfile; 
             deleteProfileButton.disabled = isDefaultProfile; 
@@ -259,6 +278,15 @@
             } else {
                  if (phoneCheckbox) console.warn("Apply: Setting 'phone_detection_enabled' não encontrado, usando padrão do HTML.")
             }
+            
+            // --- MODIFICAÇÃO 4 (JavaScript) ---
+            // Aplica o estado 'auto_brightness' da API/Perfil ao checkbox
+            if (settings.hasOwnProperty('auto_brightness')) {
+                if (autoBrightnessCheckbox) autoBrightnessCheckbox.checked = settings.auto_brightness;
+            } else {
+                if (autoBrightnessCheckbox) console.warn("Apply: Setting 'auto_brightness' não encontrado.");
+            }
+            // --- Fim da Modificação 4 ---
 
             updateControlStates();
         }
@@ -270,6 +298,14 @@
              if (phoneCheckbox) {
                  currentSettings.phone_detection_enabled = phoneCheckbox.checked;
              }
+
+             // --- MODIFICAÇÃO 5 (JavaScript) ---
+             // Lê o estado do checkbox 'auto_brightness' para enviar à API
+             if (autoBrightnessCheckbox) {
+                currentSettings.auto_brightness = autoBrightnessCheckbox.checked;
+             }
+             // --- Fim da Modificação 5 ---
+
              // Remove o valor do slider 'ear_threshold' desativado, 
              // pois não devemos enviá-lo
              delete currentSettings.ear_threshold; 
@@ -309,7 +345,7 @@
                     if(data.queue_depth === -1) console.warn("Erro status fila."); 
                 }
 
-                // --- MODIFICADO: Atualiza Estado de Calibração e Slider EAR ---
+                // Atualiza Estado de Calibração e Slider EAR
                 if (data.hasOwnProperty('calibration_state')) {
                     const state = data.calibration_state;
                     calibStatus.textContent = state;
@@ -334,7 +370,24 @@
                      const decimals = earThresholdSlider.step.includes('.') ? earThresholdSlider.step.split('.')[1].length : 0;
                      earThresholdValue.textContent = formatNumber(data.ear_threshold, decimals);
                 }
-                // --- Fim da Modificação ---
+                
+                // --- MODIFICAÇÃO 6 (JavaScript) ---
+                // Atualiza o slider de brilho manual APENAS SE o modo auto estiver DESLIGADO
+                // Isto evita que a UI "brigue" com o backend.
+                // O backend (API) deve sempre retornar o brilho ATUAL da câmera.
+                if (data.hasOwnProperty('auto_brightness') && data.hasOwnProperty('brightness')) {
+                    autoBrightnessCheckbox.checked = data.auto_brightness;
+                    
+                    if (!data.auto_brightness) {
+                        // Se o modo auto está DESLIGADO, atualizamos o slider manual
+                        brightnessSlider.value = data.brightness;
+                        const decimals = brightnessSlider.step.includes('.') ? brightnessSlider.step.split('.')[1].length : 0;
+                        document.getElementById('brightness_value').textContent = formatNumber(data.brightness, decimals);
+                    }
+                    // Se o modo auto está LIGADO, não mexemos no slider (ele deve estar disabled)
+                }
+                updateControlStates(); // Garante que o slider é desativado/ativado
+                // --- Fim da Modificação 6 ---
 
             } catch (error) { 
                 console.error("Erro buscar conf/status:", error); 
@@ -368,7 +421,6 @@
                 const key = localStorage.key(i);
                 if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
                     try { const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
-                        // (MODIFICADO) Perfis são apenas *overrides* dos padrões, não 'initialApiSettings'
                         profiles[profileName] = JSON.parse(localStorage.getItem(key));
                     } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
                 }
@@ -389,7 +441,7 @@
                  saveStatus.textContent = `Perfil '${profileName}' guardado!`; saveStatus.style.color = "#4CAF50"; profileNameInput.value = ''; populateProfileDropdown(); profileSelect.value = profileName;
                  updateControlStates();
              } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
-              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
         function updateProfile() {
              const selectedName = profileSelect.value;
@@ -398,29 +450,28 @@
               try { const storageKey = PROFILE_STORAGE_PREFIX + selectedName; localStorage.setItem(storageKey, JSON.stringify(currentSettings));
                  saveStatus.textContent = `Perfil '${selectedName}' atualizado!`; saveStatus.style.color = "#4CAF50"; updateControlStates();
              } catch (e) { console.error(`Erro atualizar '${selectedName}':`, e); saveStatus.textContent = "Erro atualizar."; saveStatus.style.color = "#f44336"; }
-              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
         function loadProfile() {
-              const selectedName = profileSelect.value; let settingsToLoad = null;
-             if (selectedName === "__default__") { 
-                 settingsToLoad = initialApiSettings; 
-                 console.debug("Carregando Padrão (da API)."); 
-             }
-             else { 
-                 const profiles = getSavedProfiles(); 
-                 const profileSettings = profiles[selectedName];
-                 if(profileSettings) { 
-                     console.debug(`Carregando '${selectedName}'.`); 
-                     // (MODIFICADO) Junta o padrão com o perfil salvo
-                     settingsToLoad = { ...initialApiSettings, ...profileSettings };
-                 }
-                 else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-             }
-             if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
+             const selectedName = profileSelect.value; let settingsToLoad = null;
+            if (selectedName === "__default__") { 
+                settingsToLoad = initialApiSettings; 
+                console.debug("Carregando Padrão (da API)."); 
+            }
+            else { 
+                const profiles = getSavedProfiles(); 
+                const profileSettings = profiles[selectedName];
+                if(profileSettings) { 
+                    console.debug(`Carregando '${selectedName}'.`); 
+                    settingsToLoad = { ...initialApiSettings, ...profileSettings };
+                }
+                else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+            }
+            if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
          }
         function deleteProfile() {
-              const selectedName = profileSelect.value; if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-              const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { saveStatus.textContent = "Erro apagar."; saveStatus.style.color = "#f44336"; } } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+             const selectedName = profileSelect.value; if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
+             const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { saveStatus.textContent = "Erro apagar."; saveStatus.style.color = "#f44336"; } } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
          }
 
         // --- Event Listeners ---
@@ -433,6 +484,13 @@
             if (target.id === 'phone_detection_enabled') {
                 updateControlStates();
             }
+
+            // --- MODIFICAÇÃO 7 (JavaScript) ---
+            // Se o checkbox de auto brilho mudar, atualiza os estados
+            if (target.id === 'auto_brightness') {
+                updateControlStates();
+            }
+            // --- Fim da Modificação 7 ---
             
             if (target.type === 'range') {
                 const valueSpan = document.getElementById(`${target.id}_value`);
@@ -477,7 +535,7 @@
         loadProfileButton.addEventListener('click', loadProfile);
         deleteProfileButton.addEventListener('click', deleteProfile);
 
-        // --- NOVO: Event Listener do Botão de Calibração ---
+        // Event Listener do Botão de Calibração
         calibrateButton.addEventListener('click', async () => {
             console.log("Iniciando calibração via API...");
             calibrateButton.disabled = true;
@@ -506,7 +564,6 @@
                 calibrateButton.textContent = "Iniciar Calibração (Falhou)";
             }
         });
-        // --- Fim da Modificação ---
 
 
         // --- Inicialização ---
@@ -524,6 +581,8 @@
                 initialApiSettings = { ...data };
                 runtimeKeys.forEach(k => delete initialApiSettings[k]);
 
+                // O 'auto_brightness' e 'brightness' VÊM da API e 
+                // FICAM no 'initialApiSettings' para o botão "Resetar".
                 console.debug("Configuração inicial recebida da API:", initialApiSettings);
 
                 populateProfileDropdown(); 
@@ -532,9 +591,14 @@
                 applySettingsToControls(initialApiSettings); 
 
                 // updateControlStates() é chamado dentro de applySettingsToControls,
-                // o que garante que o slider EAR começa desativado.
+                // o que garante que os sliders são desativados corretamente no início.
 
+                // --- MODIFICAÇÃO 8 (JavaScript) ---
+                // O loop de status (200ms) agora também atualiza
+                // o estado do brilho (slider e checkbox)
                 const statusInterval = setInterval(fetchAndUpdateSettings, 200);
+                // --- Fim da Modificação 8 ---
+
                 window.addEventListener('beforeunload', () => { clearInterval(statusInterval); if (errorTimeout) clearTimeout(errorTimeout); });
 
             } catch (error) {
