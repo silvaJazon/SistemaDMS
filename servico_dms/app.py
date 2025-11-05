@@ -116,6 +116,7 @@ DETECTION_BACKEND = "MEDIAPIPE"
 # Padrões são usados se NADA for encontrado no arquivo de config
 DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.30)
 DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 2)
+DEFAULT_EAR_CALIB_FACTOR = config_from_file.get("ear_calibration_factor", 0.80) # NOVO
 DEFAULT_MAR_THRESHOLD = config_from_file.get("mar_threshold", 0.40)
 DEFAULT_MAR_FRAMES = config_from_file.get("mar_frames", 2)
 DEFAULT_PHONE_ENABLED = config_from_file.get("phone_detection_enabled", True)
@@ -376,6 +377,29 @@ def video_feed():
 
 
 # --- Rotas da API (api_config, api_alerts, serve_alert_image) ---
+
+@app.route("/api/start_calibration", methods=["POST"])
+def api_start_calibration():
+    """
+    Endpoint para iniciar o processo de calibração do EAR.
+    """
+    logging.debug("Rota /api/start_calibration (POST)")
+    if dms_monitor is None:
+        logging.warning("/api/start_calibration: dms_monitor não inicializado.")
+        return jsonify({"error": "Service not initialized"}), 503
+
+    try:
+        # Envia o comando "start_calibration" para o monitor
+        # O monitor irá alterar o seu estado interno
+        dms_monitor.update_settings({"start_calibration": True})
+        
+        logging.info("Calibração de EAR iniciada via API.")
+        return jsonify({"success": True, "message": "Calibração iniciada"})
+    except Exception as e:
+        logging.error(f"Erro inesperado /api/start_calibration: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     global dms_monitor
@@ -526,6 +550,7 @@ if __name__ == "__main__":
         default_dms_settings = {
             "ear_threshold": DEFAULT_EAR_THRESHOLD,
             "ear_frames": DEFAULT_EAR_FRAMES,
+            "ear_calibration_factor": DEFAULT_EAR_CALIB_FACTOR, # ADICIONADO
             "mar_threshold": DEFAULT_MAR_THRESHOLD,
             "mar_frames": DEFAULT_MAR_FRAMES,
             "phone_detection_enabled": DEFAULT_PHONE_ENABLED,
