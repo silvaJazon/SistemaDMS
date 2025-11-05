@@ -16,6 +16,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-WARNING}
       # Passa a variável ROTATE_FRAME (definida no Makefile) para o contentor.
       - ROTATE_FRAME=${ROTATE_FRAME:-0}
+      # Habilita ou desabilita o streaming de vídeo (0 = desabilitado, 1 = habilitado).
+      - ENABLE_VIDEO_STREAM=${ENABLE_VIDEO_STREAM:-0}
     ports:
       # Mapeamento de portas: Liga a porta 5000 do Pi à porta 5000 do contentor.
       - "5000:5000"

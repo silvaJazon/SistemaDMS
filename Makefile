@@ -11,6 +11,7 @@ SERVICO := servico_dms   # Nome do serviço principal
 # Valores padrão (podem ser sobrescritos na linha de comando)
 LOG_LEVEL ?= WARNING
 ROTATE_FRAME ?= 0
+ENABLE_VIDEO_STREAM ?= 0
 
 # --- Variáveis Internas ---
 DOCKER_COMPOSE := docker compose -f $(COMPOSE_FILE)
@@ -28,7 +29,7 @@ build:
 
 up:
 	@echo ">>> Iniciando os serviços... (Log: $(LOG_LEVEL), Rotação: $(ROTATE_FRAME))"
-	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d
+	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) ENABLE_VIDEO_STREAM=$(ENABLE_VIDEO_STREAM) $(DOCKER_COMPOSE) up -d
 
 down:
 	@echo ">>> Parando e removendo os serviços..."
@@ -36,7 +37,7 @@ down:
 
 prod-up-build: down
 	@echo ">>> Forçando a reconstrução e reiniciando os serviços..."
-	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) $(DOCKER_COMPOSE) up -d --build
+	LOG_LEVEL=$(LOG_LEVEL) ROTATE_FRAME=$(ROTATE_FRAME) ENABLE_VIDEO_STREAM=$(ENABLE_VIDEO_STREAM) $(DOCKER_COMPOSE) up -d --build
 	@echo ">>> Imagem reconstruída e serviços reiniciados!"
 
 # --- Alvos Auxiliares ---
@@ -105,8 +106,9 @@ help:
 	@echo "  make prune               - ⚠️ Limpeza pesada de TUDO (confirmação manual)."
 	@echo ""
 	@echo "Exemplos com parâmetros:"
-	@echo "  make prod-up-build ROTATE_FRAME=180"
-	@echo "  make up LOG_LEVEL=DEBUG ROTATE_FRAME=90"
+	@echo "  make prod-up-build ROTATE_FRAME=180     - Reconstrói e reinicia com frame rotacionado em 180 graus."
+	@echo "  make up LOG_LEVEL=DEBUG ROTATE_FRAME=90 - Define o nível de log para DEBUG e rotaciona o frame em 90 graus."
+	@echo "  make up ENABLE_VIDEO_STREAM=1           - Habilita o streaming de vídeo para DEBUG da Camera."
 	@echo ""
 	@echo "  make help                - Mostra esta ajuda."
 	@echo ""

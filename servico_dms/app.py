@@ -101,6 +101,14 @@ INITIAL_ROTATION = int(
 )
 DETECTION_BACKEND = "MEDIAPIPE"
 
+# --- NOVA VARIAVEL DE CONTROLO ---
+# Converte "0" ou "false" para False, e "1" ou "true" para True
+ENABLE_VIDEO_STREAM = os.environ.get("ENABLE_VIDEO_STREAM", "0").lower() in ("true", "1", "t", "y")
+if not ENABLE_VIDEO_STREAM:
+    logging.warning("!!! ATENCAO: O stream de vídeo está DESABILITADO via ENABLE_VIDEO_STREAM=0.")
+    logging.warning("!!! A rota /video_feed servirá apenas um placeholder estático.")
+# -----------------------------------
+
 # Padrões DMS
 DEFAULT_EAR_THRESHOLD = config_from_file.get("ear_threshold", 0.30)
 DEFAULT_EAR_FRAMES = config_from_file.get("ear_frames", 2)
@@ -361,6 +369,7 @@ def index():
         width=FRAME_WIDTH_DISPLAY,
         height=FRAME_HEIGHT_DISPLAY,
         active_backend=DETECTION_BACKEND,
+        video_stream_enabled=ENABLE_VIDEO_STREAM
     )
 
 
@@ -444,9 +453,30 @@ def generate_video_stream():
 @app.route("/video_feed")
 def video_feed():
     logging.debug("Rota /video_feed acedida.")
+
+    # --- MUDANÇA PRINCIPAL ---
+    if not ENABLE_VIDEO_STREAM:
+        # Se o stream estiver desabilitado, não inicie o gerador.
+        # Em vez disso, sirva um único frame de placeholder e saia.
+        logging.debug("Rota /video_feed: Stream desabilitado. Servindo placeholder estático.")
+
+        placeholder = create_placeholder_frame(text="Stream desabilitado")
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
+        (flag, encodedImage) = cv2.imencode(".jpg", placeholder, encode_param)
+
+        if not flag:
+             logging.error("Falha ao codificar placeholder estático.")
+             return "Error encoding placeholder", 500
+
+        # Retorna o JPEG estático
+        return Response(encodedImage.tobytes(), mimetype="image/jpeg")
+    # --- FIM DA MUDANÇA ---
+
+    # Comportamento original (só executa se ENABLE_VIDEO_STREAM=1)
     if not cam_thread or not cam_thread.is_alive():
         logging.error("Rota /video_feed: Thread câmara não ativa.")
         return "Camera thread not running", 503
+
     return Response(
         generate_video_stream(), mimetype="multipart/x-mixed-replace; boundary=frame"
     )

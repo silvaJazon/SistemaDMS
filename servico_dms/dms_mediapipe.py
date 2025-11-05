@@ -30,7 +30,7 @@ class MediaPipeMonitor(BaseMonitor):
     - Thread 1 (Principal): MediaPipe Face Mesh (EAR/MAR)
     - Thread 2 (Fundo): Híbrido Otimizado:
         1. MediaPipe Hands (Rápido)
-        2. Se Mão encontrada -> YOLOv8s no recorte da Mão (Rápido)
+        2. Se Mão encontrada -> YOLOvxxo recorte da Mão (Rápido)
     """
 
     def __init__(
@@ -67,7 +67,7 @@ class MediaPipeMonitor(BaseMonitor):
 
         # --- 3. Carregar Modelo YOLOv8 (Thread Fundo) ---
         try:
-            model_file = "models/yolov8s.pt"
+            model_file = "models/yolov8n.pt"
             logging.info(f">>> Carregando modelo YOLOv8 ('{model_file}')...")
             self.yolo_model = YOLO(model_file)
             logging.info(f">>> Modelo {model_file} carregado.")

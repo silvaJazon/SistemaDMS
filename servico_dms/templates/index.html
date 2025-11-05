@@ -55,7 +55,15 @@
     <main class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 flex-grow">
 
         <section class="lg:col-span-2 bg-gray-900 p-6 rounded-lg shadow-2xl flex flex-col items-center justify-center">
-            <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
+            
+            {% if video_stream_enabled %}
+                <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
+            {% else %}
+                <div class="w-full h-auto bg-gray-900 text-gray-400 rounded-lg shadow-md border-2 border-gray-700 flex items-center justify-center" 
+                     style="min-height: 400px; aspect-ratio: {{ width }}/{{ height }};">
+                    <p class="text-lg px-4 text-center">(Stream de vídeo desabilitado para economizar CPU)</p>
+                </div>
+            {% endif %}
             <p class="mt-4 text-gray-400">Fonte: {{ source_desc }} (Backend: {{ active_backend }})</p>
             <div class="status-info mt-4 flex flex-wrap gap-x-4 gap-y-2 justify-center text-sm">
                 <span>EAR: <span id="status-ear" class="font-mono text-lg text-blue-300">-</span></span> |
@@ -317,7 +325,7 @@
             // Aplica a todos os checkboxes por 'name'
             controlsContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                  if (settings.hasOwnProperty(cb.name)) {
-                    cb.checked = !!settings[cb.name]; // Converte para booleano
+                     cb.checked = !!settings[cb.name]; // Converte para booleano
                  }
             });
 
@@ -329,20 +337,20 @@
              
              // Pega todos os Sliders, Textos, Números, Passwords e Selects
              controlsContainer.querySelectorAll('input[type="range"], input[type="text"], input[type="number"], input[type="password"], select').forEach(input => {
-                if (input.disabled) return; // Não envia valores desativados (exceto EAR)
-                
-                const name = input.name;
-                if (!name) return;
-                
-                if (input.type === 'range') {
-                    currentSettings[name] = input.step.includes('.') ? parseFloat(input.value) : parseInt(input.value);
-                } else if (input.type === 'number' || input.name === 'mqtt_port' || input.name === 'mqtt_retention_days') {
-                    currentSettings[name] = parseInt(input.value) || 0;
-                } else if (input.tagName === 'SELECT') {
-                     currentSettings[name] = parseInt(input.value); // (só temos 'rotation' por agora)
-                } else {
-                     currentSettings[name] = input.value; // Textos e Passwords
-                }
+                 if (input.disabled) return; // Não envia valores desativados (exceto EAR)
+                 
+                 const name = input.name;
+                 if (!name) return;
+                 
+                 if (input.type === 'range') {
+                     currentSettings[name] = input.step.includes('.') ? parseFloat(input.value) : parseInt(input.value);
+                 } else if (input.type === 'number' || input.name === 'mqtt_port' || input.name === 'mqtt_retention_days') {
+                     currentSettings[name] = parseInt(input.value) || 0;
+                 } else if (input.tagName === 'SELECT') {
+                      currentSettings[name] = parseInt(input.value); // (só temos 'rotation' por agora)
+                 } else {
+                      currentSettings[name] = input.value; // Textos e Passwords
+                 }
              });
              
              // Pega todos os Checkboxes
@@ -472,7 +480,7 @@
              const profiles = getSavedProfiles(); profileSelect.innerHTML = ''; const defaultOption = document.createElement('option');
              defaultOption.value = "__default__"; defaultOption.textContent = "Padrão (Editável)"; profileSelect.appendChild(defaultOption);
              const sortedNames = Object.keys(profiles).sort(); sortedNames.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; profileSelect.appendChild(option); });
-         }
+        }
         function saveProfile() {
              const profileName = profileNameInput.value.trim();
              if (!profileName || profileName === "Padrão" || profileName === "__default__") { saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
@@ -483,7 +491,7 @@
                  updateControlStates();
              } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-         }
+        }
         function updateProfile() {
              const selectedName = profileSelect.value;
              if (selectedName === "__default__") { saveStatus.textContent = "Selecione perfil salvo."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
@@ -492,7 +500,7 @@
                  saveStatus.textContent = `Perfil '${selectedName}' atualizado!`; saveStatus.style.color = "#4CAF50"; updateControlStates();
              } catch (e) { console.error(`Erro atualizar '${selectedName}':`, e); saveStatus.textContent = "Erro atualizar."; saveStatus.style.color = "#f44336"; }
              setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-         }
+        }
         function loadProfile() {
              const selectedName = profileSelect.value; let settingsToLoad = null;
             if (selectedName === "__default__") { 
@@ -507,11 +515,11 @@
                 else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
             }
             if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
-         }
+        }
         function deleteProfile() {
              const selectedName = profileSelect.value; if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
              const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { saveStatus.textContent = "Erro apagar."; saveStatus.style.color = "#f44336"; } } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-         }
+        }
 
 
         // --- Event Listeners ---
@@ -542,7 +550,7 @@
             // Envia a configuração para a API (backend)
             // (Não envia se for input de texto, para evitar envios a cada tecla)
             if (target.type !== 'text' && target.type !== 'password' && target.type !== 'number') {
-                 postSettings();
+                postSettings();
             }
         });
         
@@ -651,9 +659,34 @@
         initializeApp();
 
         // Stream Error Handling
-        var stream = document.getElementById("stream"); let errorTimeout = null;
-        stream.onerror = function(event) { console.error("Erro stream (onerror)."); stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; if (!errorTimeout) { console.warn("Tentando recarregar stream em 5s..."); errorTimeout = setTimeout(function() { var timestamp = new Date().getTime(); var newSrc = "{{ url_for('video_feed') }}?" + timestamp; console.log("Tentando src:", newSrc); stream.src = newSrc; errorTimeout = null; }, 5000); } };
-        stream.onload = function() { if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; } }
+        var stream = document.getElementById("stream"); 
+        let errorTimeout = null;
+        
+        // --- *** INÍCIO DA MODIFICAÇÃO *** ---
+        // Só adiciona listeners de erro/reconexão se o elemento 'stream' existir
+        if (stream) {
+            stream.onerror = function(event) { 
+                console.error("Erro stream (onerror)."); 
+                stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs="; 
+                if (!errorTimeout) { 
+                    console.warn("Tentando recarregar stream em 5s..."); 
+                    errorTimeout = setTimeout(function() { 
+                        var timestamp = new Date().getTime(); 
+                        var newSrc = "{{ url_for('video_feed') }}?" + timestamp; 
+                        console.log("Tentando src:", newSrc); 
+                        stream.src = newSrc; 
+                        errorTimeout = null; 
+                    }, 5000); 
+                } 
+            };
+            stream.onload = function() { 
+                if (errorTimeout) { 
+                    clearTimeout(errorTimeout); 
+                    errorTimeout = null; 
+                } 
+            }
+        }
+        // --- *** FIM DA MODIFICAÇÃO *** ---
     </script>
 </body>
 </html>
