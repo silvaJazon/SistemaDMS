@@ -62,6 +62,7 @@ COPY dms_base.py .
 COPY dms_mediapipe.py .
 COPY camera_thread.py .
 COPY event_handler.py .
+COPY mqtt_uploader.py .
 COPY __init__.py .
 COPY tests/ ./tests/
 COPY base-requirements.txt .
