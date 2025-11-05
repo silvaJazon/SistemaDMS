@@ -1,5 +1,7 @@
 # Documentação: Núcleo do SistemaDMS
 # (Versão com estabilização de EAR (Grace Period))
+# (Versão com Calibração Automática de EAR)
+# (CORREÇÃO 1.1: Lógica de Latch de Alerta)
 
 import cv2
 import mediapipe as mp
@@ -104,12 +106,19 @@ class MediaPipeMonitor(BaseMonitor):
             raise RuntimeError(f"Erro YOLO: {e}")
 
         # --- 4. Contadores e Configurações ---
-        self.lock = threading.Lock()
+        self.lock = threading.RLock() # (Usar RLock é ligeiramente mais seguro)
+        
         self.drowsiness_counter = 0
         self.yawn_counter = 0
         
-        # Novo contador para estabilização (Grace Period)
         self.drowsiness_reset_counter = 0
+        self.yawn_reset_counter = 0 # NOVO: Contador de reset para Bocejo
+
+        # --- NOVAS VARIÁVEIS DE CALIBRAÇÃO ---
+        self.calibration_state = "IDLE"  # Estados: 'IDLE', 'CALIBRATING', 'DONE'
+        self.calibration_samples = []
+        self.CALIBRATION_FRAMES_TARGET = 100 
+        # -------------------------------------
 
         self.drowsy_alert_active = False
         self.yawn_alert_active = False
@@ -117,13 +126,13 @@ class MediaPipeMonitor(BaseMonitor):
 
         self.ear_threshold = self.default_settings.get("ear_threshold", 0.30)
         self.ear_frames = self.default_settings.get("ear_frames", 2)
-        
-        # Novo limiar de frames para o reset (Grace Period)
-        # (Quantos frames de olhos ABERTOS são necessários para resetar o alerta)
         self.ear_reset_frames = self.default_settings.get("ear_reset_frames", 5) 
-
+        self.ear_calibration_factor = self.default_settings.get("ear_calibration_factor", 0.80)
+        
         self.mar_threshold = self.default_settings.get("mar_threshold", 0.40)
         self.mar_frames = self.default_settings.get("mar_frames", 2)
+        # NOVO: Frames de reset para bocejo (lógica de Grace Period)
+        self.mar_reset_frames = self.default_settings.get("mar_reset_frames", 5) 
 
         self.phone_detection_enabled = self.default_settings.get(
             "phone_detection_enabled", True
@@ -161,7 +170,7 @@ class MediaPipeMonitor(BaseMonitor):
             ):
                 with self.yolo_lock:
                     self.last_yolo_boxes = []
-                    self.phone_detected_time = None  # (NOVO) Reseta o tempo
+                    self.phone_detected_time = None 
                 logging.info("_yolo_loop: Deteção de celular DESATIVADA. A aguardar...")
                 if self.stop_event.wait(timeout=2.0):
                     break
@@ -334,6 +343,45 @@ class MediaPipeMonitor(BaseMonitor):
             coords[i] = (int(lm.x * self.frame_width), int(lm.y * self.frame_height))
         return coords
 
+    def _finish_calibration(self):
+        """
+        Função interna para calcular e aplicar o limiar EAR após 
+        a recolha de amostras.
+        (Assume que self.lock JÁ ESTÁ ADQUIRIDO pela 'process_frame')
+        """
+        
+        if len(self.calibration_samples) < self.CALIBRATION_FRAMES_TARGET / 2:
+            logging.warning("Calibração falhou: poucas amostras. Voltando a IDLE.")
+            self.calibration_state = "IDLE"
+            self.calibration_samples = []
+            return
+
+        sorted_samples = sorted(self.calibration_samples)
+        percentile_index = int(len(sorted_samples) * 0.20)
+        
+        valid_samples = sorted_samples[percentile_index:]
+        
+        if not valid_samples:
+            logging.warning("Calibração falhou: não há amostras válidas (talvez só piscadas?).")
+            self.calibration_state = "IDLE"
+            self.calibration_samples = []
+            return
+            
+        baseline_ear_open = np.mean(valid_samples)
+        
+        new_threshold = baseline_ear_open * self.ear_calibration_factor
+
+        logging.info(f"CALIBRAÇÃO CONCLUÍDA:")
+        logging.info(f"  > EAR Base (Aberto): {baseline_ear_open:.4f}")
+        logging.info(f"  > Fator Aplicado: {self.ear_calibration_factor * 100}%")
+        
+        self.ear_threshold = new_threshold
+        self.calibration_state = "DONE"
+        self.calibration_samples = [] 
+        
+        logging.info(f"  > NOVO Limiar EAR (ear_threshold) definido para: {self.ear_threshold:.4f}")
+
+
     def process_frame(self, frame, frame_rgb):
         logging.debug("DMSCore(MediaPipe): process_frame (MP Rápido) iniciado.")
         start_time_total = time.time()
@@ -410,63 +458,84 @@ class MediaPipeMonitor(BaseMonitor):
         with self.lock:
             logging.debug("DMSCore(MediaPipe): Lock alerta OK.")
 
+            current_calib_state = self.calibration_state
+
             if face_found_this_frame:
                 
-                # Sonolência (Lógica de estabilização com Grace Period)
-                if ear < self.ear_threshold:
-                    # Olhos fechados (EAR baixo), incrementa contador de sonolência
-                    self.drowsiness_counter += 1
+                # --- LÓGICA DE CALIBRAÇÃO ---
+                if current_calib_state == "CALIBRATING":
+                    self.calibration_samples.append(ear)
                     
-                    # Como os olhos estão fechados, reinicia o contador de "olhos abertos" (grace period)
-                    self.drowsiness_reset_counter = 0 
+                    progresso = len(self.calibration_samples)
+                    texto_calib = f"CALIBRANDO... {progresso}/{self.CALIBRATION_FRAMES_TARGET}"
+                    cv2.putText(frame, texto_calib, (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    cv2.putText(frame, "MANTENHA OS OLHOS ABERTOS", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
-                    logging.debug(
-                        f"DMSCore(MediaPipe): EAR baixo ({ear:.3f}<{self.ear_threshold}), "
-                        f"cont={self.drowsiness_counter}/{self.ear_frames}"
-                    )
-                    
-                    # Ativa o alerta se o contador de sonolência atingir o limite
-                    if (
-                        self.drowsiness_counter >= self.ear_frames
-                        and not self.drowsy_alert_active
-                    ):
-                        self.drowsy_alert_active = True
-                        events_list.append(
-                            {
-                                "type": "SONOLENCIA",
-                                "value": f"EAR: {ear:.2f}",
-                                "timestamp": datetime.now().isoformat() + "Z",
-                            }
-                        )
-                        logging.warning("DMSCore(MediaPipe): EVENTO SONOLENCIA.")
+                    self.drowsiness_counter = 0
+                    self.drowsy_alert_active = False
+                    self.drowsiness_reset_counter = 0
+
+                    if len(self.calibration_samples) >= self.CALIBRATION_FRAMES_TARGET:
+                        self._finish_calibration() 
                 
-                else:
-                    # Olhos abertos (EAR >= threshold)
+                elif current_calib_state == "IDLE":
+                    cv2.putText(frame, "CALIBRACAO NECESSARIA", (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                    cv2.putText(frame, "Pressione 'Calibrar' na interface", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
                     
-                    # Incrementa o contador de "olhos abertos" (grace period)
-                    self.drowsiness_reset_counter += 1
-                    
-                    logging.debug(
-                        f"DMSCore(MediaPipe): EAR OK ({ear:.3f}). "
-                        f"Contagem para reset: {self.drowsiness_reset_counter}/{self.ear_reset_frames}"
-                    )
+                    self.drowsiness_counter = 0
+                    self.drowsy_alert_active = False
+                    self.drowsiness_reset_counter = 0
 
-                    # Apenas reinicia o alerta se os olhos estiverem abertos
-                    # por um número 'ear_reset_frames' consecutivo.
-                    if self.drowsiness_reset_counter >= self.ear_reset_frames:
-                        if self.drowsiness_counter > 0 or self.drowsy_alert_active:
-                            logging.debug("DMSCore(MediaPipe): Sonolência RESETADA (Grace period).")
+                elif current_calib_state == "DONE":
+                    # --- Lógica de Sonolência (EAR) ---
+                    if ear < self.ear_threshold: 
+                        self.drowsiness_counter += 1
+                        self.drowsiness_reset_counter = 0 
                         
-                        self.drowsiness_counter = 0
-                        self.drowsy_alert_active = False
+                        logging.debug(
+                            f"DMSCore(MediaPipe): EAR baixo ({ear:.3f}<{self.ear_threshold:.3f}), "
+                            f"cont={self.drowsiness_counter}/{self.ear_frames}"
+                        )
+                        
+                        if (
+                            self.drowsiness_counter >= self.ear_frames
+                            and not self.drowsy_alert_active
+                        ):
+                            self.drowsy_alert_active = True
+                            events_list.append(
+                                {
+                                    "type": "SONOLENCIA",
+                                    "value": f"EAR: {ear:.2f}",
+                                    "timestamp": datetime.now().isoformat() + "Z",
+                                }
+                            )
+                            logging.warning("DMSCore(MediaPipe): EVENTO SONOLENCIA.")
                     
-                    # Nota: Se o reset_counter ainda não atingiu o limite, 
-                    # self.drowsiness_counter e self.drowsy_alert_active são mantidos.
-                    # Isto previne que um único frame "bom" cancele o alerta.
+                    else:
+                        # Olhos abertos (EAR >= threshold)
+                        self.drowsiness_reset_counter += 1
+                        
+                        logging.debug(
+                            f"DMSCore(MediaPipe): EAR OK ({ear:.3f}). "
+                            f"Contagem para reset: {self.drowsiness_reset_counter}/{self.ear_reset_frames}"
+                        )
 
-                # Bocejo
+                        if self.drowsiness_reset_counter >= self.ear_reset_frames:
+                            if self.drowsiness_counter > 0 or self.drowsy_alert_active:
+                                logging.debug("DMSCore(MediaPipe): Sonolência RESETADA (Grace period).")
+                            
+                            self.drowsiness_counter = 0
+                            self.drowsy_alert_active = False
+                
+                # --- Lógica de Bocejo (MAR) com Grace Period ---
                 if mar > self.mar_threshold:
                     self.yawn_counter += 1
+                    self.yawn_reset_counter = 0 # Reseta contador 'boca fechada'
+                    
                     logging.debug(
                         f"DMSCore(MediaPipe): MAR alto ({mar:.3f}>{self.mar_threshold}), "
                         f"cont={self.yawn_counter}/{self.mar_frames}"
@@ -485,21 +554,47 @@ class MediaPipeMonitor(BaseMonitor):
                         )
                         logging.warning("DMSCore(MediaPipe): EVENTO BOCEJO.")
                 else:
-                    if self.yawn_counter > 0:
-                        logging.debug("DMSCore(MediaPipe): Bocejo reset.")
-                    self.yawn_counter = 0
-                    self.yawn_alert_active = False
+                    # Boca fechada (MAR <= threshold)
+                    self.yawn_reset_counter += 1
+                    
+                    logging.debug(
+                        f"DMSCore(MediaPipe): MAR OK ({mar:.3f}). "
+                        f"Contagem reset bocejo: {self.yawn_reset_counter}/{self.mar_reset_frames}"
+                    )
+                    
+                    # Apenas reseta o alerta se a boca estiver fechada
+                    # por 'mar_reset_frames' consecutivos.
+                    if self.yawn_reset_counter >= self.mar_reset_frames:
+                        if self.yawn_counter > 0 or self.yawn_alert_active:
+                             logging.debug("DMSCore(MediaPipe): Bocejo RESETADO (Grace period).")
+                        
+                        self.yawn_counter = 0
+                        self.yawn_alert_active = False
+                # --- Fim da Lógica de Bocejo ---
 
             else:
+                # --- Lógica de Nenhuma Face Encontrada ---
                 logging.debug("DMSCore(MediaPipe): Nenhuma face encontrada.")
-                # Se nenhuma face for encontrada, reinicia tudo (incluindo o grace period)
+                # Se nenhuma face for encontrada, reinicia os contadores de frames,
+                # mas mantém as travas de alerta (drowsy_alert_active) ATIVADAS.
+                # O alerta só será resetado quando o motorista provar que está
+                # acordado (olhos abertos) ou sem bocejar (boca fechada) 
+                # pelo 'reset_frames' período.
+                
                 self.drowsiness_counter = 0
-                self.drowsy_alert_active = False
                 self.drowsiness_reset_counter = 0 
+                
                 self.yawn_counter = 0
-                self.yawn_alert_active = False
+                self.yawn_reset_counter = 0 # (Adicionado)
 
-            # (MODIFICADO) Lógica de celular baseada em tempo
+                # Se a calibração estava a decorrer e a face foi perdida,
+                # para e volta a IDLE para recomeçar
+                if self.calibration_state == "CALIBRATING":
+                    logging.warning("Calibração interrompida (face perdida). Voltando a IDLE.")
+                    self.calibration_state = "IDLE"
+                    self.calibration_samples = []
+            
+            # --- Lógica de Celular (Distração) ---
             if phone_enabled_locked:
                 if current_phone_detected_time is not None:
                     elapsed = time.time() - current_phone_detected_time
@@ -527,6 +622,7 @@ class MediaPipeMonitor(BaseMonitor):
 
         logging.debug("DMSCore(MediaPipe): Lock alerta libertado.")
 
+        # --- Desenhar Alertas na Tela ---
         if self.drowsy_alert_active:
             cv2.putText(
                 frame,
@@ -538,20 +634,22 @@ class MediaPipeMonitor(BaseMonitor):
                 2,
             )
         if self.yawn_alert_active:
+            y_pos = 90 if self.calibration_state != "DONE" else 60
             cv2.putText(
                 frame,
                 "ALERTA: BOCEJO!",
-                (10, 60),
+                (10, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
                 (0, 255, 255),
                 2,
             )
         if phone_enabled_locked and self.phone_alert_active:
+            y_pos = 120 if self.calibration_state != "DONE" else 90
             cv2.putText(
                 frame,
                 "ALERTA: CELULAR/MAO!",
-                (10, 90),
+                (10, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
                 (255, 0, 255),
@@ -567,6 +665,12 @@ class MediaPipeMonitor(BaseMonitor):
 
         with self.lock:
             try:
+                if settings.get("start_calibration"):
+                    logging.info("Comando 'start_calibration' recebido. Iniciando calibração...")
+                    self.calibration_state = "CALIBRATING"
+                    self.calibration_samples = []
+                    settings.pop("start_calibration", None)
+                
                 self.ear_threshold = float(
                     settings.get("ear_threshold", self.ear_threshold)
                 )
@@ -576,10 +680,18 @@ class MediaPipeMonitor(BaseMonitor):
                     settings.get("ear_reset_frames", self.ear_reset_frames)
                 )
 
+                self.ear_calibration_factor = float(
+                    settings.get("ear_calibration_factor", self.ear_calibration_factor)
+                )
+
                 self.mar_threshold = float(
                     settings.get("mar_threshold", self.mar_threshold)
                 )
                 self.mar_frames = int(settings.get("mar_frames", self.mar_frames))
+                
+                self.mar_reset_frames = int(
+                    settings.get("mar_reset_frames", self.mar_reset_frames)
+                )
 
                 self.phone_detection_enabled = bool(
                     settings.get("phone_detection_enabled", self.phone_detection_enabled)
@@ -589,15 +701,17 @@ class MediaPipeMonitor(BaseMonitor):
                 )
                 self.phone_frames = int(
                     settings.get("phone_frames", self.phone_frames)
-                )  # (Segundos)
+                ) 
 
                 distraction_status = (
                     "ATIVADA" if self.phone_detection_enabled else "DESATIVADA"
                 )
                 logging.info(
-                    f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold}({self.ear_frames}f), "
-                    f"EAR_Reset>{self.ear_reset_frames}f, " # Log atualizado
+                    f"Conf DMS Core(MediaPipe): EAR<{self.ear_threshold:.4f}({self.ear_frames}f), "
+                    f"EAR_Reset>{self.ear_reset_frames}f, "
+                    f"EAR_Fator>{self.ear_calibration_factor}, "
                     f"MAR>{self.mar_threshold}({self.mar_frames}f), "
+                    f"MAR_Reset>{self.mar_reset_frames}f, " # Log atualizado
                     f"Celular:{distraction_status} "
                     f"[Conf>{self.phone_confidence}({self.phone_frames}s)]"
                 )
@@ -622,9 +736,12 @@ class MediaPipeMonitor(BaseMonitor):
             return {
                 "ear_threshold": self.ear_threshold,
                 "ear_frames": self.ear_frames,
-                "ear_reset_frames": self.ear_reset_frames, # Adicionada a nova configuração
+                "ear_reset_frames": self.ear_reset_frames,
+                "ear_calibration_factor": self.ear_calibration_factor, 
+                "calibration_state": self.calibration_state,       
                 "mar_threshold": self.mar_threshold,
                 "mar_frames": self.mar_frames,
+                "mar_reset_frames": self.mar_reset_frames, # Adicionado
                 "phone_detection_enabled": self.phone_detection_enabled,
                 "phone_confidence": self.phone_confidence,
                 "phone_frames": self.phone_frames,
