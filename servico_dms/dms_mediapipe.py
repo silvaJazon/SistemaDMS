@@ -393,7 +393,7 @@ class MediaPipeMonitor(BaseMonitor):
             results_mp = self.face_mesh.process(frame_rgb) 
         except Exception as e:
             logging.error(f"DMSCore(MediaPipe): Erro .process(): {e}", exc_info=True)
-            return frame, events_list, status_data
+            return frame, events_list, status_data, False # Retorna False em caso de erro
 
         if results_mp.multi_face_landmarks:
             face_landmarks = results_mp.multi_face_landmarks[0].landmark
@@ -658,7 +658,10 @@ class MediaPipeMonitor(BaseMonitor):
 
         total_time = time.time() - start_time_total
         logging.debug(f"DMSCore(MediaPipe): process_frame (MP Rápido) {total_time:.4f}s.")
-        return frame, events_list, status_data
+        
+        # --- MODIFICAÇÃO PRINCIPAL ---
+        # Retorna o status da deteção de rosto
+        return frame, events_list, status_data, face_found_this_frame
 
     def update_settings(self, settings):
         logging.debug(f"DMSCore(MediaPipe): Tentando atualizar conf: {settings}")

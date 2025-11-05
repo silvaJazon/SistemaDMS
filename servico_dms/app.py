@@ -123,6 +123,111 @@ DEFAULT_PHONE_ENABLED = config_from_file.get("phone_detection_enabled", True)
 DEFAULT_PHONE_CONF = config_from_file.get("phone_confidence", 0.30)
 DEFAULT_PHONE_FRAMES = config_from_file.get("phone_frames", 1)  # (Segundos)
 
+
+# --- Gerenciador de Brilho Automático (NOVA CLASSE) ---
+class AutoBrightnessManager:
+    """
+    Gerencia o ajuste automático de brilho com base no sucesso da deteção.
+    """
+    def __init__(self, cam_thread_ref: CameraThread):
+        self.cam_thread = cam_thread_ref
+        self.enabled = False
+        self.consecutive_failures = 0
+        
+        # --- Constantes de Ajuste ---
+        # (Ajuste estes valores conforme necessário)
+        self.FAILURE_THRESHOLD = 50  # Nº de frames sem rosto antes de agir
+        self.BRIGHTNESS_STEP = 5.0   # O "tamanho" do passo de ajuste
+        self.BRIGHTNESS_MIN = 0.0    # Valor mínimo de brilho
+        self.BRIGHTNESS_MAX = 60.0   # Valor máximo de brilho (ajuste!)
+        # ---------------------------
+
+        self.current_brightness = 17.0 # Padrão inicial
+        self.search_direction = +1     # Começa aumentando
+        
+        if self.cam_thread and not self.cam_thread.is_rtsp:
+            try:
+                self.current_brightness = self.cam_thread.get_brightness()
+                logging.info(f"AutoBrightnessManager: Brilho inicial lido da câmara: {self.current_brightness}")
+            except Exception as e:
+                logging.warning(f"AutoBrightnessManager: Não foi possível ler brilho inicial. Usando padrão. {e}")
+        else:
+            logging.warning("AutoBrightnessManager: Câmara RTSP ou indisponível. Auto-brilho não funcionará.")
+
+
+    def set_enabled(self, enabled: bool):
+        """Ativa ou desativa o modo automático."""
+        if self.cam_thread.is_rtsp:
+             self.enabled = False # Garante que está desligado para RTSP
+             if enabled:
+                 logging.warning("AutoBrightness: Não pode ser ativado, fonte é RTSP.")
+             return
+
+        if enabled == self.enabled:
+            return # Sem mudança
+
+        self.enabled = enabled
+        if self.enabled:
+            # Ao ligar, lê o brilho atual como ponto de partida
+            self.current_brightness = self.cam_thread.get_brightness()
+            self.consecutive_failures = 0
+            self.search_direction = +1
+            logging.info(f"AutoBrightness: ATIVADO. Iniciando do brilho atual: {self.current_brightness}")
+        else:
+            logging.info("AutoBrightness: DESATIVADO.")
+
+    def is_enabled(self) -> bool:
+        """Verifica se o modo automático está ativo."""
+        return self.enabled
+
+    def update_status(self, face_found: bool):
+        """
+        Método principal chamado a cada frame pelo detection_loop.
+        """
+        if not self.enabled:
+            return # Não faz nada se estiver desligado
+
+        if face_found:
+            # Sucesso! Reseta o contador de falhas.
+            self.consecutive_failures = 0
+            return
+
+        # --- Falha na Deteção ---
+        self.consecutive_failures += 1
+
+        # Se ainda não atingimos o limite, espera mais
+        if self.consecutive_failures < self.FAILURE_THRESHOLD:
+            return
+            
+        # --- HORA DE AGIR ---
+        # Atingimos o limite de falhas. Vamos ajustar o brilho.
+        
+        # Reseta o contador para dar tempo à câmera de se ajustar
+        self.consecutive_failures = 0 
+        
+        # Calcula o próximo brilho na "varredura"
+        self.current_brightness += (self.search_direction * self.BRIGHTNESS_STEP)
+
+        # Verifica os limites (Min e Max)
+        if self.current_brightness >= self.BRIGHTNESS_MAX:
+            self.current_brightness = self.BRIGHTNESS_MAX
+            self.search_direction = -1 # Inverte a direção
+            logging.debug("AutoBrightness: Atingiu BRILHO MÁXIMO. Invertendo direção.")
+
+        elif self.current_brightness <= self.BRIGHTNESS_MIN:
+            self.current_brightness = self.BRIGHTNESS_MIN
+            self.search_direction = +1 # Inverte a direção
+            logging.debug("AutoBrightness: Atingiu BRILHO MÍNIMO. Invertendo direção.")
+
+        logging.info(f"AutoBrightness: Rosto não detectado. Ajustando brilho para {self.current_brightness}")
+        
+        try:
+            # Envia o comando para a câmera
+            self.cam_thread.update_brightness(self.current_brightness)
+        except Exception as e:
+             logging.error(f"AutoBrightness: Erro ao definir brilho: {e}")
+
+
 # --- Variáveis Globais ---
 output_frame_display = None
 output_frame_lock = threading.Lock()
@@ -135,6 +240,7 @@ detection_thread = None
 event_handler = None
 event_queue = None
 dms_monitor: BaseMonitor = None
+brightness_manager: "AutoBrightnessManager" = None # <-- Definição global
 
 app = Flask(__name__)
 
@@ -161,7 +267,8 @@ def create_placeholder_frame(text="Aguardando camera..."):
 
 # --- Threads Principais (detection_loop) ---
 def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref):
-    global output_frame_display, status_data_global
+    # 'global' é necessário aqui pois estamos DENTRO de uma função
+    global output_frame_display, status_data_global, brightness_manager
     logging.info(
         f">>> Loop de deteção (Backend: {DETECTION_BACKEND}) "
         f"iniciado (Alvo: {TARGET_FPS} FPS)."
@@ -196,10 +303,16 @@ def detection_loop(cam_thread_ref, dms_monitor_ref: BaseMonitor, event_queue_ref
                 stop_event.wait(timeout=1.0)
                 continue
 
-            processed_frame, events, status_data = dms_monitor_ref.process_frame(
+            # Captura o novo valor 'face_found'
+            processed_frame, events, status_data, face_found = dms_monitor_ref.process_frame(
                 frame.copy(), frame_rgb
             )
             logging.debug("DetectionLoop: process_frame() retornou.")
+
+            # --- NOVO BLOCO: Atualiza o AutoBrightnessManager ---
+            if brightness_manager:
+                brightness_manager.update_status(face_found)
+            # ---------------------------------------------------
 
             logging.debug("DetectionLoop: A adquirir output_frame_lock...")
             with output_frame_lock:
@@ -402,9 +515,12 @@ def api_start_calibration():
 
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
-    global dms_monitor
+    # 'global' é necessário aqui pois estamos DENTRO de uma função
+    global dms_monitor, brightness_manager
     logging.debug(f"Rota /api/config (Método: {request.method})")
-    if dms_monitor is None or not cam_thread or not event_queue:
+    
+    # Verifica se 'brightness_manager' foi inicializado
+    if dms_monitor is None or not cam_thread or not event_queue or brightness_manager is None:
         logging.warning("/api/config: Serviço não inicializado.")
         return jsonify({"error": "Service not fully initialized"}), 503
 
@@ -414,6 +530,10 @@ def api_config():
             current_settings["brightness"] = cam_thread.get_brightness()
             current_settings["rotation"] = cam_thread.get_rotation()
             current_settings["active_backend"] = DETECTION_BACKEND
+
+            # --- NOVO: Retorna o status do auto-brilho ---
+            current_settings["auto_brightness"] = brightness_manager.is_enabled()
+            # -----------------------------------------------
 
             logging.debug("api_config GET: Lock status...")
             with status_data_lock:
@@ -442,6 +562,19 @@ def api_config():
             if not new_settings:
                 return jsonify({"success": False, "error": "No data received"}), 400
 
+            # --- NOVO BLOCO: Controla o auto-brilho ---
+            if "auto_brightness" in new_settings:
+                try:
+                    brightness_manager.set_enabled(bool(new_settings["auto_brightness"]))
+                except Exception as e:
+                     logging.error(f"Erro ao definir auto_brightness: {e}")
+                
+                # Se o modo automático foi ativado, remove o ajuste manual de
+                # brilho da requisição para evitar conflitos.
+                if new_settings["auto_brightness"]:
+                    new_settings.pop("brightness", None)
+            # ---------------------------------------------------
+
             dms_success = dms_monitor.update_settings(new_settings)
 
             cam_success = True
@@ -462,6 +595,10 @@ def api_config():
                     all_current_settings = dms_monitor.get_settings()
                     all_current_settings["brightness"] = cam_thread.get_brightness()
                     all_current_settings["rotation"] = cam_thread.get_rotation()
+                    
+                    # Salva o status do auto-brilho também
+                    all_current_settings["auto_brightness"] = brightness_manager.is_enabled()
+                    
                     save_config(all_current_settings)
                 except Exception as e:
                     logging.error(
@@ -533,6 +670,9 @@ def shutdown_handler(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
+    
+    # A linha 'global brightness_manager' foi REMOVIDA daqui,
+    # pois este bloco já é o escopo global.
 
     try:
         logging.info(
@@ -587,6 +727,16 @@ if __name__ == "__main__":
             raise RuntimeError("Thread câmara terminou.")
 
         logging.info(">>> Primeiro frame recebido!")
+
+        # --- NOVO: Inicializa o Gerenciador de Brilho ---
+        logging.info("A inicializar o AutoBrightnessManager...")
+        # Esta atribuição modifica a variável global 'brightness_manager'
+        brightness_manager = AutoBrightnessManager(cam_thread)
+        
+        # Opcional: Carrega o estado 'auto_brightness' do arquivo de config
+        if config_from_file.get("auto_brightness", False):
+             brightness_manager.set_enabled(True)
+        # ------------------------------------------------
 
         try:
             dms_monitor.start_yolo_thread(cam_thread)

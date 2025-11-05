@@ -34,10 +34,11 @@ class BaseMonitor(abc.ABC):
 
         :param frame: O frame de vídeo original (BGR).
         :param frame_rgb: O frame de vídeo em formato RGB (otimizado p/ MediaPipe).
-        :return: Uma tupla (processed_frame, events_list, status_data)
+        :return: Uma tupla (processed_frame, events_list, status_data, face_found)
                  - processed_frame: O frame com anotações de depuração (olhos, rosto, etc.)
                  - events_list: Uma lista de dicionários de eventos (ex: {"type": "SONOLENCIA", ...})
                  - status_data: Um dicionário com métricas atuais (ex: {"ear": 0.25, ...})
+                 - face_found: (bool) True se um rosto foi detectado neste frame.
         """
         pass
 
