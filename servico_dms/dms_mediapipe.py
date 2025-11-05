@@ -115,7 +115,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.yawn_reset_counter = 0 # NOVO: Contador de reset para Bocejo
 
         # --- NOVAS VARIÁVEIS DE CALIBRAÇÃO ---
-        self.calibration_state = "IDLE"  # Estados: 'IDLE', 'CALIBRATING', 'DONE'
+        self.calibration_state = self.default_settings.get("calibration_state", "IDLE")
         self.calibration_samples = []
         self.CALIBRATION_FRAMES_TARGET = 100 
         # -------------------------------------

@@ -746,6 +746,7 @@ if __name__ == "__main__":
             "phone_detection_enabled": DEFAULT_PHONE_ENABLED,
             "phone_confidence": DEFAULT_PHONE_CONF,
             "phone_frames": DEFAULT_PHONE_FRAMES,
+            "calibration_state": config_from_file.get("calibration_state", "IDLE")
         }
 
         logging.info("A carregar o MediaPipeMonitor...")
