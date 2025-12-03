@@ -484,26 +484,6 @@ def video_feed():
 
 # --- Rotas da API (api_config, api_alerts, serve_alert_image) ---
 
-@app.route("/api/start_calibration", methods=["POST"])
-def api_start_calibration():
-    """
-    Endpoint para iniciar o processo de calibração do EAR.
-    """
-    logging.debug("Rota /api/start_calibration (POST)")
-    if dms_monitor is None:
-        logging.warning("/api/start_calibration: dms_monitor não inicializado.")
-        return jsonify({"error": "Service not initialized"}), 503
-
-    try:
-        dms_monitor.update_settings({"start_calibration": True})
-        
-        logging.info("Calibração de EAR iniciada via API.")
-        return jsonify({"success": True, "message": "Calibração iniciada"})
-    except Exception as e:
-        logging.error(f"Erro inesperado /api/start_calibration: {e}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
-
-
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     global dms_monitor, brightness_manager, mqtt_thread # <-- mqtt_thread adicionado
@@ -780,14 +760,6 @@ if __name__ == "__main__":
         brightness_manager = AutoBrightnessManager(cam_thread)
         if config_from_file.get("auto_brightness", False):
              brightness_manager.set_enabled(True)
-        
-        try:
-            dms_monitor.start_yolo_thread(cam_thread)
-            logging.info(">>> Thread de deteção de celular (YOLO) iniciada.")
-        except AttributeError as e:
-            logging.warning(f"Não foi possível iniciar o thread YOLO: {e}")
-        except Exception as e:
-            logging.error(f"Erro ao iniciar thread YOLO: {e}", exc_info=True)
 
         detection_thread = threading.Thread(
             target=detection_loop,

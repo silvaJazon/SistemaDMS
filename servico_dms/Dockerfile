@@ -56,7 +56,6 @@ RUN mkdir /app/config
 
 # Copia os arquivos do projeto
 COPY templates/ ./templates/
-COPY models/ ./models/
 COPY app.py .
 COPY dms_base.py .
 COPY dms_mediapipe.py .
