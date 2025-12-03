@@ -1,5 +1,4 @@
-# Documentação: Thread de Captura de Vídeo com Buffer Circular
-# (Atualizado para Gravação de Evidências)
+# Documentação: Thread de Captura de Vídeo (Com Auto-Busca de Dispositivo)
 
 import cv2
 import numpy as np
@@ -25,8 +24,8 @@ class CameraThread(threading.Thread):
         super().__init__(name="CameraThread")
         self.daemon = True
 
-        # Configuração da Fonte
         self.is_rtsp: bool = str(video_source_str).startswith("rtsp://")
+        # Se for número, guarda como int, mas vamos ignorar se precisarmos de procurar
         self.video_source_arg: Union[str, int] = (
             video_source_str if self.is_rtsp else int(video_source_str)
         )
@@ -37,13 +36,9 @@ class CameraThread(threading.Thread):
         self.frame_width = frame_width
         self.frame_height = frame_height
 
-        # --- NOVO: Buffer Circular (A Máquina do Tempo) ---
-        # Guardamos 5 segundos de histórico (assumindo 20 FPS = 100 frames)
-        # Se o FPS real for maior, guardamos menos tempo, mas sempre 100 frames.
         self.BUFFER_SIZE = 100
         self.frame_buffer: deque = deque(maxlen=self.BUFFER_SIZE)
         self.buffer_lock = threading.Lock()
-        # --------------------------------------------------
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.latest_frame: Optional[np.ndarray] = None
@@ -63,7 +58,7 @@ class CameraThread(threading.Thread):
     def _get_rotation_code(self, degrees: int) -> Optional[int]:
         try:
             d = int(degrees)
-        except (ValueError, TypeError):
+        except:
             return None
         if d == 90: return cv2.ROTATE_90_CLOCKWISE
         if d == 180: return cv2.ROTATE_180
@@ -71,44 +66,73 @@ class CameraThread(threading.Thread):
         return None
 
     def _connect_camera(self) -> None:
-        logging.info(f"CamThread: Conectando a {self.source_description}...")
+        """Tenta conectar. Se falhar, procura noutros índices USB."""
+        logging.info(f"CamThread: A tentar conectar...")
+
         if self.cap is not None:
             self.cap.release()
+
+        # Se for RTSP, tenta direto
+        if self.is_rtsp:
+            self._try_open(self.video_source_arg)
+            return
+
+        # Se for USB, tenta o índice original primeiro
+        if self._try_open(self.video_source_arg):
+            return
+
+        # Se falhou, tenta procurar outros índices (0 a 9)
+        logging.warning("CamThread: Falha no índice original. A procurar câmaras alternativas...")
+        for i in range(10):
+            if i == self.video_source_arg: continue  # Já tentámos este
+            logging.info(f"CamThread: Tentando /dev/video{i}...")
+            if self._try_open(i):
+                logging.info(f"CamThread: SUCESSO! Câmara encontrada no índice {i}.")
+                self.video_source_arg = i  # Atualiza para o futuro
+                return
+
+        logging.error("CamThread: Nenhuma câmara encontrada após varredura.")
+        self.connected = False
+
+    def _try_open(self, source) -> bool:
         try:
             if not self.is_rtsp and os.name == 'posix':
-                self.cap = cv2.VideoCapture(self.video_source_arg, cv2.CAP_V4L2)
+                cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
             else:
-                self.cap = cv2.VideoCapture(self.video_source_arg)
+                cap = cv2.VideoCapture(source)
 
             if not self.is_rtsp:
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
-                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
                 if self.initial_brightness != 0:
-                    self.cap.set(cv2.CAP_PROP_BRIGHTNESS, self.initial_brightness)
+                    cap.set(cv2.CAP_PROP_BRIGHTNESS, self.initial_brightness)
 
-            time.sleep(1.0)
-            if self.cap.isOpened():
-                self.connected = True
-                logging.info(f"CamThread: Conectado! ({self.frame_width}x{self.frame_height})")
-            else:
-                self.connected = False
-                logging.error(f"CamThread: Falha ao abrir {self.video_source_arg}")
-        except Exception as e:
-            logging.error(f"CamThread: Erro crítico na conexão: {e}")
-            self.connected = False
+            # Teste real de leitura
+            if cap.isOpened():
+                ret, _ = cap.read()
+                if ret:
+                    self.cap = cap
+                    self.connected = True
+                    return True
+
+            cap.release()
+            return False
+        except Exception:
+            return False
 
     def run(self) -> None:
         self.running = True
         while self.running and not self.stop_event.is_set():
             if not self.connected or self.cap is None or not self.cap.isOpened():
-                time.sleep(3)
+                time.sleep(5)  # Espera 5s antes de tentar reconectar/procurar
                 self._connect_camera()
                 continue
 
             try:
                 ret, frame = self.cap.read()
                 if not ret:
+                    logging.warning("CamThread: Perda de sinal. Reconectando...")
                     self.connected = False
                     continue
 
@@ -117,15 +141,10 @@ class CameraThread(threading.Thread):
 
                 with self.lock:
                     rot_code = self.rotation_code
-                if rot_code is not None:
-                    frame = cv2.rotate(frame, rot_code)
+                if rot_code is not None: frame = cv2.rotate(frame, rot_code)
 
-                # --- Buffer Circular ---
-                # Adiciona o frame ao histórico (thread-safe)
                 with self.buffer_lock:
-                    self.frame_buffer.append(frame)  # Guarda cópia implícita pois 'frame' muda? Não, read cria novo.
-                # -----------------------
-
+                    self.frame_buffer.append(frame)
                 with self.lock:
                     self.latest_frame = frame.copy()
 
@@ -136,23 +155,15 @@ class CameraThread(threading.Thread):
                 self.connected = False
                 time.sleep(1)
 
-        if self.cap:
-            self.cap.release()
+        if self.cap: self.cap.release()
 
     def get_frame(self) -> Optional[np.ndarray]:
         with self.lock:
-            if self.latest_frame is not None:
-                return self.latest_frame.copy()
+            if self.latest_frame is not None: return self.latest_frame.copy()
         return None
 
-    # --- NOVO MÉTODO ---
     def get_recent_frames(self) -> List[np.ndarray]:
-        """Retorna uma lista com os últimos N frames gravados no buffer."""
-        with self.buffer_lock:
-            # Retorna uma cópia da lista para não bloquear a thread de captura
-            return list(self.frame_buffer)
-
-    # -------------------
+        with self.buffer_lock: return list(self.frame_buffer)
 
     def update_rotation(self, degrees: int) -> None:
         new_code = self._get_rotation_code(degrees)

@@ -20,7 +20,26 @@ class MediaPipeMonitor(BaseMonitor):
             min_tracking_confidence=0.5
         )
         self.mp_drawing = mp.solutions.drawing_utils
-        self.drawing_spec = self.mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
+
+        # --- 🎨 PERSONALIZAÇÃO VISUAL (ESTILO) ---
+        # Ajusta aqui para mudar a aparência da máscara facial
+
+        # 1. Estilo dos PONTOS (Vértices)
+        # Dica: circle_radius=0 esconde os pontos (deixa só as linhas)
+        self.style_points = self.mp_drawing.DrawingSpec(
+            color=(0, 255, 255),  # Cor BGR (Amarelo)
+            thickness=1,  # Espessura do contorno do ponto
+            circle_radius=1  # Tamanho do ponto (1 é minúsculo)
+        )
+
+        # 2. Estilo das LINHAS (Conexões)
+        # Dica: thickness=1 fica mais elegante/fino
+        self.style_lines = self.mp_drawing.DrawingSpec(
+            color=(255, 255, 255),  # Cor BGR (Branco/Cinza Claro)
+            thickness=1,  # Espessura da linha
+            circle_radius=1  # (Ignorado para linhas)
+        )
+        # ----------------------------------------
 
         self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
         self.RIGHT_EYE = [362, 385, 387, 263, 373, 380]
@@ -31,7 +50,6 @@ class MediaPipeMonitor(BaseMonitor):
             (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
         ])
 
-        # Adicionamos 'fps' às métricas iniciais
         self.latest_metrics = {
             "ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0, "fps": 0
         }
@@ -42,6 +60,7 @@ class MediaPipeMonitor(BaseMonitor):
         self.prev_frame_time = 0
         self.current_fps = 0
 
+        # Cores do HUD
         self.COLOR_GREEN = (0, 255, 0)
         self.COLOR_RED = (0, 0, 255)
         self.COLOR_YELLOW = (0, 255, 255)
@@ -68,8 +87,6 @@ class MediaPipeMonitor(BaseMonitor):
             cv2.putText(frame, "ROSTO NAO DETECTADO", (50, img_h // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, self.COLOR_RED, 2)
             self._draw_hud(frame, score, 0.0, 0.0)
-
-            # Atualiza métricas com FPS mesmo sem rosto
             self.latest_metrics["fps"] = int(self.current_fps)
             return frame, events, self.latest_metrics, False
 
@@ -85,17 +102,19 @@ class MediaPipeMonitor(BaseMonitor):
         self.latest_metrics = {
             "ear": round(avg_ear, 3), "mar": round(mar, 3),
             "pitch": round(pitch, 1), "yaw": round(yaw, 1), "roll": round(roll, 1),
-            "fps": int(self.current_fps)  # Passamos o FPS aqui para a API ler
+            "fps": int(self.current_fps)
         }
 
         score, events = self.score_manager.update(self.latest_metrics, dt)
 
+        # --- DESENHO OTIMIZADO ---
+        # Usamos os estilos personalizados definidos no __init__
         self.mp_drawing.draw_landmarks(
             image=frame,
             landmark_list=face_landmarks,
-            connections=self.mp_face_mesh.FACEMESH_CONTOURS,
-            landmark_drawing_spec=None,
-            connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_contours_style()
+            connections=self.mp_face_mesh.FACEMESH_CONTOURS,  # Apenas contornos principais
+            landmark_drawing_spec=self.style_points,  # <--- Nossos pontos finos
+            connection_drawing_spec=self.style_lines  # <--- Nossas linhas finas
         )
 
         self._draw_hud(frame, score, avg_ear, mar, pitch, roll)
@@ -115,9 +134,7 @@ class MediaPipeMonitor(BaseMonitor):
         cv2.rectangle(frame, (10, 10), (10 + bar_width, 40), (50, 50, 50), -1)
         cv2.rectangle(frame, (10, 10), (10 + filled_width, 40), color_score, -1)
         cv2.putText(frame, f"FADIGA: {int(score)}%", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
         cv2.putText(frame, f"EAR:{ear:.2f} MAR:{mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-        # REMOVIDO: O FPS desenhado no vídeo. Agora vai para o HTML.
 
     def update_settings(self, settings: dict) -> bool:
         if self.default_settings: self.default_settings.update(settings)
