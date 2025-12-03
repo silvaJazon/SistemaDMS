@@ -1,4 +1,4 @@
-# Documentação: Aplicação Principal Flask (API Perfis + Segurança Admin)
+# Documentação: Aplicação Principal Flask (API Completa com Status MQTT e FPS)
 
 import cv2
 import time
@@ -19,12 +19,12 @@ from mqtt_uploader import MQTTUploader
 
 try:
     from waitress import serve
-    # Importar a exceção específica para a podermos apanhar
     from waitress.channel import ClientDisconnected
+
     HAS_WAITRESS = True
 except ImportError:
     HAS_WAITRESS = False
-    ClientDisconnected = Exception # Fallback seguro
+    ClientDisconnected = Exception
 
 cv2.setUseOptimized(True)
 
@@ -33,15 +33,14 @@ logging.basicConfig(level=logging.WARNING, format="%(asctime)s - DMS - %(levelna
 
 CONFIG_DIR = "/app/config"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
-PROFILES_FILE = os.path.join(CONFIG_DIR, "profiles.json")  # <-- Novo ficheiro de perfis
+PROFILES_FILE = os.path.join(CONFIG_DIR, "profiles.json")
 
 
-# --- Gestor de Perfis (Salva no Raspberry) ---
+# --- Gestor de Perfis ---
 class ProfileManager:
     def __init__(self):
         self.file = PROFILES_FILE
-        if not os.path.exists(self.file):
-            self._save({})  # Cria vazio se não existir
+        if not os.path.exists(self.file): self._save({})
 
     def _load(self):
         try:
@@ -67,12 +66,8 @@ class ProfileManager:
 
     def delete_profile(self, name):
         data = self._load()
-        if name in data:
-            del data[name]
-            self._save(data)
+        if name in data: del data[name]; self._save(data)
 
-
-# ---------------------------------------------
 
 profile_manager = ProfileManager()
 
@@ -210,27 +205,17 @@ def detection_loop(cam, monitor, queue_ref):
 
 def generate_video_stream():
     global output_frame_display
-    placeholder = create_placeholder_frame()
-
+    ph = create_placeholder_frame()
     while not stop_event.is_set():
         with output_frame_lock:
-            frame = output_frame_display.copy() if output_frame_display is not None else placeholder.copy()
-
+            frame = output_frame_display.copy() if output_frame_display is not None else ph.copy()
         try:
             ret, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-            if ret:
-                yield (b"--frame\r\n"
-                       b"Content-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
-        except GeneratorExit:
-            # Cliente fechou a aba - Normal
+            if ret: yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
+        except (GeneratorExit, ClientDisconnected):
             break
-        except ClientDisconnected:
-            # Waitress detetou desconexão - Normal
+        except Exception:
             break
-        except Exception as e:
-            logging.error(f"Erro stream: {e}")
-            break
-
         time.sleep(1 / 15)
 
 
@@ -252,16 +237,14 @@ def video_feed():
     return Response(generate_video_stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
-# --- ROTAS API PERFIS (Server-Side) ---
+# --- API ---
 @app.route("/api/profiles", methods=["GET"])
-def get_profiles():
-    return jsonify(profile_manager.get_profiles())
+def get_profiles(): return jsonify(profile_manager.get_profiles())
 
 
 @app.route("/api/profiles/<name>", methods=["POST"])
 def save_profile_route(name):
-    settings = request.json
-    profile_manager.save_profile(name, settings)
+    profile_manager.save_profile(name, request.json)
     return jsonify({"success": True})
 
 
@@ -271,22 +254,13 @@ def delete_profile_route(name):
     return jsonify({"success": True})
 
 
-# --- ROTAS API ALERTAS (Com Senha) ---
 @app.route("/api/alerts/<alert_id>", methods=["DELETE"])
 def delete_alert(alert_id):
-    pwd = request.headers.get("X-Admin-Password")
-    if pwd != "Admin@1999": return jsonify({"error": "Senha incorreta"}), 403
-
-    if alert_id == "all":
-        success = event_handler.delete_all_alerts()
-    else:
-        success = event_handler.delete_alert(alert_id)
-
-    if success: return jsonify({"success": True})
-    return jsonify({"error": "Falha ao apagar"}), 500
+    if request.headers.get("X-Admin-Password") != "Admin@1999": return jsonify({"error": "Senha incorreta"}), 403
+    success = event_handler.delete_all_alerts() if alert_id == "all" else event_handler.delete_alert(alert_id)
+    return jsonify({"success": True}) if success else (jsonify({"error": "Falha"}), 500)
 
 
-# --- Rotas Configuração Existentes ---
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
@@ -294,10 +268,17 @@ def api_config():
         s["brightness"] = cam_thread.get_brightness()
         s["rotation"] = cam_thread.get_rotation()
         s["auto_brightness"] = brightness_manager.is_enabled()
+
+        # MQTT Info
         with mqtt_thread.config_lock:
             for k in ["mqtt_enabled", "mqtt_broker", "mqtt_port", "mqtt_device_id", "mqtt_fleet_id", "mqtt_username",
                       "mqtt_password", "mqtt_retention_days"]:
                 s[k] = mqtt_thread.config.get(k)
+
+        # --- NOVO: Status Conexão MQTT ---
+        s["mqtt_connected"] = mqtt_thread.is_connected()
+        # ---------------------------------
+
         with status_data_lock:
             s["status"] = status_data_global.copy()
         s["queue_depth"] = event_queue.qsize()
@@ -314,7 +295,6 @@ def api_config():
         mq_upd = {k: ns[k] for k in mqtt_keys if k in ns}
         if mq_upd: mqtt_thread.update_config(mq_upd)
 
-        # Salvar persistente
         final = dms_monitor.get_settings()
         final["brightness"] = cam_thread.get_brightness()
         final["rotation"] = cam_thread.get_rotation()
@@ -351,7 +331,7 @@ if __name__ == "__main__":
     event_handler = EventHandler(event_queue, stop_event);
     event_handler.start()
 
-    mqtt_initial_config = {
+    mq_cfg = {
         "mqtt_enabled": config_from_file.get("mqtt_enabled", False),
         "mqtt_broker": config_from_file.get("mqtt_broker", "broker.hivemq.com"),
         "mqtt_port": config_from_file.get("mqtt_port", 1883),
@@ -361,7 +341,7 @@ if __name__ == "__main__":
         "mqtt_password": config_from_file.get("mqtt_password", ""),
         "mqtt_retention_days": config_from_file.get("mqtt_retention_days", 10),
     }
-    mqtt_thread = MQTTUploader(event_handler, stop_event, mqtt_initial_config)
+    mqtt_thread = MQTTUploader(event_handler, stop_event, mq_cfg);
     mqtt_thread.start()
 
     dms_monitor = MediaPipeMonitor((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY), stop_event, {})
@@ -369,7 +349,6 @@ if __name__ == "__main__":
     event_handler.set_camera_thread(cam_thread)
     cam_thread.start()
 
-    # Wait cam
     t0 = time.time()
     while cam_thread.get_frame() is None:
         if time.time() - t0 > 15: break

@@ -10,7 +10,7 @@
         .modal-content { max-width: 90%; max-height: 80vh; }
         .close { position: absolute; top: 15px; right: 35px; color: white; font-size: 40px; cursor: pointer; }
         .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: bold; }
-        .btn-red { background: #E53E3E; color: white; } .btn-red:hover { background: #C53030; }
+        .btn-red { background: #E53E3E; color: white; }
         .btn-blue { background: #3182CE; color: white; }
     </style>
 </head>
@@ -34,7 +34,7 @@
                     <tr>
                         <th class="p-4">Data</th>
                         <th class="p-4">Evento</th>
-                        <th class="p-4">Gravidade</th>
+                        <th class="p-4 text-center">Sync</th>
                         <th class="p-4">Detalhes</th>
                         <th class="p-4 text-center">Ações</th>
                     </tr>
@@ -72,10 +72,14 @@
                 const row = tableBody.insertRow();
                 const date = new Date(a.timestamp.replace('Z','')).toLocaleString('pt-PT');
                 row.className = "hover:bg-gray-750";
+
+                // Ícone de Sync
+                const syncIcon = a.synced ? '<span class="text-green-400" title="Enviado">☁️✅</span>' : '<span class="text-yellow-500" title="Pendente">⏳</span>';
+
                 row.innerHTML = `
                     <td class="p-4 text-gray-300">${date}</td>
                     <td class="p-4"><span class="px-2 py-1 rounded font-bold bg-gray-700 border border-gray-600">${a.type}</span></td>
-                    <td class="p-4"><div class="w-full bg-gray-700 h-2 rounded"><div class="bg-blue-600 h-2 rounded" style="width:${Math.min(a.severity*33,100)}%"></div></div></td>
+                    <td class="p-4 text-center text-lg">${syncIcon}</td>
                     <td class="p-4 text-gray-400">${a.message}</td>
                     <td class="p-4 flex justify-center gap-2">
                         ${a.image_path ? `<button onclick="showMedia('img','${a.image_path}')" class="text-blue-400 hover:text-white">📷</button>`:''}
@@ -96,19 +100,17 @@
         function closeModal() { document.getElementById("mediaModal").style.display = "none"; document.getElementById("modalContent").innerHTML=''; }
 
         async function deleteAlert(id) {
-            const pwd = prompt("⚠️ APAGAR ALERTA\nDigite a senha de administrador:");
+            const pwd = prompt("Digite a senha de administrador:");
             if (!pwd) return;
             const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE', headers: {'X-Admin-Password': pwd} });
-            const data = await res.json();
-            if (data.success) { alert("Apagado!"); fetchAlerts(); } else alert("Erro: " + (data.error || "Senha incorreta"));
+            if ((await res.json()).success) { alert("Apagado!"); fetchAlerts(); } else alert("Senha incorreta");
         }
 
         async function deleteAllAlerts() {
-            const pwd = prompt("⛔ PERIGO: APAGAR TUDO?\nDigite a senha de administrador:");
+            const pwd = prompt("PERIGO: APAGAR TUDO?\nDigite a senha:");
             if (!pwd) return;
             const res = await fetch(`/api/alerts/all`, { method: 'DELETE', headers: {'X-Admin-Password': pwd} });
-            const data = await res.json();
-            if (data.success) { alert("Histórico limpo!"); fetchAlerts(); } else alert("Erro: " + (data.error || "Senha incorreta"));
+            if ((await res.json()).success) { alert("Limpo!"); fetchAlerts(); } else alert("Senha incorreta");
         }
 
         document.getElementById("prev-page").onclick = ()=>{if(currentPage>1)currentPage--;renderPage()};

@@ -76,6 +76,10 @@ class MQTTUploader(threading.Thread):
         except:
             pass
 
+    def is_connected(self):
+        """Retorna True se o cliente MQTT estiver conectado."""
+        return self.client is not None and self.client.is_connected()
+
     # --- Lógica ---
     def _connect_client(self):
         if self.client and self.client.is_connected(): return
