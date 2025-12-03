@@ -347,7 +347,7 @@ if __name__ == "__main__":
     mqtt_initial_config = {
         "mqtt_enabled": config_from_file.get("mqtt_enabled", False),
         "mqtt_broker": config_from_file.get("mqtt_broker", "broker.hivemq.com"),
-        "mqtt_port": config_from_file.get("mqtt_port", 1883),
+        "mqtt_port": config_from_file.get("mqtt_port", 8883),
         "mqtt_device_id": config_from_file.get("mqtt_device_id", "dms_default"),
         "mqtt_fleet_id": config_from_file.get("mqtt_fleet_id", "default_fleet"),
         "mqtt_username": config_from_file.get("mqtt_username", ""),

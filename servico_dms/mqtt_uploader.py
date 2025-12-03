@@ -1,4 +1,4 @@
-# Documentação: Gestor de Upload MQTT (Versão Blindada contra erros de Config)
+# Documentação: Gestor de Upload MQTT (Reação Instantânea)
 
 import threading
 import time
@@ -15,6 +15,7 @@ class MQTTUploader(threading.Thread):
         threading.Thread.__init__(self, name="MQTTUploaderThread")
         self.daemon = True
         self.stop_event = stop_event
+        self.wake_event = threading.Event()  # <--- NOVO: Para acordar a thread
         self.event_handler = event_handler_ref
         self.config = initial_config
         self.config_lock = threading.Lock()
@@ -26,21 +27,36 @@ class MQTTUploader(threading.Thread):
         logging.info("MQTT Uploader inicializado.")
 
     def update_config(self, new_settings: dict):
-        logging.info("MQTT Uploader: Recebendo atualização de configuração.")
-        force_reconnect = False
+        """Atualiza config e força reconexão imediata."""
+        logging.info("MQTT Uploader: Configuração recebida.")
+        should_wake = False
+
         with self.config_lock:
-            # Chaves críticas que exigem reconexão
+            # Verifica se algo crítico mudou
             critical_keys = ["mqtt_broker", "mqtt_port", "mqtt_username", "mqtt_password", "mqtt_device_id",
                              "mqtt_enabled"]
             for key in critical_keys:
                 if key in new_settings and self.config.get(key) != new_settings[key]:
-                    force_reconnect = True
+                    should_wake = True
                     break
             self.config.update(new_settings)
 
-        if force_reconnect and self.client:
-            logging.info("MQTT Uploader: Configuração mudou. A reconectar...")
-            if self.client.is_connected(): self.client.disconnect()
+        if should_wake:
+            logging.info("MQTT Uploader: Mudança crítica detetada. A reiniciar conexão...")
+            if self.client:
+                # Desconecta logo o antigo para limpar o estado
+                try:
+                    self.client.loop_stop()
+                    self.client.disconnect()
+                except:
+                    pass
+                self.client = None
+
+            # ACORDA A THREAD IMEDIATAMENTE
+            self.wake_event.set()
+
+    def is_connected(self):
+        return self.client is not None and self.client.is_connected()
 
     def _check_internet(self, force=False) -> bool:
         now = time.time()
@@ -57,45 +73,40 @@ class MQTTUploader(threading.Thread):
     # --- Callbacks ---
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
-            # CORREÇÃO: Usa .get() para evitar KeyError se a config falhar
             broker = self.config.get('mqtt_broker', 'desconhecido')
-            logging.info(f"MQTT Uploader: Conectado ao broker {broker}.")
+            logging.info(f"MQTT Uploader: SUCESSO - Conectado a {broker}")
         else:
-            logging.error(f"MQTT Uploader: Falha ao conectar, código: {rc}")
+            logging.error(f"MQTT Uploader: Falha conexão (RC={rc})")
 
     def on_disconnect(self, client, userdata, rc):
-        if rc != 0: logging.warning(f"MQTT Uploader: Desconectado inesperadamente (rc: {rc}).")
+        if rc != 0: logging.warning(f"MQTT Uploader: Desconectado (RC={rc})")
 
     def on_publish(self, client, userdata, mid):
         with self.pending_publish_lock:
-            if mid not in self.pending_publish: return
-            alert_db_id = self.pending_publish.pop(mid)
-        try:
-            self.event_handler.mark_alert_as_sent(alert_db_id, datetime.now().isoformat())
-            logging.debug(f"MQTT ACK recebido para ID {alert_db_id}")
-        except:
-            pass
+            if mid in self.pending_publish:
+                db_id = self.pending_publish.pop(mid)
+                try:
+                    self.event_handler.mark_alert_as_sent(db_id, datetime.now().isoformat())
+                except:
+                    pass
 
-    def is_connected(self):
-        """Retorna True se o cliente MQTT estiver conectado."""
-        return self.client is not None and self.client.is_connected()
-
-    # --- Lógica ---
+    # --- Conexão ---
     def _connect_client(self):
+        # Se já existe e está conectado, ignora
         if self.client and self.client.is_connected(): return
+
         try:
             with self.config_lock:
                 broker = self.config.get("mqtt_broker", "broker.hivemq.com")
-                # CORREÇÃO: Garante que porta é int
                 try:
                     port = int(self.config.get("mqtt_port", 1883))
                 except:
                     port = 1883
-
                 device_id = self.config.get("mqtt_device_id", "dms_default")
                 username = self.config.get("mqtt_username")
                 password = self.config.get("mqtt_password")
 
+            # Cria novo cliente limpo
             client_id = f"dms-{device_id}-{int(time.time())}"
             self.client = mqtt.Client(client_id=client_id)
             self.client.on_connect = self.on_connect
@@ -105,15 +116,16 @@ class MQTTUploader(threading.Thread):
             if username: self.client.username_pw_set(username, password)
             if port == 8883: self.client.tls_set()
 
+            logging.info(f"MQTT Uploader: A conectar a {broker}:{port}...")
             self.client.connect_async(broker, port, 60)
             self.client.loop_start()
-            logging.info(f"MQTT Uploader: A conectar a {broker}:{port}...")
+
         except Exception as e:
-            logging.error(f"MQTT Uploader: Erro conexão: {e}")
+            logging.error(f"MQTT Uploader: Erro ao iniciar cliente: {e}")
             self.client = None
 
     def _process_pending_alerts(self):
-        if not self.client or not self.client.is_connected(): return
+        if not self.is_connected(): return
         try:
             pending = self.event_handler.get_pending_alerts(limit=5)
             if not pending: return
@@ -132,31 +144,33 @@ class MQTTUploader(threading.Thread):
                 })
                 info = self.client.publish(topic, payload, qos=1)
                 if info.rc == mqtt.MQTT_ERR_SUCCESS:
-                    with self.pending_publish_lock:
-                        self.pending_publish[info.mid] = alert.get("id")
-                else:
-                    break
+                    with self.pending_publish_lock: self.pending_publish[info.mid] = alert.get("id")
         except Exception as e:
             logging.error(f"MQTT Erro envio: {e}")
 
     def _process_cleanup(self):
         try:
             with self.config_lock:
-                # CORREÇÃO: Trata 'None' ou strings inválidas
                 val = self.config.get("mqtt_retention_days", 10)
                 try:
                     days = int(val) if val is not None else 10
                 except:
                     days = 10
-
-            if days > 0:
-                self.event_handler.cleanup_sent_alerts(days)
-        except Exception as e:
-            logging.error(f"MQTT Erro limpeza: {e}")
+            if days > 0: self.event_handler.cleanup_sent_alerts(days)
+        except:
+            pass
 
     def run(self):
+        # Pequena pausa inicial para o sistema arrancar
         self.stop_event.wait(5.0)
+
         while not self.stop_event.is_set():
+            # 1. Verifica se foi "acordado" por uma mudança de config
+            if self.wake_event.is_set():
+                logging.info("MQTT Uploader: Acordado! A aplicar novas configs...")
+                self.wake_event.clear()  # Reseta o alarme
+                # Continua imediatamente para tentar conectar
+
             try:
                 with self.config_lock:
                     enabled = self.config.get("mqtt_enabled", False)
@@ -166,19 +180,25 @@ class MQTTUploader(threading.Thread):
                         self.client.loop_stop();
                         self.client.disconnect();
                         self.client = None
-                    self.stop_event.wait(10);
+                    # Se desativado, dorme até ser acordado ou passar 10s
+                    self.wake_event.wait(10.0)
                     continue
 
+                # Verifica net e conecta
                 if self._check_internet():
                     if not self.client: self._connect_client()
-                    if self.client and self.client.is_connected():
+
+                    if self.is_connected():
                         self._process_pending_alerts()
                         self._process_cleanup()
                 else:
                     logging.debug("MQTT: Sem internet.")
+
             except Exception as e:
                 logging.error(f"MQTT Loop erro: {e}")
 
-            self.stop_event.wait(10.0)
+            # 2. Dorme, mas fica atento ao botão "Salvar" (wake_event)
+            # O wait retorna True se for acordado pelo evento, False se for timeout
+            self.wake_event.wait(5.0)
 
         if self.client: self.client.loop_stop(); self.client.disconnect()
