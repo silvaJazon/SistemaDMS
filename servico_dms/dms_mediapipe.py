@@ -1,7 +1,6 @@
 import cv2
 import mediapipe as mp
 import numpy as np
-import threading
 import time
 import os
 import logging
@@ -12,6 +11,7 @@ class MediaPipeMonitor(BaseMonitor):
     def __init__(self, frame_size, stop_event, default_settings=None):
         super().__init__(frame_size, stop_event, default_settings)
         
+        # --- MediaPipe Rosto ---
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=1,
@@ -19,9 +19,12 @@ class MediaPipeMonitor(BaseMonitor):
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
+        
+        # Utilitários de Desenho (Para a Teia)
         self.mp_drawing = mp.solutions.drawing_utils
         self.drawing_spec = self.mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
-
+        
+        # Índices Faciais
         self.LEFT_EYE = [33, 160, 158, 133, 153, 144]
         self.RIGHT_EYE = [362, 385, 387, 263, 373, 380]
         self.LIPS = [61, 291, 39, 181, 0, 17] 
@@ -31,96 +34,45 @@ class MediaPipeMonitor(BaseMonitor):
             (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
         ])
 
-        # CORREÇÃO: Inicializar EAR com 1.0 (Olho Aberto) para não começar com alarme
         self.latest_metrics = {
-            "ear": 1.0, 
-            "mar": 0.0, 
-            "pitch": 0.0, 
-            "yaw": 0.0, 
-            "roll": 0.0, 
-            "phone_detected": False
+            "ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0, "phone_detected": False
         }
         
         self.score_manager = ScoreManager()
         self.last_process_time = time.time()
 
-        self.phone_thread = None
-        self.cam_ref = None
-        self.phone_detected = False
+        # Cores
+        self.COLOR_GREEN = (0, 255, 0)
+        self.COLOR_RED = (0, 0, 255)
+        self.COLOR_YELLOW = (0, 255, 255)
 
     def start_yolo_thread(self, cam_thread):
-        self.cam_ref = cam_thread
-        self.phone_thread = threading.Thread(target=self._yolo_loop, name="YOLOThread", daemon=True)
-        self.phone_thread.start()
-
-    def _yolo_loop(self):
-        logging.info("Iniciando thread YOLO...")
-        try:
-            from ultralytics import YOLO
-            model_path = "models/yolov8n.pt" 
-            if not os.path.exists(model_path): model_path = "yolov8n.pt"
-            
-            model = YOLO(model_path)
-            logging.info(f"Modelo YOLO carregado: {model_path}")
-            TARGET_CLASS_ID = 67 
-            
-            while not self.stop_event.is_set():
-                if self.cam_ref is None:
-                    time.sleep(1)
-                    continue
-                frame = self.cam_ref.get_frame()
-                if frame is None:
-                    time.sleep(0.1)
-                    continue
-
-                results = model.predict(frame, verbose=False, conf=0.4, classes=[TARGET_CLASS_ID])
-                detected = False
-                for r in results:
-                    if len(r.boxes) > 0:
-                        detected = True
-                        break
-                self.phone_detected = detected
-                time.sleep(0.15)
-        except ImportError:
-            logging.error("Biblioteca 'ultralytics' não encontrada. Deteção de celular desativada.")
-        except Exception as e:
-            logging.error(f"Erro fatal na thread YOLO: {e}", exc_info=True)
+        pass # Inativo
 
     def process_frame(self, frame: np.ndarray, frame_rgb: np.ndarray):
         img_h, img_w, _ = frame.shape
         current_time = time.time()
         dt = current_time - self.last_process_time
         self.last_process_time = current_time
-
+        
         if dt > 1.0: dt = 0.03
         if dt <= 0: dt = 0.001
 
         results = self.face_mesh.process(frame_rgb)
         
-        # CORREÇÃO: Se não há rosto, forçar métricas "seguras"
+        # Caso 1: Sem rosto
         if not results.multi_face_landmarks:
-            metrics = {
-                "ear": 1.0,  # Importante: Força olho aberto se não houver rosto
-                "mar": 0.0, 
-                "pitch": 0.0, 
-                "yaw": 0.0, 
-                "roll": 0.0,
-                "phone_detected": self.phone_detected
-            }
+            metrics = self._get_empty_metrics()
             self.latest_metrics = metrics
-            
-            # Atualiza ScoreManager (permitindo decaimento da fadiga)
             score, events = self.score_manager.update(metrics, dt)
             
             cv2.putText(frame, "ROSTO NAO DETECTADO", (50, img_h//2), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            
-            # Exibir barra de fadiga mesmo sem rosto, para ver ela descer
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, self.COLOR_RED, 2)
             self._draw_hud(frame, score, 0.0, 0.0)
-
+            
             return frame, events, self.latest_metrics, False
 
-        # --- Extração de Métricas (Rosto detetado) ---
+        # Caso 2: Rosto Detetado
         face_landmarks = results.multi_face_landmarks[0]
         landmarks_np = np.array([(lm.x, lm.y) for lm in face_landmarks.landmark])
 
@@ -131,23 +83,16 @@ class MediaPipeMonitor(BaseMonitor):
         pitch, yaw, roll = self._calculate_head_pose(face_landmarks, img_w, img_h)
 
         self.latest_metrics = {
-            "ear": round(avg_ear, 3),
-            "mar": round(mar, 3),
-            "pitch": round(pitch, 1),
-            "yaw": round(yaw, 1),
-            "roll": round(roll, 1),
-            "phone_detected": self.phone_detected
+            "ear": round(avg_ear, 3), "mar": round(mar, 3),
+            "pitch": round(pitch, 1), "yaw": round(yaw, 1), "roll": round(roll, 1),
+            "phone_detected": False
         }
 
-        # --- O CÉREBRO ---
         score, events = self.score_manager.update(self.latest_metrics, dt)
 
-        # --- Visualização ---
-        self._draw_hud(frame, score, avg_ear, mar, pitch, roll)
-
-        if self.phone_detected:
-            cv2.putText(frame, "CELULAR!", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
+        # --- VISUALIZAÇÃO RESTAURADA ---
+        
+        # 1. Desenha a Teia (Malha)
         self.mp_drawing.draw_landmarks(
             image=frame,
             landmark_list=face_landmarks,
@@ -156,13 +101,27 @@ class MediaPipeMonitor(BaseMonitor):
             connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_tesselation_style()
         )
 
+        # 2. Desenha os Contornos (Olhos, Boca, Sobrancelhas) - Dá mais definição
+        self.mp_drawing.draw_landmarks(
+            image=frame,
+            landmark_list=face_landmarks,
+            connections=self.mp_face_mesh.FACEMESH_CONTOURS,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_contours_style()
+        )
+
+        # 3. HUD de Métricas
+        self._draw_hud(frame, score, avg_ear, mar, pitch, roll)
+
         return frame, events, self.latest_metrics, True
 
+    def _get_empty_metrics(self):
+        return {"ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0, "phone_detected": False}
+
     def _draw_hud(self, frame, score, ear, mar, pitch=0, roll=0):
-        """Desenha a barra de fadiga e métricas."""
-        color_score = (0, 255, 0) # Verde
-        if score > 50: color_score = (0, 255, 255) # Amarelo
-        if score > 80: color_score = (0, 0, 255)   # Vermelho
+        color_score = self.COLOR_GREEN
+        if score > 50: color_score = self.COLOR_YELLOW
+        if score > 80: color_score = self.COLOR_RED
 
         bar_width = 200
         filled_width = int((score / 100.0) * bar_width)
@@ -170,14 +129,13 @@ class MediaPipeMonitor(BaseMonitor):
         cv2.rectangle(frame, (10, 10), (10 + filled_width, 40), color_score, -1)
         cv2.putText(frame, f"FADIGA: {int(score)}%", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        if ear > 0: # Só mostra números se fizerem sentido
+        if ear > 0:
             cv2.putText(frame, f"EAR:{ear:.2f} MAR:{mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
             cv2.putText(frame, f"P:{int(pitch)} R:{int(roll)}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
     def update_settings(self, settings: dict) -> bool:
         if self.default_settings: self.default_settings.update(settings)
         return True
-
     def get_settings(self) -> dict: return self.default_settings
 
     # --- Cálculos Matemáticos ---
@@ -220,6 +178,7 @@ class MediaPipeMonitor(BaseMonitor):
             pitch, yaw, roll = [element.item() for element in euler_angles]
             return np.clip(pitch, -90, 90), np.clip(yaw, -90, 90), np.clip(roll, -90, 90)
         except Exception: return 0, 0, 0
-
+    
     @property
-    def mp_drawing_styles(self): return mp.solutions.drawing_styles
+    def mp_drawing_styles(self):
+        return mp.solutions.drawing_styles
