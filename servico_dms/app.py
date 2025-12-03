@@ -1,4 +1,4 @@
-# Documentação: Aplicação Principal Flask (API Completa com Status MQTT e FPS)
+# Documentação: Aplicação Principal Flask (Perfis Separados do MQTT)
 
 import cv2
 import time
@@ -28,12 +28,18 @@ except ImportError:
 
 cv2.setUseOptimized(True)
 
-# --- Config Logging ---
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s - DMS - %(levelname)s - %(message)s")
 
 CONFIG_DIR = "/app/config"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 PROFILES_FILE = os.path.join(CONFIG_DIR, "profiles.json")
+
+# --- LISTA DE CHAVES MQTT (Para excluir dos perfis) ---
+MQTT_KEYS = [
+    "mqtt_enabled", "mqtt_broker", "mqtt_port",
+    "mqtt_device_id", "mqtt_fleet_id",
+    "mqtt_username", "mqtt_password", "mqtt_retention_days"
+]
 
 
 # --- Gestor de Perfis ---
@@ -60,8 +66,13 @@ class ProfileManager:
         return self._load()
 
     def save_profile(self, name, settings):
+        # --- FILTRAGEM: Remove configs MQTT antes de salvar ---
+        clean_settings = settings.copy()
+        for k in MQTT_KEYS:
+            clean_settings.pop(k, None)
+        # -----------------------------------------------------
         data = self._load()
-        data[name] = settings
+        data[name] = clean_settings
         self._save(data)
 
     def delete_profile(self, name):
@@ -244,6 +255,7 @@ def get_profiles(): return jsonify(profile_manager.get_profiles())
 
 @app.route("/api/profiles/<name>", methods=["POST"])
 def save_profile_route(name):
+    # O método save_profile da classe ProfileManager já filtra os MQTT_KEYS
     profile_manager.save_profile(name, request.json)
     return jsonify({"success": True})
 
@@ -269,39 +281,39 @@ def api_config():
         s["rotation"] = cam_thread.get_rotation()
         s["auto_brightness"] = brightness_manager.is_enabled()
 
-        # MQTT Info
         with mqtt_thread.config_lock:
-            for k in ["mqtt_enabled", "mqtt_broker", "mqtt_port", "mqtt_device_id", "mqtt_fleet_id", "mqtt_username",
-                      "mqtt_password", "mqtt_retention_days"]:
+            for k in MQTT_KEYS:
                 s[k] = mqtt_thread.config.get(k)
 
-        # --- NOVO: Status Conexão MQTT ---
         s["mqtt_connected"] = mqtt_thread.is_connected()
-        # ---------------------------------
-
         with status_data_lock:
             s["status"] = status_data_global.copy()
         s["queue_depth"] = event_queue.qsize()
         return jsonify(s)
+
     elif request.method == "POST":
         ns = request.json
+
+        # 1. Configs Normais (DMS/Cam)
         if "auto_brightness" in ns: brightness_manager.set_enabled(ns["auto_brightness"])
         dms_monitor.update_settings(ns)
         if "brightness" in ns: cam_thread.update_brightness(ns["brightness"])
         if "rotation" in ns: cam_thread.update_rotation(ns["rotation"])
 
-        mqtt_keys = ["mqtt_enabled", "mqtt_broker", "mqtt_port", "mqtt_device_id", "mqtt_fleet_id", "mqtt_username",
-                     "mqtt_password", "mqtt_retention_days"]
-        mq_upd = {k: ns[k] for k in mqtt_keys if k in ns}
-        if mq_upd: mqtt_thread.update_config(mq_upd)
+        # 2. Configs MQTT (Só atualiza se enviadas)
+        mq_upd = {k: ns[k] for k in MQTT_KEYS if k in ns}
+        if mq_upd:
+            mqtt_thread.update_config(mq_upd)
 
+        # 3. Salvar Persistente (Tudo)
         final = dms_monitor.get_settings()
         final["brightness"] = cam_thread.get_brightness()
         final["rotation"] = cam_thread.get_rotation()
         final["auto_brightness"] = brightness_manager.is_enabled()
         with mqtt_thread.config_lock:
-            for k in mqtt_keys: final[k] = mqtt_thread.config.get(k)
+            for k in MQTT_KEYS: final[k] = mqtt_thread.config.get(k)
         save_config(final)
+
         return jsonify({"success": True})
 
 
@@ -331,7 +343,8 @@ if __name__ == "__main__":
     event_handler = EventHandler(event_queue, stop_event);
     event_handler.start()
 
-    mq_cfg = {
+    # Inicialização MQTT Blindada
+    mqtt_initial_config = {
         "mqtt_enabled": config_from_file.get("mqtt_enabled", False),
         "mqtt_broker": config_from_file.get("mqtt_broker", "broker.hivemq.com"),
         "mqtt_port": config_from_file.get("mqtt_port", 1883),
@@ -341,7 +354,7 @@ if __name__ == "__main__":
         "mqtt_password": config_from_file.get("mqtt_password", ""),
         "mqtt_retention_days": config_from_file.get("mqtt_retention_days", 10),
     }
-    mqtt_thread = MQTTUploader(event_handler, stop_event, mq_cfg);
+    mqtt_thread = MQTTUploader(event_handler, stop_event, mqtt_initial_config);
     mqtt_thread.start()
 
     dms_monitor = MediaPipeMonitor((FRAME_HEIGHT_DISPLAY, FRAME_WIDTH_DISPLAY), stop_event, {})

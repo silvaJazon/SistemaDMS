@@ -13,11 +13,10 @@
         .btn-blue { background: #3182CE; color: white; }
         .btn-green { background: #38A169; color: white; }
         .btn-red { background: #E53E3E; color: white; }
+        .btn-purple { background: #805AD5; color: white; } /* Cor nova para MQTT */
         .input-text, .input-select, .input-number { width: 100%; background: #2D3748; border: 1px solid #4A5568; color: #E2E8F0; padding: 0.5rem; border-radius: 4px; margin-top: 2px; }
         details > summary { cursor: pointer; padding: 0.5rem; background: #2D3748; border-radius: 4px; font-weight: 600; margin-bottom: 0.5rem; }
         .label-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: #CBD5E0; margin-bottom: 2px; }
-
-        /* Status Badges */
         .status-badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
         .status-ok { background-color: #38A169; color: white; }
         .status-err { background-color: #E53E3E; color: white; }
@@ -28,8 +27,7 @@
 
     <header class="py-4 px-6 bg-gray-900 shadow-md border-b border-gray-700 flex flex-wrap justify-between items-center gap-4">
         <h1 class="text-2xl font-bold text-white flex items-center gap-2">
-            SistemaDMS
-            <span class="text-green-400 text-sm align-top">Ao Vivo</span>
+            SistemaDMS <span class="text-green-400 text-sm align-top">Ao Vivo</span>
             <span id="mqtt-badge" class="status-badge status-wait">MQTT: ...</span>
         </h1>
         <nav class="flex gap-4">
@@ -46,20 +44,10 @@
                 {% else %}
                     <div class="w-full h-64 bg-gray-800 flex items-center justify-center text-gray-500 rounded-lg border border-gray-600">Stream Desativado</div>
                 {% endif %}
-
                 <div class="mt-4 grid grid-cols-3 gap-4 w-full max-w-md text-center">
-                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
-                        <div class="text-xs text-gray-400 uppercase">Olhos (EAR)</div>
-                        <div id="val-ear" class="text-xl font-mono text-blue-300 font-bold">-</div>
-                    </div>
-                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
-                        <div class="text-xs text-gray-400 uppercase">Boca (MAR)</div>
-                        <div id="val-mar" class="text-xl font-mono text-green-300 font-bold">-</div>
-                    </div>
-                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
-                        <div class="text-xs text-gray-400 uppercase">FPS</div>
-                        <div id="val-fps" class="text-xl font-mono text-yellow-300 font-bold">-</div>
-                    </div>
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600"><div class="text-xs text-gray-400 uppercase">Olhos (EAR)</div><div id="val-ear" class="text-xl font-mono text-blue-300 font-bold">-</div></div>
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600"><div class="text-xs text-gray-400 uppercase">Boca (MAR)</div><div id="val-mar" class="text-xl font-mono text-green-300 font-bold">-</div></div>
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600"><div class="text-xs text-gray-400 uppercase">FPS</div><div id="val-fps" class="text-xl font-mono text-yellow-300 font-bold">-</div></div>
                 </div>
             </div>
         </section>
@@ -78,9 +66,7 @@
                 <details><summary>Câmara & Imagem</summary>
                     <div class="space-y-4 p-2">
                         <div><label class="text-sm">Rotação</label>
-                            <select name="rotation" class="input-select">
-                                <option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option>
-                            </select>
+                            <select name="rotation" class="input-select"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
                         </div>
                         <div class="pt-2 border-t border-gray-700">
                             <div class="flex items-center mb-2"><input type="checkbox" name="auto_brightness" id="auto_brightness" class="w-4 h-4 rounded bg-gray-700"><label for="auto_brightness" class="ml-2 text-sm">Brilho Automático</label></div>
@@ -89,21 +75,21 @@
                     </div>
                 </details>
 
-                <details><summary>MQTT</summary>
+                <details><summary>Conectividade (MQTT)</summary>
                     <div class="space-y-4 p-2">
-                        <div class="flex items-center mb-2"><input type="checkbox" name="mqtt_enabled" id="mqtt_enabled" class="w-4 h-4 rounded bg-gray-700"><label for="mqtt_enabled" class="ml-2 text-sm font-bold text-blue-300">Ativar MQTT</label></div>
+                        <div class="flex items-center mb-2"><input type="checkbox" id="mqtt_enabled" class="w-4 h-4 rounded bg-gray-700"><label for="mqtt_enabled" class="ml-2 text-sm font-bold text-blue-300">Ativar MQTT</label></div>
                         <div id="mqtt-inputs" class="space-y-3 pl-2 border-l-2 border-gray-700">
-                            <div><label class="text-xs text-gray-400">Broker</label><input type="text" name="mqtt_broker" class="input-text"></div>
+                            <div><label class="text-xs text-gray-400">Broker</label><input type="text" id="mqtt_broker" class="input-text"></div>
                             <div class="grid grid-cols-2 gap-2">
-                                <div><label class="text-xs text-gray-400">Porta</label><input type="number" name="mqtt_port" class="input-number"></div>
-                                <div><label class="text-xs text-gray-400">Retenção (Dias)</label><input type="number" name="mqtt_retention_days" class="input-number"></div>
+                                <div><label class="text-xs text-gray-400">Porta</label><input type="number" id="mqtt_port" class="input-number"></div>
+                                <div><label class="text-xs text-gray-400">Retenção</label><input type="number" id="mqtt_retention_days" class="input-number"></div>
                             </div>
-                            <div><label class="text-xs text-gray-400">ID Dispositivo</label><input type="text" name="mqtt_device_id" class="input-text"></div>
-                            <div><label class="text-xs text-gray-400">ID Frota</label><input type="text" name="mqtt_fleet_id" class="input-text"></div>
+                            <div><label class="text-xs text-gray-400">IDs</label><input type="text" id="mqtt_device_id" class="input-text mb-1" placeholder="Device"><input type="text" id="mqtt_fleet_id" class="input-text" placeholder="Fleet"></div>
                             <div class="grid grid-cols-2 gap-2">
-                                <div><label class="text-xs text-gray-400">User</label><input type="text" name="mqtt_username" class="input-text"></div>
-                                <div><label class="text-xs text-gray-400">Pass</label><input type="password" name="mqtt_password" class="input-text"></div>
+                                <div><label class="text-xs text-gray-400">User</label><input type="text" id="mqtt_username" class="input-text"></div>
+                                <div><label class="text-xs text-gray-400">Pass</label><input type="password" id="mqtt_password" class="input-text"></div>
                             </div>
+                            <button onclick="saveMqttSettings()" class="btn btn-purple mt-2">📡 Confirmar e Conectar</button>
                         </div>
                     </div>
                 </details>
@@ -127,31 +113,23 @@
         const mqttBadge = document.getElementById("mqtt-badge");
         let debounceTimer;
 
+        // Auto Update
         async function updateStats() {
             try {
                 const res = await fetch('/api/config');
                 const data = await res.json();
-
                 if(data.status) {
                     document.getElementById("val-ear").textContent = data.status.ear || '-';
                     document.getElementById("val-mar").textContent = data.status.mar || '-';
-                    document.getElementById("val-fps").textContent = data.status.fps || '-'; // FPS da API
+                    document.getElementById("val-fps").textContent = data.status.fps || '-';
                 }
-
-                // Atualiza status do MQTT no cabeçalho
                 if (data.mqtt_enabled) {
-                    if (data.mqtt_connected) {
-                        mqttBadge.textContent = "MQTT: ONLINE";
-                        mqttBadge.className = "status-badge status-ok";
-                    } else {
-                        mqttBadge.textContent = "MQTT: OFFLINE";
-                        mqttBadge.className = "status-badge status-err";
-                    }
+                    mqttBadge.textContent = data.mqtt_connected ? "MQTT: ONLINE" : "MQTT: OFFLINE";
+                    mqttBadge.className = data.mqtt_connected ? "status-badge status-ok" : "status-badge status-err";
                 } else {
                     mqttBadge.textContent = "MQTT: OFF";
                     mqttBadge.className = "status-badge status-wait";
                 }
-
             } catch(e) {}
         }
         setInterval(updateStats, 500);
@@ -163,6 +141,7 @@
         }
 
         function applySettingsToInputs(settings) {
+            // Campos Normais
             for (const [key, value] of Object.entries(settings)) {
                 const input = document.querySelector(`[name="${key}"]`);
                 if (input) {
@@ -174,29 +153,39 @@
                     }
                 }
             }
+            // Campos MQTT (Agora com IDs específicos)
+            const mqttIds = ["mqtt_broker", "mqtt_port", "mqtt_retention_days", "mqtt_device_id", "mqtt_fleet_id", "mqtt_username", "mqtt_password"];
+            mqttIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (el && settings[id] !== undefined) el.value = settings[id];
+            });
+            const mqttEn = document.getElementById("mqtt_enabled");
+            if(mqttEn && settings["mqtt_enabled"] !== undefined) {
+                mqttEn.checked = settings["mqtt_enabled"];
+                toggleGroups(mqttEn);
+            }
         }
 
         function toggleGroups(input) {
             if (input.name === 'auto_brightness') {
-                const grp = document.getElementById('manual-brightness-group');
-                const inp = document.querySelector('[name="brightness"]');
-                grp.style.opacity = input.checked ? '0.5' : '1';
-                inp.disabled = input.checked;
+                document.getElementById('manual-brightness-group').style.opacity = input.checked ? '0.5' : '1';
+                document.querySelector('[name="brightness"]').disabled = input.checked;
             }
-            if (input.name === 'mqtt_enabled') {
-                const grp = document.getElementById('mqtt-inputs');
-                grp.style.opacity = input.checked ? '1' : '0.5';
-                grp.querySelectorAll('input').forEach(i => i.disabled = !input.checked);
+            if (input.id === 'mqtt_enabled') {
+                const inputs = document.getElementById('mqtt-inputs').querySelectorAll('input');
+                document.getElementById('mqtt-inputs').style.opacity = input.checked ? '1' : '0.5';
+                inputs.forEach(i => i.disabled = !input.checked);
             }
         }
 
+        // Listener Global (Ignora MQTT)
         controls.addEventListener('input', handleInput);
         controls.addEventListener('change', handleInput);
 
         function handleInput(e) {
             const t = e.target;
-            if (t.id.includes('profile')) return;
-            if ((t.type === 'text' || t.type === 'number' || t.type === 'password') && e.type === 'input') return;
+            // Ignora Perfis e MQTT
+            if (t.id.includes('profile') || t.id.includes('mqtt_')) return;
 
             if (t.type === 'range') {
                 const lbl = document.getElementById("lbl-" + t.name.substring(0,3));
@@ -215,6 +204,33 @@
             }, delay);
         }
 
+        // --- Salvar MQTT Explicito ---
+        async function saveMqttSettings() {
+            const payload = {
+                mqtt_enabled: document.getElementById("mqtt_enabled").checked,
+                mqtt_broker: document.getElementById("mqtt_broker").value,
+                mqtt_port: parseInt(document.getElementById("mqtt_port").value),
+                mqtt_retention_days: parseInt(document.getElementById("mqtt_retention_days").value),
+                mqtt_device_id: document.getElementById("mqtt_device_id").value,
+                mqtt_fleet_id: document.getElementById("mqtt_fleet_id").value,
+                mqtt_username: document.getElementById("mqtt_username").value,
+                mqtt_password: document.getElementById("mqtt_password").value
+            };
+
+            statusMsg.textContent = "A conectar MQTT...";
+            statusMsg.style.color = "yellow";
+
+            const res = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            if(res.ok) {
+                statusMsg.textContent = "MQTT Atualizado!";
+                statusMsg.style.color = "#38A169";
+                setTimeout(()=>statusMsg.textContent="", 3000);
+            } else {
+                statusMsg.textContent = "Erro ao salvar.";
+                statusMsg.style.color = "red";
+            }
+        }
+
         // Perfis
         const selProfile = document.getElementById("profile-select");
         async function fetchProfiles() {
@@ -227,14 +243,42 @@
         async function saveProfile() {
             const n = document.getElementById("new-profile-name").value.trim();
             if(!n) return;
+            // Pega config atual (backend vai filtrar MQTT)
             await fetch(`/api/profiles/${n}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(await(await fetch('/api/config')).json())});
             statusMsg.textContent="Perfil salvo!"; fetchProfiles();
         }
         async function loadProfile() {
-            if(!selProfile.value) return;
-            const s = (await(await fetch('/api/profiles')).json())[selProfile.value];
-            await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(s)});
-            applySettingsToInputs(s); statusMsg.textContent="Carregado!";
+            const name = selProfile.value;
+            if(!name) return;
+
+            // 1. Pega dados do perfil
+            const resProfs = await fetch('/api/profiles');
+            const profiles = await resProfs.json();
+            const settings = profiles[name];
+
+            if(settings) {
+                // --- CORREÇÃO DE SEGURANÇA ---
+                // Remove configurações de MQTT caso existam no perfil (de versões antigas)
+                // Isto impede que carregar um perfil desligue a conexão.
+                const forbiddenKeys = [
+                    "mqtt_enabled", "mqtt_broker", "mqtt_port",
+                    "mqtt_device_id", "mqtt_fleet_id",
+                    "mqtt_username", "mqtt_password", "mqtt_retention_days"
+                ];
+                forbiddenKeys.forEach(key => delete settings[key]);
+                // -----------------------------
+
+                // 2. Aplica na API
+                await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings)
+                });
+
+                // 3. Atualiza Inputs visuais
+                applySettingsToInputs(settings);
+                statusMsg.textContent = "Perfil carregado!";
+            }
         }
         async function deleteProfile() {
             if(!selProfile.value || !confirm("Apagar?")) return;
