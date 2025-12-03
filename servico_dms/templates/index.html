@@ -6,526 +6,376 @@
     <title>SistemaDMS - Monitoramento</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Estilos CSS (Mantidos para consistência) */
-        input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; background: #4a5568; border-radius: 9999px; outline: none; opacity: 0.9; transition: opacity .2s; }
-        input[type="range"]:hover:not(:disabled) { opacity: 1; }
-        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; background: #4299e1; border-radius: 50%; cursor: pointer; }
-        input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; background: #4299e1; border-radius: 50%; cursor: pointer; }
-        input[type="range"]:disabled { opacity: 0.5; cursor: not-allowed; }
-        input[type="range"]:disabled::-webkit-slider-thumb { background: #718096; cursor: not-allowed; }
-        input[type="range"]:disabled::-moz-range-thumb { background: #718096; cursor: not-allowed; }
-        details > summary { cursor: pointer; font-weight: 600; font-size: 1.125rem; padding: 0.5rem; background-color: #2d3748; border-radius: 0.5rem; transition: background-color 0.2s; }
-        details > summary:hover { background-color: #4a5568; }
-        details[open] > summary { background-color: #4a5568; }
-        .disabled-group, .disabled-group label, .disabled-group .info-icon, .disabled-group .slider-value { opacity: 0.5; cursor: not-allowed; }
-        .disabled-group input, .disabled-group select { cursor: not-allowed; }
-        .queue-status { padding: 2px 6px; border-radius: 4px; font-weight: bold; }
-        .queue-status-unknown { background-color: #718096; color: #E2E8F0; }
-        .queue-status-ok { background-color: #38A169; color: #F0FFF4; }
-        .queue-status-warn { background-color: #DD6B20; color: #FFFAF0; }
-        .queue-status-error { background-color: #E53E3E; color: #FFF5F5; }
-        .control-group { display: flex; flex-direction: column; gap: 0.5rem; }
-        .control-group label { display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
-        .control-group .info-icon { font-style: normal; font-weight: bold; color: #90CDF4; cursor: help; }
-        .control-group .input-row { display: flex; align-items: center; gap: 0.75rem; }
-        .control-group input[type="range"] { flex: 1; }
-        .control-group .slider-value { font-family: monospace; font-size: 1rem; color: #E2E8F0; min-width: 40px; text-align: right; }
-        .btn { padding: 0.5rem 1rem; font-weight: bold; border-radius: 0.375rem; transition: background-color 0.2s, opacity 0.2s; text-align: center; cursor: pointer; }
-        .btn:disabled { background-color: #4A5568; color: #A0AEC0; cursor: not-allowed; opacity: 0.7; }
-        .btn-blue { background-color: #3182CE; color: white; } .btn-blue:hover:not(:disabled) { background-color: #2B6CB0; }
-        .btn-green { background-color: #38A169; color: white; } .btn-green:hover:not(:disabled) { background-color: #2F855A; }
-        .btn-red { background-color: #E53E3E; color: white; } .btn-red:hover:not(:disabled) { background-color: #C53030; }
-        .btn-yellow { background-color: #D69E2E; color: white; } .btn-yellow:hover:not(:disabled) { background-color: #B7791F; }
-        .btn-gray { background-color: #718096; color: white; } .btn-gray:hover:not(:disabled) { background-color: #4A5568; }
-        .input-text, .input-select, .input-password, .input-number { width: 100%; background-color: #2D3748; border: 1px solid #4A5568; color: #E2E8F0; border-radius: 0.375rem; padding: 0.5rem 0.75rem; }
-        input[type="password"] { font-family: 'text-security-disc', 'text-security-circle', 'text-security-square', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol'; }
+        input[type="range"] { width: 100%; height: 8px; background: #4a5568; border-radius: 999px; outline: none; }
+        input[type="range"]::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; background: #4299e1; border-radius: 50%; cursor: pointer; }
+
+        .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: bold; width: 100%; margin-top: 5px; transition: 0.2s; }
+        .btn:hover { opacity: 0.9; }
+        .btn-blue { background: #3182CE; color: white; }
+        .btn-green { background: #38A169; color: white; }
+        .btn-red { background: #E53E3E; color: white; }
+        .btn-gray { background: #4A5568; color: white; }
+
+        .input-text, .input-select, .input-number {
+            width: 100%; background: #2D3748; border: 1px solid #4A5568; color: #E2E8F0; padding: 0.5rem; border-radius: 4px; margin-top: 2px;
+        }
+        .input-text:focus, .input-select:focus { border-color: #4299e1; outline: none; }
+
+        details > summary { cursor: pointer; padding: 0.5rem; background: #2D3748; border-radius: 4px; font-weight: 600; margin-bottom: 0.5rem; }
+        details > summary:hover { background: #4A5568; }
+
+        .label-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: #CBD5E0; margin-bottom: 2px; }
+        .sub-group { padding-left: 0.5rem; border-left: 2px solid #4A5568; margin-left: 0.2rem; }
     </style>
 </head>
-<body class="bg-gray-800 text-gray-200 font-sans min-h-screen">
+<body class="bg-gray-800 text-gray-200 font-sans min-h-screen flex flex-col">
 
-    <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg">
-        <h1 class="text-3xl font-bold text-center text-white">SistemaDMS - Monitoramento</h1>
-        <nav class="flex justify-center gap-6 mt-4">
-            <a href="/" class="text-lg text-blue-400 hover:text-blue-300 font-medium border-b-2 border-blue-400 pb-1">Ao Vivo</a>
-            <a href="/alerts" class="text-lg text-gray-400 hover:text-blue-300 font-medium">Histórico de Alertas</a>
+    <header class="py-4 px-6 bg-gray-900 shadow-md border-b border-gray-700 flex flex-wrap justify-between items-center gap-4">
+        <h1 class="text-2xl font-bold text-white">SistemaDMS <span class="text-green-400 text-sm align-top">Ao Vivo</span></h1>
+        <nav class="flex gap-4">
+            <a href="/" class="text-blue-400 border-b-2 border-blue-400 pb-1 font-medium">Monitoramento</a>
+            <a href="/alerts" class="text-gray-400 hover:text-blue-300 font-medium transition-colors">Histórico</a>
         </nav>
     </header>
 
-    <main class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 md:p-6 flex-grow">
+    <main class="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 p-4 max-w-[1600px] mx-auto w-full">
 
-        <section class="lg:col-span-2 bg-gray-900 p-6 rounded-lg shadow-2xl flex flex-col items-center justify-center">
+        <section class="lg:col-span-2 flex flex-col gap-4">
+            <div class="bg-gray-900 p-4 rounded-lg shadow-xl border border-gray-700 flex flex-col items-center">
+                {% if video_stream_enabled %}
+                    <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto max-h-[70vh] object-contain rounded-lg border border-gray-600 bg-black">
+                {% else %}
+                    <div class="w-full h-64 bg-gray-800 flex items-center justify-center text-gray-500 rounded-lg border border-gray-600">Stream Desativado</div>
+                {% endif %}
 
-            {% if video_stream_enabled %}
-                <img id="stream" src="{{ url_for('video_feed') }}" class="w-full h-auto rounded-lg shadow-md border-2 border-gray-700" alt="Stream da câmara">
-            {% else %}
-                <div class="w-full h-auto bg-gray-900 text-gray-400 rounded-lg shadow-md border-2 border-gray-700 flex items-center justify-center"
-                     style="min-height: 400px; aspect-ratio: {{ width }}/{{ height }};">
-                    <p class="text-lg px-4 text-center">(Stream de vídeo desabilitado para economizar CPU)</p>
+                <div class="mt-4 grid grid-cols-3 gap-4 w-full max-w-md text-center">
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
+                        <div class="text-xs text-gray-400 uppercase">Olhos (EAR)</div>
+                        <div id="val-ear" class="text-xl font-mono text-blue-300 font-bold">-</div>
+                    </div>
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
+                        <div class="text-xs text-gray-400 uppercase">Boca (MAR)</div>
+                        <div id="val-mar" class="text-xl font-mono text-green-300 font-bold">-</div>
+                    </div>
+                    <div class="bg-gray-800 p-2 rounded border border-gray-600">
+                        <div class="text-xs text-gray-400 uppercase">Câmara (FPS)</div>
+                        <div id="val-fps" class="text-xl font-mono text-yellow-300 font-bold">-</div>
+                    </div>
                 </div>
-            {% endif %}
-            <p class="mt-4 text-gray-400">Fonte: {{ source_desc }} (Backend: {{ active_backend }})</p>
-            <div class="status-info mt-4 flex flex-wrap gap-x-4 gap-y-2 justify-center text-sm">
-                <span>EAR: <span id="status-ear" class="font-mono text-lg text-blue-300">-</span></span> |
-                <span>MAR: <span id="status-mar" class="font-mono text-lg text-blue-300">-</span></span> |
-                <span id="status-queue" class="queue-status queue-status-unknown font-mono text-lg">Fila: <span id="status-queue-depth">-</span>/<span id="status-queue-max">-</span></span>
             </div>
         </section>
 
-        <aside id="controls-container" class="lg:col-span-1 bg-gray-900 p-6 rounded-lg shadow-2xl space-y-6 overflow-y-auto">
+        <aside id="controls" class="bg-gray-900 p-5 rounded-lg shadow-xl border border-gray-700 h-fit max-h-[calc(100vh-100px)] overflow-y-auto custom-scrollbar">
 
-            <details open>
-                <summary>Deteção de Sonolência</summary>
-                <div class="p-4 space-y-4">
-                    <div class="control-group">
-                        <label for="ear_threshold">Limite EAR (Olhos) <span class="info-icon" title="Valor abaixo deste indica olhos fechados.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="ear_threshold" name="ear_threshold" min="0.1" max="0.4" step="0.01"><span class="slider-value" id="ear_threshold_value">0.25</span></div>
+            <div class="space-y-6">
+                <details open>
+                    <summary>Parâmetros de Fadiga</summary>
+                    <div class="space-y-4 p-2">
+                        <div>
+                            <div class="label-row"><label>Limite Olhos (EAR)</label><span id="lbl-ear" class="font-mono text-blue-300">0.25</span></div>
+                            <input type="range" name="ear_threshold" min="0.1" max="0.4" step="0.01">
+                        </div>
+                        <div>
+                            <div class="label-row"><label>Frames Olhos</label><span id="lbl-earf" class="font-mono">2</span></div>
+                            <input type="range" name="ear_frames" min="1" max="10" step="1">
+                        </div>
+                        <div>
+                            <div class="label-row"><label>Limite Boca (MAR)</label><span id="lbl-mar" class="font-mono text-green-300">0.50</span></div>
+                            <input type="range" name="mar_threshold" min="0.3" max="1.0" step="0.01">
+                        </div>
+                        <div>
+                            <div class="label-row"><label>Frames Boca</label><span id="lbl-marf" class="font-mono">2</span></div>
+                            <input type="range" name="mar_frames" min="1" max="10" step="1">
+                        </div>
                     </div>
-                    <div class="control-group">
-                        <label for="ear_frames">Frames Sonolência <span class="info-icon" title="Nº frames com EAR baixo para alertar.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="ear_frames" name="ear_frames" min="1" max="10" step="1"><span class="slider-value" id="ear_frames_value">7</span></div>
+                </details>
+
+                <details>
+                    <summary>Câmara & Imagem</summary>
+                    <div class="space-y-4 p-2">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="text-sm">Rotação da Imagem</label>
+                            </div>
+                            <select name="rotation" class="input-select">
+                                <option value="0">0° (Normal)</option>
+                                <option value="90">90°</option>
+                                <option value="180">180°</option>
+                                <option value="270">270°</option>
+                            </select>
+                        </div>
+
+                        <div class="pt-2 border-t border-gray-700">
+                            <div class="flex items-center mb-2">
+                                <input type="checkbox" name="auto_brightness" id="auto_brightness" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-500 focus:ring-0">
+                                <label for="auto_brightness" class="ml-2 text-sm select-none cursor-pointer">Brilho Automático</label>
+                            </div>
+                            <div id="manual-brightness-group">
+                                <div class="label-row"><label>Brilho Manual</label><span id="lbl-bri" class="font-mono">0</span></div>
+                                <input type="range" name="brightness" min="-64" max="64" step="1">
+                            </div>
+                        </div>
                     </div>
-                    <div class="control-group">
-                        <label for="mar_threshold">Limite MAR (Bocejo) <span class="info-icon" title="Valor acima deste indica bocejo.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="mar_threshold" name="mar_threshold" min="0.4" max="1.0" step="0.01"><span class="slider-value" id="mar_threshold_value">0.40</span></div>
+                </details>
+
+                <details>
+                    <summary>Conectividade (MQTT)</summary>
+                    <div class="space-y-4 p-2">
+                        <div class="flex items-center mb-2">
+                            <input type="checkbox" name="mqtt_enabled" id="mqtt_enabled" class="w-4 h-4 rounded bg-gray-700 border-gray-500 text-blue-500 focus:ring-0">
+                            <label for="mqtt_enabled" class="ml-2 text-sm select-none cursor-pointer font-bold text-blue-300">Ativar Envio MQTT</label>
+                        </div>
+
+                        <div id="mqtt-inputs" class="space-y-3 sub-group">
+                            <div>
+                                <label class="text-xs text-gray-400">Broker</label>
+                                <input type="text" name="mqtt_broker" class="input-text" placeholder="ex: broker.hivemq.com">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="text-xs text-gray-400">Porta</label>
+                                    <input type="number" name="mqtt_port" class="input-number" placeholder="1883">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-gray-400">Retenção (Dias)</label>
+                                    <input type="number" name="mqtt_retention_days" class="input-number" min="0" max="365">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400">ID Dispositivo</label>
+                                <input type="text" name="mqtt_device_id" class="input-text">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400">ID Frota</label>
+                                <input type="text" name="mqtt_fleet_id" class="input-text">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="text-xs text-gray-400">User (Opcional)</label>
+                                    <input type="text" name="mqtt_username" class="input-text">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-gray-400">Pass (Opcional)</label>
+                                    <input type="password" name="mqtt_password" class="input-text">
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="control-group">
-                        <label for="mar_frames">Frames Bocejo <span class="info-icon" title="Nº frames com MAR alto para alertar.">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="mar_frames" name="mar_frames" min="1" max="10" step="1"><span class="slider-value" id="mar_frames_value">10</span></div>
+                </details>
+
+                <div class="pt-4 border-t-2 border-gray-700">
+                    <h3 class="font-bold text-lg mb-2 text-blue-300">Gestão de Perfis</h3>
+                    <div class="bg-gray-800 p-3 rounded">
+                        <select id="profile-select" class="input-select mb-3"></select>
+
+                        <div class="grid grid-cols-2 gap-2 mb-3">
+                            <button onclick="loadProfile()" class="btn btn-green text-sm">📥 Carregar</button>
+                            <button onclick="deleteProfile()" class="btn btn-red text-sm">🗑️ Apagar</button>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <input type="text" id="new-profile-name" placeholder="Nome Novo Perfil" class="input-text text-sm flex-grow">
+                            <button onclick="saveProfile()" class="btn btn-blue w-auto text-sm px-4">💾</button>
+                        </div>
                     </div>
+                    <p id="status-msg" class="text-center text-xs mt-2 text-yellow-300 h-4"></p>
                 </div>
-            </details>
-
-            <details>
-                <summary>Configurações da Câmara</summary>
-                <div class="p-4 space-y-4">
-                    <div class="flex items-center">
-                        <input type="checkbox" id="auto_brightness" name="auto_brightness" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
-                        <label for="auto_brightness" class="ml-2 text-sm font-medium text-gray-300">Ativar Brilho Automático</label>
-                    </div>
-                    <div class="control-group">
-                        <label for="brightness">Brilho <span class="info-icon" title="Ajusta brilho (manual).">ⓘ</span></label>
-                        <div class="input-row"><input type="range" id="brightness" name="brightness" min="-64" max="64" step="1"><span class="slider-value" id="brightness_value">0</span></div>
-                    </div>
-                    <div class="control-group">
-                        <label for="rotation">Rotação <span class="info-icon" title="Gira imagem.">ⓘ</span></label>
-                        <select id="rotation" name="rotation" class="input-select">
-                            <option value="0">0°</option> <option value="90">90°</option>
-                            <option value="180">180°</option> <option value="270">270°</option>
-                        </select>
-                    </div>
-                </div>
-            </details>
-
-            <details>
-                <summary>Conectividade (MQTT)</summary>
-                <div class="p-4 space-y-4">
-                    <div class="flex items-center">
-                        <input type="checkbox" id="mqtt_enabled" name="mqtt_enabled" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2">
-                        <label for="mqtt_enabled" class="ml-2 text-sm font-medium text-gray-300">Ativar Envio MQTT</label>
-                    </div>
-
-                    <div id="mqtt-controls-group" class="space-y-4 transition-opacity duration-300">
-                        <div class="control-group">
-                            <label for="mqtt_device_id">ID Dispositivo <span class="info-icon" title="ID único deste dispositivo.">ⓘ</span></label>
-                            <input type="text" id="mqtt_device_id" name="mqtt_device_id" class="input-text">
-                        </div>
-                        <div class="control-group">
-                            <label for="mqtt_fleet_id">ID Frota <span class="info-icon" title="Grupo/Frota a que pertence.">ⓘ</span></label>
-                            <input type="text" id="mqtt_fleet_id" name="mqtt_fleet_id" class="input-text">
-                        </div>
-                        <div class="control-group">
-                            <label for="mqtt_broker">Broker <span class="info-icon" title="Endereço do broker (ex: broker.hivemq.com).">ⓘ</span></label>
-                            <input type="text" id="mqtt_broker" name="mqtt_broker" class="input-text">
-                        </div>
-                        <div class="control-group">
-                            <label for="mqtt_port">Porta <span class="info-icon" title="Porta do broker (ex: 1883).">ⓘ</span></label>
-                            <input type="number" id="mqtt_port" name="mqtt_port" class="input-number" min="1" max="65535">
-                        </div>
-                         <div class="control-group">
-                            <label for="mqtt_username">Username <span class="info-icon" title="Username (opcional).">ⓘ</span></label>
-                            <input type="text" id="mqtt_username" name="mqtt_username" class="input-text">
-                        </div>
-                         <div class="control-group">
-                            <label for="mqtt_password">Password <span class="info-icon" title="Password (opcional).">ⓘ</span></label>
-                            <input type="password" id="mqtt_password" name="mqtt_password" class="input-password">
-                        </div>
-                        <div class="control-group">
-                            <label for="mqtt_retention_days">Reter Alertas (Dias) <span class="info-icon" title="Nº dias para guardar alertas locais APÓS envio (0=desativar limpeza).">ⓘ</span></label>
-                            <input type="number" id="mqtt_retention_days" name="mqtt_retention_days" class="input-number" min="0" max="365">
-                        </div>
-                    </div>
-                </div>
-            </details>
-            <details class="profile-section">
-                <summary>Perfis de Configuração</summary>
-                <div class="p-4 space-y-4">
-                    <div class="control-group">
-                        <label for="profile_select">Carregar Perfil:</label>
-                        <select id="profile_select" class="input-select"></select>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button id="load_profile_button" class="btn btn-green">Carregar</button>
-                        <button id="update_profile_button" class="btn btn-blue">Atualizar</button>
-                    </div>
-                    <div class="profile-actions flex flex-col md:flex-row gap-2">
-                        <input type="text" id="profile_name" placeholder="Nome do novo perfil" class="input-text">
-                        <button id="save_profile_button" class="btn btn-gray whitespace-nowrap">Salvar Novo</button>
-                    </div>
-                     <button id="delete_profile_button" class="btn btn-yellow w-full">Apagar Selecionado</button>
-                     <button id="reset_button" class="btn btn-red w-full">Restaurar Padrões</button>
-                </div>
-            </details>
-
-            <p id="save_status" class="text-center font-semibold min-h-[1.2em]"></p>
+            </div>
         </aside>
     </main>
 
     <script>
-        // --- Seletores ---
-        const controlsContainer = document.getElementById('controls-container');
-        const sliders = controlsContainer.querySelectorAll('input[type="range"]');
+        const controls = document.getElementById("controls");
+        const statusMsg = document.getElementById("status-msg");
+        let debounceTimer;
 
-        // Seletores de grupos
-        const autoBrightnessCheckbox = document.getElementById('auto_brightness');
-        const brightnessSlider = document.getElementById('brightness');
+        // --- 1. Atualização de Status em Tempo Real (500ms) ---
+        async function updateStats() {
+            try {
+                // Usa apenas GET para ler status, sem enviar dados
+                const res = await fetch('/api/config');
+                const data = await res.json();
 
-        // Seletores MQTT
-        const mqttCheckbox = document.getElementById('mqtt_enabled');
-        const mqttControlsGroup = document.getElementById('mqtt-controls-group');
-        const mqttInputs = mqttControlsGroup.querySelectorAll('input');
-
-        const rotationSelect = document.getElementById('rotation');
-        const saveStatus = document.getElementById('save_status');
-        const resetButton = document.getElementById('reset_button');
-
-        // Seletores de Perfil
-        const profileSelect = document.getElementById('profile_select');
-        const profileNameInput = document.getElementById('profile_name');
-        const saveProfileButton = document.getElementById('save_profile_button');
-        const loadProfileButton = document.getElementById('load_profile_button');
-        const deleteProfileButton = document.getElementById('delete_profile_button');
-        const updateProfileButton = document.getElementById('update_profile_button');
-
-        const PROFILE_STORAGE_PREFIX = 'dms_profile_';
-        let initialApiSettings = {};
-
-        const statusElements = { ear: document.getElementById('status-ear'), mar: document.getElementById('status-mar') };
-        const queueElements = { span: document.getElementById('status-queue'), depth: document.getElementById('status-queue-depth'), max: document.getElementById('status-queue-max') };
-
-        // --- Funções Auxiliares ---
-        function formatNumber(value, decimalPlaces = 2) {
-            const num = parseFloat(value);
-            return isNaN(num) ? '-' : num.toFixed(decimalPlaces);
-        }
-
-        function updateControlStates() {
-            const isDefaultProfile = (profileSelect.value === "__default__");
-
-            // Brilho Automático
-            const isAutoBrightness = autoBrightnessCheckbox ? autoBrightnessCheckbox.checked : false;
-            const brightnessGroup = brightnessSlider.closest('.control-group');
-            brightnessSlider.disabled = isAutoBrightness;
-            if (isAutoBrightness) {
-                brightnessGroup.classList.add('opacity-50', 'disabled-group');
-            } else {
-                brightnessGroup.classList.remove('opacity-50', 'disabled-group');
-            }
-
-            // MQTT
-            const isMqttEnabled = mqttCheckbox ? mqttCheckbox.checked : false;
-            if (mqttControlsGroup) {
-                if (isMqttEnabled) {
-                    mqttControlsGroup.classList.remove('opacity-50', 'disabled-group');
-                    mqttInputs.forEach(i => i.disabled = false);
-                } else {
-                    mqttControlsGroup.classList.add('opacity-50', 'disabled-group');
-                    mqttInputs.forEach(i => i.disabled = true);
+                if(data.status) {
+                    document.getElementById("val-ear").textContent = data.status.ear || '-';
+                    document.getElementById("val-mar").textContent = data.status.mar || '-';
+                    // FPS: Se não vier do status, tenta calcular localmente ou placeholder
+                    document.getElementById("val-fps").textContent = data.status.fps || '-';
                 }
-            }
+            } catch(e) { console.debug("Erro update stats", e); }
+        }
+        setInterval(updateStats, 500);
 
-            // Botões de Perfil
-            updateProfileButton.disabled = isDefaultProfile;
-            deleteProfileButton.disabled = isDefaultProfile;
-            saveProfileButton.disabled = false;
+        // --- 2. Inicialização: Carregar valores do servidor ---
+        async function initPage() {
+            try {
+                const res = await fetch('/api/config');
+                const settings = await res.json();
+                applySettingsToInputs(settings);
+                fetchProfiles(); // Carrega lista de perfis
+            } catch(e) { console.error("Erro init:", e); }
         }
 
-        function applySettingsToControls(settings) {
-            controlsContainer.querySelectorAll('input[type="range"], input[type="text"], input[type="number"], input[type="password"], select').forEach(input => {
-                if (settings.hasOwnProperty(input.name)) {
-                    const value = settings[input.name];
-                    if (input.type === 'range') {
-                        input.value = value;
-                        const valueSpan = document.getElementById(`${input.id}_value`);
-                        if (valueSpan) {
-                            const decimals = input.step.includes('.') ? input.step.split('.')[1].length : 0;
-                            valueSpan.textContent = formatNumber(value, decimals);
-                        }
+        function applySettingsToInputs(settings) {
+            // Percorre todas as configurações recebidas e preenche os inputs correspondentes
+            for (const [key, value] of Object.entries(settings)) {
+                const input = document.querySelector(`[name="${key}"]`);
+                if (input) {
+                    if (input.type === 'checkbox') {
+                        input.checked = !!value;
+                        toggleGroups(input); // Atualiza visibilidade (ex: brilho manual)
                     } else {
                         input.value = value;
+                        // Atualiza labels de sliders
+                        const lbl = document.getElementById("lbl-" + key.substring(0,3)); // ex: ear, mar
+                        if(lbl) lbl.textContent = value;
+                        const lbl2 = document.getElementById("lbl-" + key.substring(0,4)); // ex: earf
+                        if(lbl2) lbl2.textContent = value;
                     }
                 }
-            });
-            controlsContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                 if (settings.hasOwnProperty(cb.name)) {
-                     cb.checked = !!settings[cb.name];
-                 }
-            });
-            updateControlStates();
-        }
-
-        function getCurrentControlSettings() {
-             const currentSettings = {};
-             controlsContainer.querySelectorAll('input[type="range"], input[type="text"], input[type="number"], input[type="password"], select').forEach(input => {
-                 if (input.disabled) return;
-                 const name = input.name;
-                 if (!name) return;
-                 if (input.type === 'range') {
-                     currentSettings[name] = input.step.includes('.') ? parseFloat(input.value) : parseInt(input.value);
-                 } else if (input.type === 'number' || input.name === 'mqtt_port' || input.name === 'mqtt_retention_days') {
-                     currentSettings[name] = parseInt(input.value) || 0;
-                 } else if (input.tagName === 'SELECT') {
-                      currentSettings[name] = parseInt(input.value);
-                 } else {
-                      currentSettings[name] = input.value;
-                 }
-             });
-             controlsContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                 if (cb.name) {
-                     currentSettings[cb.name] = cb.checked;
-                 }
-             });
-             return currentSettings;
-        }
-
-        // --- Comunicação API (Backend) ---
-        async function fetchAndUpdateSettings() {
-            try {
-                const response = await fetch('/api/config'); if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                if (data.status) {
-                    for (const key in statusElements) {
-                        if (statusElements[key]) {
-                            const decimals = (key === 'ear' || key === 'mar') ? 2 : 1;
-                            statusElements[key].textContent = formatNumber(data.status[key], decimals);
-                        }
-                    }
-                }
-                if (data.hasOwnProperty('queue_depth') && data.hasOwnProperty('queue_max_size') && data.queue_max_size > 0) {
-                    const depth = data.queue_depth, max_size = data.queue_max_size;
-                    queueElements.depth.textContent = depth;
-                    queueElements.max.textContent = max_size;
-                    const occupancy = depth / max_size;
-                    let queueClass = occupancy < 0.5 ? 'ok' : (occupancy < 0.8 ? 'warn' : 'error');
-                    queueElements.span.className = `queue-status queue-status-${queueClass}`;
-                } else {
-                    queueElements.depth.textContent = '?'; queueElements.max.textContent = '?';
-                    queueElements.span.className = 'queue-status queue-status-unknown';
-                }
-
-                if (data.hasOwnProperty('ear_threshold')) {
-                    const earSlider = document.getElementById('ear_threshold');
-                    if (earSlider && !earSlider.disabled) { // Só atualiza se não estiver em edição
-                         // Opcional: Atualizar slider visualmente com feedback do backend?
-                         // Por enquanto deixamos o input do user dominar para não causar "saltos"
-                    }
-                }
-
-                if (data.hasOwnProperty('auto_brightness') && data.hasOwnProperty('brightness')) {
-                    const isAuto = !!data.auto_brightness;
-                    autoBrightnessCheckbox.checked = isAuto;
-                    if (!isAuto) {
-                        brightnessSlider.value = data.brightness;
-                        document.getElementById('brightness_value').textContent = formatNumber(data.brightness, 0);
-                    }
-                }
-
-                updateControlStates();
-
-            } catch (error) {
-                console.error("Erro buscar conf/status:", error);
-                for (const key in statusElements) { if (statusElements[key]) statusElements[key].textContent = 'Erro'; }
-                queueElements.depth.textContent = 'Erro'; queueElements.max.textContent = '?';
-                queueElements.span.className = 'queue-status queue-status-error';
             }
         }
 
-        async function postSettings(settingsToPost) {
-             if (!settingsToPost) settingsToPost = getCurrentControlSettings();
-             console.debug("A enviar conf:", settingsToPost);
-             try {
-                 saveStatus.textContent = "A guardar..."; saveStatus.style.color = "#ffeb3b";
-                 const response = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsToPost) });
-                 if (!response.ok) { let errorMsg = `HTTP ${response.status}`; try { errorMsg = (await response.json()).error || errorMsg; } catch (e) {} throw new Error(errorMsg); }
-                 const result = await response.json();
-                 if (result.success) { saveStatus.textContent = "Guardado!"; saveStatus.style.color = "#4CAF50"; } else { throw new Error(result.error || "Falha API."); }
-             } catch (error) { console.error("Erro guardar conf:", error); saveStatus.textContent = `Erro: ${error.message}`; saveStatus.style.color = "#f44336"; }
-             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
+        function toggleGroups(input) {
+            // Lógica visual para desativar inputs dependentes
+            if (input.name === 'auto_brightness') {
+                const manualGroup = document.getElementById('manual-brightness-group');
+                const manualInput = document.querySelector('[name="brightness"]');
+                if (manualGroup && manualInput) {
+                    if (input.checked) {
+                        manualGroup.style.opacity = '0.5';
+                        manualInput.disabled = true;
+                    } else {
+                        manualGroup.style.opacity = '1';
+                        manualInput.disabled = false;
+                    }
+                }
+            }
+            if (input.name === 'mqtt_enabled') {
+                const group = document.getElementById('mqtt-inputs');
+                if (group) group.style.opacity = input.checked ? '1' : '0.5';
+                const inputs = group.querySelectorAll('input');
+                inputs.forEach(i => i.disabled = !input.checked);
+            }
         }
 
-        // --- Funções de Gestão de Perfis ---
-        function getSavedProfiles() {
-            const profiles = {};
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key.startsWith(PROFILE_STORAGE_PREFIX)) {
-                    try { const profileName = key.substring(PROFILE_STORAGE_PREFIX.length);
-                        profiles[profileName] = JSON.parse(localStorage.getItem(key));
-                    } catch (e) { console.error(`Erro carregar perfil '${key}':`, e); }
-                }
-            } return profiles;
-        }
-        function populateProfileDropdown() {
-             const profiles = getSavedProfiles(); profileSelect.innerHTML = ''; const defaultOption = document.createElement('option');
-             defaultOption.value = "__default__"; defaultOption.textContent = "Padrão (Editável)"; profileSelect.appendChild(defaultOption);
-             const sortedNames = Object.keys(profiles).sort(); sortedNames.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; profileSelect.appendChild(option); });
-        }
-        function saveProfile() {
-             const profileName = profileNameInput.value.trim();
-             if (!profileName || profileName === "Padrão" || profileName === "__default__") { saveStatus.textContent = !profileName ? "Digite nome." : "Nome 'Padrão' reservado."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-             if (getSavedProfiles()[profileName]) { saveStatus.textContent = "Perfil já existe. Use 'Atualizar'."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-             const currentSettings = getCurrentControlSettings();
-             try { const storageKey = PROFILE_STORAGE_PREFIX + profileName; localStorage.setItem(storageKey, JSON.stringify(currentSettings));
-                 saveStatus.textContent = `Perfil '${profileName}' guardado!`; saveStatus.style.color = "#4CAF50"; profileNameInput.value = ''; populateProfileDropdown(); profileSelect.value = profileName;
-                 updateControlStates();
-             } catch (e) { console.error(`Erro guardar perfil '${profileName}':`, e); saveStatus.textContent = "Erro guardar."; saveStatus.style.color = "#f44336"; }
-             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-        }
-        function updateProfile() {
-             const selectedName = profileSelect.value;
-             if (selectedName === "__default__") { saveStatus.textContent = "Selecione perfil salvo."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-             const currentSettings = getCurrentControlSettings();
-              try { const storageKey = PROFILE_STORAGE_PREFIX + selectedName; localStorage.setItem(storageKey, JSON.stringify(currentSettings));
-                 saveStatus.textContent = `Perfil '${selectedName}' atualizado!`; saveStatus.style.color = "#4CAF50"; updateControlStates();
-             } catch (e) { console.error(`Erro atualizar '${selectedName}':`, e); saveStatus.textContent = "Erro atualizar."; saveStatus.style.color = "#f44336"; }
-             setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-        }
-        function loadProfile() {
-             const selectedName = profileSelect.value; let settingsToLoad = null;
-            if (selectedName === "__default__") {
-                settingsToLoad = initialApiSettings;
-            }
-            else {
-                const profiles = getSavedProfiles();
-                const profileSettings = profiles[selectedName];
-                if(profileSettings) {
-                    settingsToLoad = { ...initialApiSettings, ...profileSettings };
-                }
-                else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-            }
-            if (settingsToLoad) { applySettingsToControls(settingsToLoad); postSettings(settingsToLoad); saveStatus.textContent = `Perfil '${selectedName === "__default__" ? "Padrão" : selectedName}' carregado.`; saveStatus.style.color = "#4CAF50"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); }
-        }
-        function deleteProfile() {
-             const selectedName = profileSelect.value; if (selectedName === "__default__") { saveStatus.textContent = "Não pode apagar Padrão."; saveStatus.style.color = "#ffeb3b"; setTimeout(() => { saveStatus.textContent = ""; }, 3000); return; }
-             const storageKey = PROFILE_STORAGE_PREFIX + selectedName; if (localStorage.getItem(storageKey)) { try { localStorage.removeItem(storageKey); saveStatus.textContent = `Perfil '${selectedName}' apagado.`; saveStatus.style.color = "#4CAF50"; populateProfileDropdown(); profileSelect.value = "__default__"; loadProfile(); } catch (e) { saveStatus.textContent = "Erro apagar."; saveStatus.style.color = "#f44336"; } } else { saveStatus.textContent = `Perfil '${selectedName}' não encontrado.`; saveStatus.style.color = "#f44336"; } setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-        }
+        // --- 3. Envio de Configurações (Genérico) ---
+        // Escuta 'input' (sliders) e 'change' (selects, checkboxes, textos)
+        controls.addEventListener('input', handleInput);
+        controls.addEventListener('change', handleInput);
 
-        // --- Event Listeners ---
-        controlsContainer.addEventListener('change', (e) => {
+        function handleInput(e) {
             const target = e.target;
-            if (target.id === 'profile_name') return;
+            // Ignora campos de perfil (são locais)
+            if (target.id === 'new-profile-name' || target.id === 'profile-select') return;
 
-            if (target.id === 'auto_brightness' || target.id === 'mqtt_enabled') {
-                updateControlStates();
-            }
+            // Para inputs de texto, só envia no 'change' (quando perde foco ou Enter)
+            if ((target.type === 'text' || target.type === 'number' || target.type === 'password') && e.type === 'input') return;
 
+            // Atualiza UI imediata
             if (target.type === 'range') {
-                const valueSpan = document.getElementById(`${target.id}_value`);
-                if(valueSpan) {
-                    const decimals = target.step.includes('.') ? target.step.split('.')[1].length : 0;
-                    valueSpan.textContent = formatNumber(target.value, decimals);
-                }
+                const lbl = document.getElementById("lbl-" + target.name.substring(0,3));
+                if(lbl) lbl.textContent = target.value;
+                const lbl2 = document.getElementById("lbl-" + target.name.substring(0,4));
+                if(lbl2) lbl2.textContent = target.value;
             }
-            if (target.type !== 'text' && target.type !== 'password' && target.type !== 'number') {
-                postSettings();
-            }
-        });
+            if (target.type === 'checkbox') toggleGroups(target);
 
-        controlsContainer.addEventListener('blur', (e) => {
-            const target = e.target;
-            if (target.type === 'text' || target.type === 'password' || target.type === 'number') {
-                if (target.id === 'profile_name') return;
-                postSettings();
-            }
-        }, true);
+            // Prepara Payload
+            const payload = {};
+            if (target.type === 'checkbox') payload[target.name] = target.checked;
+            else if (target.type === 'number' || target.type === 'range') payload[target.name] = parseFloat(target.value);
+            else payload[target.name] = target.value; // Text, Password, Select
 
-        sliders.forEach(slider => {
-            const valueSpan = document.getElementById(`${slider.id}_value`);
-            if (valueSpan) {
-                slider.addEventListener('input', () => {
-                    const decimals = slider.step.includes('.') ? slider.step.split('.')[1].length : 0;
-                    valueSpan.textContent = formatNumber(slider.value, decimals);
-                });
-            }
-        });
+            // Envia (com Debounce para sliders)
+            clearTimeout(debounceTimer);
+            const delay = target.type === 'range' ? 300 : 0; // Texto/Select envia logo
 
-        resetButton.addEventListener('click', () => {
-            console.debug("Restaurando Padrão (da API)...");
-            profileSelect.value = "__default__";
-            if (Object.keys(initialApiSettings).length === 0) {
-                 saveStatus.textContent = "Erro: Padrões não carregados."; saveStatus.style.color = "#f44336";
-                 setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-                 return;
-            }
-            applySettingsToControls(initialApiSettings);
-            postSettings(initialApiSettings);
-            saveStatus.textContent = "Padrões restaurados."; saveStatus.style.color = "#4CAF50";
-            setTimeout(() => { saveStatus.textContent = ""; }, 3000);
-        });
+            debounceTimer = setTimeout(() => {
+                fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                }).then(res => res.json())
+                  .then(d => {
+                      if(!d.success) console.error("Erro guardar:", d.error);
+                      statusMsg.textContent = "Guardado.";
+                      setTimeout(() => statusMsg.textContent = "", 2000);
+                  });
+            }, delay);
+        }
 
-        saveProfileButton.addEventListener('click', saveProfile);
-        updateProfileButton.addEventListener('click', updateProfile);
-        loadProfileButton.addEventListener('click', loadProfile);
-        deleteProfileButton.addEventListener('click', deleteProfile);
+        // --- 4. Perfis (Server-Side) ---
+        const selProfile = document.getElementById("profile-select");
 
-        // --- Inicialização ---
-        async function initializeApp() {
+        async function fetchProfiles() {
             try {
-                console.debug("Iniciando app, buscando config da API...");
-                const response = await fetch('/api/config');
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const res = await fetch('/api/profiles');
+                const profiles = await res.json();
+                selProfile.innerHTML = '<option value="">Selecione um perfil...</option>';
+                Object.keys(profiles).forEach(name => {
+                    const opt = document.createElement("option");
+                    opt.value = name; opt.textContent = name;
+                    selProfile.appendChild(opt);
+                });
+            } catch(e) { console.error("Erro perfis", e); }
+        }
 
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
+        async function saveProfile() {
+            const name = document.getElementById("new-profile-name").value.trim();
+            if(!name) { alert("Digite um nome!"); return; }
 
-                const runtimeKeys = ['status', 'queue_depth', 'queue_max_size', 'active_backend', 'calibration_state'];
-                initialApiSettings = { ...data };
-                runtimeKeys.forEach(k => delete initialApiSettings[k]);
+            // 1. Pega config atual completa
+            const resConf = await fetch('/api/config');
+            const currentConfig = await resConf.json();
 
-                populateProfileDropdown();
-                profileSelect.value = "__default__";
-                applySettingsToControls(initialApiSettings);
-
-                const statusInterval = setInterval(fetchAndUpdateSettings, 200);
-                window.addEventListener('beforeunload', () => { clearInterval(statusInterval); if (errorTimeout) clearTimeout(errorTimeout); });
-
-            } catch (error) {
-                console.error("!!! ERRO FATAL NA INICIALIZAÇÃO:", error);
-                saveStatus.textContent = "Erro ao carregar app. Recarregue.";
-                saveStatus.style.color = "#f44336";
+            // 2. Salva como perfil
+            const res = await fetch(`/api/profiles/${name}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(currentConfig)
+            });
+            if(res.ok) {
+                statusMsg.textContent = `Perfil '${name}' salvo!`;
+                document.getElementById("new-profile-name").value = "";
+                fetchProfiles();
             }
         }
 
-        initializeApp();
+        async function loadProfile() {
+            const name = selProfile.value;
+            if(!name) return;
 
-        var stream = document.getElementById("stream");
-        let errorTimeout = null;
-        if (stream) {
-            stream.onerror = function(event) {
-                stream.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=";
-                if (!errorTimeout) {
-                    errorTimeout = setTimeout(function() {
-                        var timestamp = new Date().getTime();
-                        var newSrc = "{{ url_for('video_feed') }}?" + timestamp;
-                        stream.src = newSrc;
-                        errorTimeout = null;
-                    }, 5000);
-                }
-            };
-            stream.onload = function() {
-                if (errorTimeout) { clearTimeout(errorTimeout); errorTimeout = null; }
+            // 1. Pega dados do perfil
+            const resProfs = await fetch('/api/profiles');
+            const profiles = await resProfs.json();
+            const settings = profiles[name];
+
+            if(settings) {
+                // 2. Aplica na API
+                await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(settings)
+                });
+                // 3. Atualiza Inputs visuais
+                applySettingsToInputs(settings);
+                statusMsg.textContent = "Perfil carregado!";
             }
         }
+
+        async function deleteProfile() {
+            const name = selProfile.value;
+            if(!name) return;
+            if(!confirm(`Apagar perfil '${name}'?`)) return;
+
+            await fetch(`/api/profiles/${name}`, { method: 'DELETE' });
+            fetchProfiles();
+            statusMsg.textContent = "Perfil apagado.";
+        }
+
+        // Iniciar
+        initPage();
     </script>
 </body>
 </html>

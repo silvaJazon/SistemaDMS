@@ -6,212 +6,115 @@
     <title>SistemaDMS - Histórico</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 50;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.9);
-            align-items: center;
-            justify-content: center;
-        }
-        .modal-content {
-            display: block;
-            margin: auto;
-            max-width: 90%;
-            max-height: 80vh;
-            border-radius: 8px;
-        }
-        .close {
-            position: absolute;
-            top: 15px;
-            right: 35px;
-            color: #f1f1f1;
-            font-size: 40px;
-            font-weight: bold;
-            cursor: pointer;
-            z-index: 60;
-        }
-        .btn { padding: 0.5rem 1rem; font-weight: bold; border-radius: 0.375rem; transition: all 0.2s; cursor: pointer; }
-        .btn:disabled { background-color: #4A5568; color: #A0AEC0; cursor: not-allowed; opacity: 0.7; }
-        .btn-blue { background-color: #3182CE; color: white; } .btn-blue:hover:not(:disabled) { background-color: #2B6CB0; }
-
-        /* Botões pequenos da tabela */
-        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 4px; }
-        .btn-img { background-color: #4A5568; color: white; } .btn-img:hover { background-color: #718096; }
-        .btn-vid { background-color: #E53E3E; color: white; } .btn-vid:hover { background-color: #C53030; }
+        .modal { display: none; position: fixed; z-index: 50; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); justify-content: center; align-items: center; }
+        .modal-content { max-width: 90%; max-height: 80vh; }
+        .close { position: absolute; top: 15px; right: 35px; color: white; font-size: 40px; cursor: pointer; }
+        .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: bold; }
+        .btn-red { background: #E53E3E; color: white; } .btn-red:hover { background: #C53030; }
+        .btn-blue { background: #3182CE; color: white; }
     </style>
 </head>
 <body class="bg-gray-800 text-gray-200 font-sans min-h-screen">
 
-    <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg border-b border-gray-700">
-        <h1 class="text-3xl font-bold text-center text-white tracking-tight">SistemaDMS <span class="text-blue-500">Histórico</span></h1>
-        <nav class="flex justify-center gap-6 mt-4">
-            <a href="/" class="text-lg text-gray-400 hover:text-blue-300 font-medium transition-colors">Monitoramento</a>
-            <a href="/alerts" class="text-lg text-blue-400 font-medium border-b-2 border-blue-400 pb-1">Histórico</a>
-        </nav>
+    <header class="py-6 px-4 bg-gray-900 shadow-lg border-b border-gray-700 flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold text-white">SistemaDMS <span class="text-blue-500">Histórico</span></h1>
+            <nav class="flex gap-4 mt-2">
+                <a href="/" class="text-gray-400 hover:text-blue-300">Monitoramento</a>
+                <a href="/alerts" class="text-blue-400 border-b-2 border-blue-400">Histórico</a>
+            </nav>
+        </div>
+        <button onclick="deleteAllAlerts()" class="btn btn-red border border-red-400">🗑️ Apagar Tudo</button>
     </header>
 
     <main class="p-4 md:p-6">
         <div class="max-w-7xl mx-auto bg-gray-900 rounded-lg shadow-2xl overflow-hidden border border-gray-700">
-            <div class="overflow-x-auto">
-                <table id="alerts-table" class="w-full text-left">
-                    <thead class="bg-gray-800 uppercase text-xs text-gray-400 tracking-wider font-semibold border-b border-gray-700">
-                        <tr>
-                            <th class="p-4">Data / Hora</th>
-                            <th class="p-4">Evento</th>
-                            <th class="p-4">Gravidade</th>
-                            <th class="p-4">Detalhes</th>
-                            <th class="p-4 text-center">Evidências</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-700 text-sm">
-                        </tbody>
-                </table>
-            </div>
-
-            <div class="bg-gray-800 p-4 border-t border-gray-700 flex justify-between items-center">
+            <table id="alerts-table" class="w-full text-left">
+                <thead class="bg-gray-800 uppercase text-xs text-gray-400 border-b border-gray-700">
+                    <tr>
+                        <th class="p-4">Data</th>
+                        <th class="p-4">Evento</th>
+                        <th class="p-4">Gravidade</th>
+                        <th class="p-4">Detalhes</th>
+                        <th class="p-4 text-center">Ações</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700 text-sm"></tbody>
+            </table>
+            <div class="bg-gray-800 p-4 border-t border-gray-700 flex justify-between">
                 <button id="prev-page" class="btn btn-blue" disabled>Anterior</button>
-                <span id="page-info" class="font-mono text-gray-400">Carregando...</span>
+                <span id="page-info">...</span>
                 <button id="next-page" class="btn btn-blue" disabled>Próxima</button>
             </div>
         </div>
     </main>
 
-    <div id="mediaModal" class="modal">
-        <span class="close" id="closeModal">&times;</span>
-        <div id="modalContentWrapper" class="flex flex-col items-center">
-            </div>
-    </div>
+    <div id="mediaModal" class="modal"><span class="close" onclick="closeModal()">&times;</span><div id="modalContent"></div></div>
 
     <script>
         const tableBody = document.querySelector("#alerts-table tbody");
-        const modal = document.getElementById("mediaModal");
-        const modalWrapper = document.getElementById("modalContentWrapper");
-        const closeModal = document.getElementById("closeModal");
-        const prevPageBtn = document.getElementById("prev-page");
-        const nextPageBtn = document.getElementById("next-page");
-        const pageInfo = document.getElementById("page-info");
-
-        let allAlerts = [];
-        let currentPage = 1;
-        const itemsPerPage = 10;
-
-        function getEventColorClasses(eventType, severity) {
-            // Cores baseadas na severidade ou tipo
-            if (severity >= 3 || eventType.includes("DANGER")) return "bg-red-900 text-red-200 border border-red-700";
-            if (severity == 2 || eventType.includes("SLEEP") || eventType.includes("HEAD")) return "bg-orange-900 text-orange-200 border border-orange-700";
-            if (eventType.includes("YAWN")) return "bg-blue-900 text-blue-200 border border-blue-700";
-            return "bg-gray-700 text-gray-300 border border-gray-600";
-        }
-
-        function openModal(type, url) {
-            modalWrapper.innerHTML = ''; // Limpa anterior
-            if (type === 'image') {
-                const img = document.createElement('img');
-                img.src = url;
-                img.className = "modal-content shadow-lg";
-                modalWrapper.appendChild(img);
-            } else if (type === 'video') {
-                const vid = document.createElement('video');
-                vid.src = url;
-                vid.controls = true;
-                vid.autoplay = true;
-                vid.className = "modal-content shadow-lg border border-gray-600";
-                modalWrapper.appendChild(vid);
-            }
-            modal.style.display = "flex";
-        }
-
-        function renderCurrentPage() {
-            tableBody.innerHTML = '';
-
-            if (allAlerts.length === 0) {
-                 tableBody.innerHTML = '<tr><td colspan="5" class="p-8 text-center text-gray-500 italic">Nenhum alerta registado no histórico.</td></tr>';
-                 pageInfo.textContent = "0 de 0";
-                 prevPageBtn.disabled = true; nextPageBtn.disabled = true;
-                 return;
-            }
-
-            const totalPages = Math.ceil(allAlerts.length / itemsPerPage);
-            if (currentPage > totalPages) currentPage = totalPages;
-
-            const start = (currentPage - 1) * itemsPerPage;
-            const end = start + itemsPerPage;
-            const pageAlerts = allAlerts.slice(start, end);
-
-            pageAlerts.forEach(alert => {
-                const row = tableBody.insertRow();
-                row.className = "hover:bg-gray-750 transition-colors duration-150";
-
-                // 1. Data
-                const dateObj = new Date(alert.timestamp.replace('Z', '')); // Remove Z se existir para tratar como local
-                const dateStr = !isNaN(dateObj) ? dateObj.toLocaleString('pt-PT') : alert.timestamp;
-
-                // 2. Badge Evento
-                const badgeClass = getEventColorClasses(alert.type, alert.severity);
-
-                row.innerHTML = `
-                    <td class="p-4 font-mono text-gray-300 whitespace-nowrap">${dateStr}</td>
-                    <td class="p-4"><span class="px-2 py-1 rounded text-xs font-bold uppercase tracking-wide ${badgeClass}">${alert.type}</span></td>
-                    <td class="p-4 text-center"><div class="w-full bg-gray-700 rounded-full h-2.5 dark:bg-gray-700"><div class="bg-blue-600 h-2.5 rounded-full" style="width: ${Math.min(alert.severity*33, 100)}%"></div></div></td>
-                    <td class="p-4 text-gray-400">${alert.message || '-'}</td>
-                    <td class="p-4 text-center">
-                        <div class="flex justify-center gap-2">
-                            ${alert.image_path ?
-                                `<button onclick="openModal('image', '/alerts/images/${alert.image_path}')" class="btn btn-sm btn-img" title="Ver Foto">
-                                    📷 Foto
-                                </button>` : ''}
-
-                            ${alert.video_path ?
-                                `<button onclick="openModal('video', '/alerts/videos/${alert.video_path}')" class="btn btn-sm btn-vid" title="Ver Vídeo">
-                                    🎥 Vídeo
-                                </button>` : ''}
-
-                            ${!alert.image_path && !alert.video_path ? '<span class="text-gray-600 italic text-xs">Sem evidência</span>' : ''}
-                        </div>
-                    </td>
-                `;
-            });
-
-            pageInfo.textContent = `Página ${currentPage} de ${totalPages}`;
-            prevPageBtn.disabled = (currentPage === 1);
-            nextPageBtn.disabled = (currentPage === totalPages);
-        }
+        let allAlerts = [], currentPage = 1, itemsPerPage = 10;
 
         async function fetchAlerts() {
             try {
                 const res = await fetch('/api/alerts');
-                if (!res.ok) throw new Error(res.status);
                 allAlerts = await res.json();
-                renderCurrentPage();
-            } catch (e) {
-                console.error(e);
-                tableBody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-400">Erro ao carregar dados: ${e.message}</td></tr>`;
-            }
+                renderPage();
+            } catch (e) { console.error(e); }
         }
 
-        // Event Listeners
-        closeModal.onclick = () => {
-            modal.style.display = "none";
-            modalWrapper.innerHTML = ''; // Para o vídeo se estiver a tocar
-        }
-        window.onclick = (e) => {
-            if (e.target == modal) {
-                modal.style.display = "none";
-                modalWrapper.innerHTML = '';
-            }
-        }
-        prevPageBtn.onclick = () => { if(currentPage > 1) { currentPage--; renderCurrentPage(); } }
-        nextPageBtn.onclick = () => { if(currentPage < Math.ceil(allAlerts.length/itemsPerPage)) { currentPage++; renderCurrentPage(); } }
+        function renderPage() {
+            tableBody.innerHTML = '';
+            const start = (currentPage-1)*itemsPerPage;
+            const pageAlerts = allAlerts.slice(start, start+itemsPerPage);
 
-        // Auto-refresh a cada 30s
+            pageAlerts.forEach(a => {
+                const row = tableBody.insertRow();
+                const date = new Date(a.timestamp.replace('Z','')).toLocaleString('pt-PT');
+                row.className = "hover:bg-gray-750";
+                row.innerHTML = `
+                    <td class="p-4 text-gray-300">${date}</td>
+                    <td class="p-4"><span class="px-2 py-1 rounded font-bold bg-gray-700 border border-gray-600">${a.type}</span></td>
+                    <td class="p-4"><div class="w-full bg-gray-700 h-2 rounded"><div class="bg-blue-600 h-2 rounded" style="width:${Math.min(a.severity*33,100)}%"></div></div></td>
+                    <td class="p-4 text-gray-400">${a.message}</td>
+                    <td class="p-4 flex justify-center gap-2">
+                        ${a.image_path ? `<button onclick="showMedia('img','${a.image_path}')" class="text-blue-400 hover:text-white">📷</button>`:''}
+                        ${a.video_path ? `<button onclick="showMedia('vid','${a.video_path}')" class="text-red-400 hover:text-white">🎥</button>`:''}
+                        <button onclick="deleteAlert(${a.id})" class="text-gray-500 hover:text-red-500 ml-2" title="Apagar">❌</button>
+                    </td>`;
+            });
+            document.getElementById("page-info").textContent = `Pág ${currentPage} de ${Math.ceil(allAlerts.length/itemsPerPage)}`;
+            document.getElementById("prev-page").disabled = currentPage===1;
+            document.getElementById("next-page").disabled = currentPage===Math.ceil(allAlerts.length/itemsPerPage);
+        }
+
+        function showMedia(type, path) {
+            const m = document.getElementById("mediaModal"), c = document.getElementById("modalContent");
+            c.innerHTML = type==='img' ? `<img src="/alerts/images/${path}" class="modal-content">` : `<video src="/alerts/videos/${path}" controls autoplay class="modal-content"></video>`;
+            m.style.display = "flex";
+        }
+        function closeModal() { document.getElementById("mediaModal").style.display = "none"; document.getElementById("modalContent").innerHTML=''; }
+
+        async function deleteAlert(id) {
+            const pwd = prompt("⚠️ APAGAR ALERTA\nDigite a senha de administrador:");
+            if (!pwd) return;
+            const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE', headers: {'X-Admin-Password': pwd} });
+            const data = await res.json();
+            if (data.success) { alert("Apagado!"); fetchAlerts(); } else alert("Erro: " + (data.error || "Senha incorreta"));
+        }
+
+        async function deleteAllAlerts() {
+            const pwd = prompt("⛔ PERIGO: APAGAR TUDO?\nDigite a senha de administrador:");
+            if (!pwd) return;
+            const res = await fetch(`/api/alerts/all`, { method: 'DELETE', headers: {'X-Admin-Password': pwd} });
+            const data = await res.json();
+            if (data.success) { alert("Histórico limpo!"); fetchAlerts(); } else alert("Erro: " + (data.error || "Senha incorreta"));
+        }
+
+        document.getElementById("prev-page").onclick = ()=>{if(currentPage>1)currentPage--;renderPage()};
+        document.getElementById("next-page").onclick = ()=>{if(currentPage<Math.ceil(allAlerts.length/itemsPerPage))currentPage++;renderPage()};
+
         fetchAlerts();
-        setInterval(fetchAlerts, 30000);
     </script>
 </body>
 </html>

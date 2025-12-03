@@ -1,5 +1,4 @@
-# Documentação: Gestor de Eventos com Filtro de Pontuação
-# Apenas salva eventos se score >= 80.
+# Documentação: Gestor de Eventos (Com funcionalidade de DELETE)
 
 import threading
 import queue
@@ -70,8 +69,12 @@ class EventHandler(threading.Thread):
 
         # --- FILTRO DE IMPORTÂNCIA ---
         score = event_data.get("score", 0)
-        if score < 80: return
-        # -----------------------------
+
+        # Se for menor que 80, IGNORA mas avisa no log para saberes que funcionou
+        if score < 80:
+            logging.info(f"Evento '{event_data['type']}' ignorado (Score {int(score)} < 80).")
+            return
+            # -----------------------------
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         filename_base = f"{int(time.time())}_{event_data['type']}"
@@ -88,18 +91,15 @@ class EventHandler(threading.Thread):
         else:
             img_filename = ""
 
-        # 2. Vídeo (MUDANÇA PARA MP4 H.264)
+        # 2. Vídeo (MP4 H.264)
         vid_filename = ""
         severity = event_data.get("severity", 0)
 
         if severity >= 2 and self.camera_thread_ref:
             logging.info(f"Gravando vídeo (H.264) para: {event_data['type']} (Score: {score})")
-            # Volta para .mp4
             vid_filename = f"{filename_base}.mp4"
             vid_full_path = os.path.join(self.save_path, "videos", vid_filename)
-
-            threading.Thread(target=self._save_video_clip,
-                             args=(vid_full_path,)).start()
+            threading.Thread(target=self._save_video_clip, args=(vid_full_path,)).start()
 
         # 3. DB
         try:
@@ -111,7 +111,7 @@ class EventHandler(threading.Thread):
                  score, img_filename, vid_filename))
             conn.commit()
             conn.close()
-            logging.info(f"Evento Crítico salvo DB: {event_data['type']} (Score: {int(score)})")
+            logging.info(f"*** EVENTO CRÍTICO SALVO: {event_data['type']} (Score: {int(score)}) ***")
         except Exception as e:
             logging.error(f"Erro SQLite: {e}")
 
@@ -119,23 +119,75 @@ class EventHandler(threading.Thread):
         if not self.camera_thread_ref: return
         frames = self.camera_thread_ref.get_recent_frames()
         if not frames: return
-
         try:
             height, width, _ = frames[0].shape
-
-            # --- MUDANÇA: 'avc1' (H.264) é o padrão ouro e costuma ser limpo nos logs ---
             fourcc = cv2.VideoWriter_fourcc(*'avc1')
             fps = 20.0
-
             out = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
-            for f in frames:
-                out.write(f)
+            for f in frames: out.write(f)
             out.release()
             logging.info(f"Vídeo MP4 salvo: {os.path.basename(filepath)}")
         except Exception as e:
             logging.error(f"Erro ao gravar vídeo: {e}")
 
-    # --- Métodos MQTT ---
+    # --- NOVOS MÉTODOS DE APAGAR ---
+
+    def delete_alert(self, alert_id):
+        """Apaga um alerta específico e os seus ficheiros."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+
+            # 1. Obter nomes dos ficheiros
+            c.execute("SELECT image_path, video_path FROM alerts WHERE id=?", (alert_id,))
+            row = c.fetchone()
+
+            if row:
+                # 2. Apagar Ficheiros
+                if row["image_path"]:
+                    p = os.path.join(self.save_path, "images", row["image_path"])
+                    if os.path.exists(p): os.remove(p)
+                if row["video_path"]:
+                    p = os.path.join(self.save_path, "videos", row["video_path"])
+                    if os.path.exists(p): os.remove(p)
+
+                # 3. Apagar do DB
+                c.execute("DELETE FROM alerts WHERE id=?", (alert_id,))
+                conn.commit()
+                conn.close()
+                return True
+            conn.close()
+            return False
+        except Exception as e:
+            logging.error(f"Erro ao apagar alerta {alert_id}: {e}")
+            return False
+
+    def delete_all_alerts(self):
+        """Apaga TODOS os alertas e limpa as pastas."""
+        try:
+            # 1. Limpar pastas
+            img_dir = os.path.join(self.save_path, "images")
+            vid_dir = os.path.join(self.save_path, "videos")
+
+            for f in os.listdir(img_dir):
+                os.remove(os.path.join(img_dir, f))
+            for f in os.listdir(vid_dir):
+                os.remove(os.path.join(vid_dir, f))
+
+            # 2. Limpar DB
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("DELETE FROM alerts")
+            c.execute("DELETE FROM sqlite_sequence WHERE name='alerts'")  # Reseta o ID autoincrement
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao limpar tudo: {e}")
+            return False
+
+    # --- Métodos de Leitura/Manutenção ---
     def get_pending_alerts(self, limit=10):
         try:
             conn = sqlite3.connect(self.db_path)
@@ -148,14 +200,9 @@ class EventHandler(threading.Thread):
             for row in rows:
                 al = dict(row)
                 alerts.append({
-                    "id": al["id"],
-                    "timestamp": al["timestamp"],
-                    "event_type": al["type"],
-                    "details": {
-                        "message": al["message"], "score": al["score"],
-                        "severity": al["severity"], "image": al["image_path"],
-                        "video": al["video_path"]
-                    }
+                    "id": al["id"], "timestamp": al["timestamp"], "event_type": al["type"],
+                    "details": {"message": al["message"], "score": al["score"], "severity": al["severity"],
+                                "image": al["image_path"], "video": al["video_path"]}
                 })
             return alerts
         except:
