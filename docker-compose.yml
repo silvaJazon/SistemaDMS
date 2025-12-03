@@ -9,6 +9,7 @@ services:
     image: jazonbatista/fluxoai-dms:latest # Nome de imagem
     container_name: fluxoai-servico_dms
     restart: unless-stopped
+    privileged: true
     environment:
       # O script vai ler esta variável para saber qual câmara usar.
       - VIDEO_SOURCE=0
@@ -29,3 +30,4 @@ services:
       - ./alertas_dms:/app/alerts
       # Mapeia a pasta local './config_dms' para '/app/config' para persistir 'settings.json'
       - ./config_dms:/app/config
+      - /dev:/dev

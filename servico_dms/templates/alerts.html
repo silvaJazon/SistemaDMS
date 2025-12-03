@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SistemaDMS - Histórico de Alertas</title>
+    <title>SistemaDMS - Histórico</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Estilos do Modal (Tailwind não é ideal para ::backdrop) */
         .modal {
-            display: none; /* Controlado por JS */
+            display: none;
             position: fixed;
             z-index: 50;
             left: 0;
@@ -17,7 +16,6 @@
             height: 100%;
             overflow: auto;
             background-color: rgba(0,0,0,0.9);
-            /* Flex para centralizar */
             align-items: center;
             justify-content: center;
         }
@@ -25,7 +23,8 @@
             display: block;
             margin: auto;
             max-width: 90%;
-            max-height: 90vh;
+            max-height: 80vh;
+            border-radius: 8px;
         }
         .close {
             position: absolute;
@@ -34,200 +33,185 @@
             color: #f1f1f1;
             font-size: 40px;
             font-weight: bold;
-            transition: 0.3s;
             cursor: pointer;
+            z-index: 60;
         }
-        .close:hover,
-        .close:focus {
-            color: #bbb;
-            text-decoration: none;
-        }
-
-        /* ================== NOVO (CSS BOTOES) ================== */
-        /* Estilos para botões (copiado de index.html) */
-        .btn {
-            padding: 0.5rem 1rem; font-weight: bold; border-radius: 0.375rem; transition: background-color 0.2s, opacity 0.2s;
-            text-align: center; cursor: pointer;
-        }
+        .btn { padding: 0.5rem 1rem; font-weight: bold; border-radius: 0.375rem; transition: all 0.2s; cursor: pointer; }
         .btn:disabled { background-color: #4A5568; color: #A0AEC0; cursor: not-allowed; opacity: 0.7; }
         .btn-blue { background-color: #3182CE; color: white; } .btn-blue:hover:not(:disabled) { background-color: #2B6CB0; }
-        /* ======================================================== */
 
+        /* Botões pequenos da tabela */
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.875rem; margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 4px; }
+        .btn-img { background-color: #4A5568; color: white; } .btn-img:hover { background-color: #718096; }
+        .btn-vid { background-color: #E53E3E; color: white; } .btn-vid:hover { background-color: #C53030; }
     </style>
 </head>
 <body class="bg-gray-800 text-gray-200 font-sans min-h-screen">
 
-    <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg">
-        <h1 class="text-3xl font-bold text-center text-white">SistemaDMS - Histórico de Alertas</h1>
+    <header class="py-6 px-4 md:px-6 bg-gray-900 shadow-lg border-b border-gray-700">
+        <h1 class="text-3xl font-bold text-center text-white tracking-tight">SistemaDMS <span class="text-blue-500">Histórico</span></h1>
         <nav class="flex justify-center gap-6 mt-4">
-            <a href="/" class="text-lg text-gray-400 hover:text-blue-300 font-medium">Calibração</a>
-            <a href="/alerts" class="text-lg text-blue-400 hover:text-blue-300 font-medium border-b-2 border-blue-400 pb-1">Histórico de Alertas</a>
+            <a href="/" class="text-lg text-gray-400 hover:text-blue-300 font-medium transition-colors">Monitoramento</a>
+            <a href="/alerts" class="text-lg text-blue-400 font-medium border-b-2 border-blue-400 pb-1">Histórico</a>
         </nav>
     </header>
 
     <main class="p-4 md:p-6">
-        <div class="max-w-7xl mx-auto bg-gray-900 rounded-lg shadow-2xl overflow-hidden">
+        <div class="max-w-7xl mx-auto bg-gray-900 rounded-lg shadow-2xl overflow-hidden border border-gray-700">
             <div class="overflow-x-auto">
                 <table id="alerts-table" class="w-full text-left">
-                    <thead class="bg-gray-700 uppercase text-xs text-gray-300 tracking-wider">
+                    <thead class="bg-gray-800 uppercase text-xs text-gray-400 tracking-wider font-semibold border-b border-gray-700">
                         <tr>
-                            <th class="p-4">Timestamp</th>
-                            <th class="p-4">Tipo de Evento</th>
+                            <th class="p-4">Data / Hora</th>
+                            <th class="p-4">Evento</th>
+                            <th class="p-4">Gravidade</th>
                             <th class="p-4">Detalhes</th>
-                            <th class="p-4">Imagem</th>
+                            <th class="p-4 text-center">Evidências</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-700">
+                    <tbody class="divide-y divide-gray-700 text-sm">
                         </tbody>
                 </table>
             </div>
-        </div>
 
-        <div class="pagination-controls max-w-7xl mx-auto bg-gray-900 flex justify-between items-center p-4 rounded-b-lg">
-            <button id="prev-page" class="btn btn-blue" disabled>Anterior</button>
-            <span id="page-info" class="font-mono text-gray-300">Página 1 de 1</span>
-            <button id="next-page" class="btn btn-blue" disabled>Próxima</button>
+            <div class="bg-gray-800 p-4 border-t border-gray-700 flex justify-between items-center">
+                <button id="prev-page" class="btn btn-blue" disabled>Anterior</button>
+                <span id="page-info" class="font-mono text-gray-400">Carregando...</span>
+                <button id="next-page" class="btn btn-blue" disabled>Próxima</button>
+            </div>
         </div>
-        </main>
+    </main>
 
-    <div id="imageModal" class="modal">
+    <div id="mediaModal" class="modal">
         <span class="close" id="closeModal">&times;</span>
-        <img class="modal-content" id="modalImage">
+        <div id="modalContentWrapper" class="flex flex-col items-center">
+            </div>
     </div>
 
     <script>
         const tableBody = document.querySelector("#alerts-table tbody");
-        const modal = document.getElementById("imageModal");
-        const modalImg = document.getElementById("modalImage");
+        const modal = document.getElementById("mediaModal");
+        const modalWrapper = document.getElementById("modalContentWrapper");
         const closeModal = document.getElementById("closeModal");
-
-        // ================== NOVO (LÓGICA PAGINAÇÃO) ==================
         const prevPageBtn = document.getElementById("prev-page");
         const nextPageBtn = document.getElementById("next-page");
         const pageInfo = document.getElementById("page-info");
 
-        let allAlerts = []; // Armazena todos os alertas
+        let allAlerts = [];
         let currentPage = 1;
         const itemsPerPage = 10;
-        // =============================================================
 
-        // Função para obter classes de cor do Tailwind
-        function getEventColorClasses(eventType) {
-            switch (eventType) {
-                case "SONOLENCIA":
-                    return "bg-red-600 text-red-100";
-                case "DISTRACAO":
-                    return "bg-yellow-600 text-yellow-100";
-                case "BOCEJO":
-                    return "bg-blue-600 text-blue-100";
-                default:
-                    return "bg-gray-600 text-gray-100";
-            }
+        function getEventColorClasses(eventType, severity) {
+            // Cores baseadas na severidade ou tipo
+            if (severity >= 3 || eventType.includes("DANGER")) return "bg-red-900 text-red-200 border border-red-700";
+            if (severity == 2 || eventType.includes("SLEEP") || eventType.includes("HEAD")) return "bg-orange-900 text-orange-200 border border-orange-700";
+            if (eventType.includes("YAWN")) return "bg-blue-900 text-blue-200 border border-blue-700";
+            return "bg-gray-700 text-gray-300 border border-gray-600";
         }
 
-        // ================== NOVO (Função para renderizar a página) ==================
+        function openModal(type, url) {
+            modalWrapper.innerHTML = ''; // Limpa anterior
+            if (type === 'image') {
+                const img = document.createElement('img');
+                img.src = url;
+                img.className = "modal-content shadow-lg";
+                modalWrapper.appendChild(img);
+            } else if (type === 'video') {
+                const vid = document.createElement('video');
+                vid.src = url;
+                vid.controls = true;
+                vid.autoplay = true;
+                vid.className = "modal-content shadow-lg border border-gray-600";
+                modalWrapper.appendChild(vid);
+            }
+            modal.style.display = "flex";
+        }
+
         function renderCurrentPage() {
-            tableBody.innerHTML = ''; // Limpa a tabela
-            
+            tableBody.innerHTML = '';
+
             if (allAlerts.length === 0) {
-                 tableBody.innerHTML = '<tr class="bg-gray-800"><td colspan="4" class="p-4 text-center text-gray-400">Nenhum alerta registado ainda.</td></tr>';
-                 pageInfo.textContent = "Página 0 de 0";
-                 prevPageBtn.disabled = true;
-                 nextPageBtn.disabled = true;
+                 tableBody.innerHTML = '<tr><td colspan="5" class="p-8 text-center text-gray-500 italic">Nenhum alerta registado no histórico.</td></tr>';
+                 pageInfo.textContent = "0 de 0";
+                 prevPageBtn.disabled = true; nextPageBtn.disabled = true;
                  return;
             }
 
             const totalPages = Math.ceil(allAlerts.length / itemsPerPage);
-            // Garante que a página atual não seja maior que o total
             if (currentPage > totalPages) currentPage = totalPages;
 
-            const startIndex = (currentPage - 1) * itemsPerPage;
-            const endIndex = startIndex + itemsPerPage;
-            const pageAlerts = allAlerts.slice(startIndex, endIndex);
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageAlerts = allAlerts.slice(start, end);
 
             pageAlerts.forEach(alert => {
                 const row = tableBody.insertRow();
-                row.className = "hover:bg-gray-800 transition-colors";
-                
-                const timestamp = new Date(alert.timestamp.replace('Z', '+00:00'));
-                let formattedTimestamp = "Data Inválida";
-                if (!isNaN(timestamp)) {
-                     try {
-                        formattedTimestamp = timestamp.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
-                     } catch (e) { console.error("Erro formatar data:", e); }
-                }
+                row.className = "hover:bg-gray-750 transition-colors duration-150";
 
-                const eventType = (alert.event_type || 'Indefinido').toUpperCase();
-                const colorClasses = getEventColorClasses(eventType);
+                // 1. Data
+                const dateObj = new Date(alert.timestamp.replace('Z', '')); // Remove Z se existir para tratar como local
+                const dateStr = !isNaN(dateObj) ? dateObj.toLocaleString('pt-PT') : alert.timestamp;
 
-                row.insertCell(0).outerHTML = `<td class="p-4 font-mono">${formattedTimestamp}</td>`;
-                row.insertCell(1).outerHTML = `<td class="p-4"><span class="px-2 py-1 ${colorClasses} rounded-full text-xs font-semibold">${eventType}</span></td>`;
-                row.insertCell(2).outerHTML = `<td class="p-4 font-mono">${alert.details || '-'}</td>`;
-                
-                const imgCell = row.insertCell(3);
-                imgCell.className = "p-4";
-                if (alert.image_file) {
-                    const img = document.createElement('img');
-                    const imageUrl = `/alerts/images/${alert.image_file}`;
-                    img.src = imageUrl;
-                    img.alt = `Alerta ${eventType} em ${formattedTimestamp}`;
-                    img.className = "w-24 h-auto rounded-md cursor-pointer hover:opacity-80 transition-opacity"; 
+                // 2. Badge Evento
+                const badgeClass = getEventColorClasses(alert.type, alert.severity);
 
-                    img.onclick = () => {
-                        modal.style.display = "flex";
-                        modalImg.src = imageUrl;
-                    }
-                    imgCell.appendChild(img);
-                } else {
-                    imgCell.textContent = '-';
-                }
+                row.innerHTML = `
+                    <td class="p-4 font-mono text-gray-300 whitespace-nowrap">${dateStr}</td>
+                    <td class="p-4"><span class="px-2 py-1 rounded text-xs font-bold uppercase tracking-wide ${badgeClass}">${alert.type}</span></td>
+                    <td class="p-4 text-center"><div class="w-full bg-gray-700 rounded-full h-2.5 dark:bg-gray-700"><div class="bg-blue-600 h-2.5 rounded-full" style="width: ${Math.min(alert.severity*33, 100)}%"></div></div></td>
+                    <td class="p-4 text-gray-400">${alert.message || '-'}</td>
+                    <td class="p-4 text-center">
+                        <div class="flex justify-center gap-2">
+                            ${alert.image_path ?
+                                `<button onclick="openModal('image', '/alerts/images/${alert.image_path}')" class="btn btn-sm btn-img" title="Ver Foto">
+                                    📷 Foto
+                                </button>` : ''}
+
+                            ${alert.video_path ?
+                                `<button onclick="openModal('video', '/alerts/videos/${alert.video_path}')" class="btn btn-sm btn-vid" title="Ver Vídeo">
+                                    🎥 Vídeo
+                                </button>` : ''}
+
+                            ${!alert.image_path && !alert.video_path ? '<span class="text-gray-600 italic text-xs">Sem evidência</span>' : ''}
+                        </div>
+                    </td>
+                `;
             });
 
-            // Atualiza controles de paginação
             pageInfo.textContent = `Página ${currentPage} de ${totalPages}`;
             prevPageBtn.disabled = (currentPage === 1);
             nextPageBtn.disabled = (currentPage === totalPages);
         }
-        // =========================================================================
 
-
-        async function fetchAndDisplayAlerts() {
+        async function fetchAlerts() {
             try {
-                const response = await fetch('/api/alerts');
-                if (!response.ok) {
-                    throw new Error(`Erro HTTP: ${response.status}`);
-                }
-                allAlerts = await response.json(); // Armazena todos os alertas
-                currentPage = 1; // Reseta para a primeira página
-                renderCurrentPage(); // Renderiza a primeira página
-
-            } catch (error) {
-                console.error("Erro ao buscar alertas:", error);
-                 tableBody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-red-400">Erro ao carregar alertas: ${error.message}</td></tr>`;
+                const res = await fetch('/api/alerts');
+                if (!res.ok) throw new Error(res.status);
+                allAlerts = await res.json();
+                renderCurrentPage();
+            } catch (e) {
+                console.error(e);
+                tableBody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-red-400">Erro ao carregar dados: ${e.message}</td></tr>`;
             }
         }
 
-        closeModal.onclick = () => { modal.style.display = "none"; }
-        window.onclick = (event) => { if (event.target == modal) { modal.style.display = "none"; } }
-
-        // ================== NOVO (Listeners da Paginação) ==================
-        prevPageBtn.addEventListener("click", () => {
-            if (currentPage > 1) {
-                currentPage--;
-                renderCurrentPage();
+        // Event Listeners
+        closeModal.onclick = () => {
+            modal.style.display = "none";
+            modalWrapper.innerHTML = ''; // Para o vídeo se estiver a tocar
+        }
+        window.onclick = (e) => {
+            if (e.target == modal) {
+                modal.style.display = "none";
+                modalWrapper.innerHTML = '';
             }
-        });
+        }
+        prevPageBtn.onclick = () => { if(currentPage > 1) { currentPage--; renderCurrentPage(); } }
+        nextPageBtn.onclick = () => { if(currentPage < Math.ceil(allAlerts.length/itemsPerPage)) { currentPage++; renderCurrentPage(); } }
 
-        nextPageBtn.addEventListener("click", () => {
-            const totalPages = Math.ceil(allAlerts.length / itemsPerPage);
-            if (currentPage < totalPages) {
-                currentPage++;
-                renderCurrentPage();
-            }
-        });
-        // ===================================================================
-
-        fetchAndDisplayAlerts();
+        // Auto-refresh a cada 30s
+        fetchAlerts();
+        setInterval(fetchAlerts, 30000);
     </script>
 </body>
 </html>

@@ -1,344 +1,213 @@
-# Documentação: Gestor de Eventos (Central de Alertas - SQLite)
-# (Atualizado para suportar fila de envio MQTT e limpeza)
+# Documentação: Gestor de Eventos com Filtro de Pontuação
+# Apenas salva eventos se score >= 80.
 
 import threading
 import queue
-import logging
-import os
-import cv2
-from datetime import datetime
 import sqlite3
-import time  # Para o retry
+import os
+import time
+import cv2
+import json
+import logging
+from datetime import datetime, timedelta
+
 
 class EventHandler(threading.Thread):
-    """
-    Processa eventos de alerta numa thread separada para guardar
-    informações (SQLite) e imagens (JPG) sem bloquear a thread principal.
-    Gere as ligações SQLite de forma segura para threads.
-    """
-
-    def __init__(
-        self, queue, stop_event, save_path="/app/alerts", db_name="alerts.db"
-    ):
-        threading.Thread.__init__(self, name="EventHandlerThread")
-        self.daemon = True
+    def __init__(self, queue, stop_event):
+        threading.Thread.__init__(self, name="EventHandler")
         self.queue = queue
         self.stop_event = stop_event
-        self.save_path = save_path
-        self.image_save_path = os.path.join(self.save_path, "images")
-        self.db_path = os.path.join(self.save_path, db_name)
+        self.db_path = "/app/alerts/dms_alerts.db"
+        self.save_path = "/app/alerts"
+        self.camera_thread_ref = None
 
-        os.makedirs(self.image_save_path, exist_ok=True)
-
-        logging.info(
-            f"Gestor de Eventos inicializado. Base de dados: {self.db_path}, "
-            f"Imagens em: {self.image_save_path}"
-        )
         self._init_db()
 
-    def _get_db_connection(self):
-        """Cria e retorna uma nova ligação à base de dados."""
-        try:
-            conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=10.0)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            return conn
-        except sqlite3.Error as e:
-            logging.error(f"!!! Erro fatal ao conectar a SQLite: {e}", exc_info=True)
-            raise
+    def set_camera_thread(self, cam_thread):
+        self.camera_thread_ref = cam_thread
 
     def _init_db(self):
-        """Inicializa a base de dados SQLite e cria/atualiza a tabela."""
-        conn = None
+        os.makedirs(self.save_path, exist_ok=True)
+        os.makedirs(os.path.join(self.save_path, "images"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_path, "videos"), exist_ok=True)
+
         try:
-            conn = self._get_db_connection()
-            cursor = conn.cursor()
-            # 1. Cria a tabela principal (com a nova coluna, se for nova)
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    details TEXT,
-                    image_file TEXT,
-                    mqtt_sent_timestamp TEXT DEFAULT NULL 
-                )
-            """
-            )
-            # 2. Cria o índice da coluna original
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_timestamp ON alerts (timestamp)
-            """
-            )
-            
-            # --- INÍCIO DA CORREÇÃO ---
-            
-            # 3. Tenta adicionar a coluna (Migração para DBs existentes)
-            #    Isto deve vir ANTES de tentar criar um índice nessa coluna.
-            try:
-                cursor.execute("ALTER TABLE alerts ADD COLUMN mqtt_sent_timestamp TEXT DEFAULT NULL")
-                logging.info("Migração DB: Coluna 'mqtt_sent_timestamp' adicionada.")
-            except sqlite3.OperationalError as e:
-                if "duplicate column name" in str(e):
-                    logging.debug("Migração DB: Coluna 'mqtt_sent_timestamp' já existe.")
-                else:
-                    raise # Levanta outros erros
-
-            # 4. Agora que a coluna existe, cria o índice para ela
-            cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_mqtt_sent 
-                ON alerts (mqtt_sent_timestamp)
-                """
-            )
-            # --- FIM DA CORREÇÃO ---
-
-            logging.info(
-                f"Base de dados SQLite '{self.db_path}' verificada/inicializada com sucesso."
-            )
-        except sqlite3.Error as e:
-            logging.error(
-                f"!!! Erro ao inicializar a base de dados SQLite: {e}", exc_info=True
-            )
-        finally:
-            if conn:
-                conn.close()
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS alerts
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          timestamp TEXT,
+                          type TEXT,
+                          message TEXT,
+                          severity INTEGER,
+                          score REAL,
+                          image_path TEXT,
+                          video_path TEXT, 
+                          synced INTEGER DEFAULT 0,
+                          synced_time TEXT)''')
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.error(f"EventHandler: Erro init DB: {e}")
 
     def run(self):
-        """Loop principal da thread: espera por eventos na fila e processa-os."""
-        logging.info("Thread do Gestor de Eventos (SQLite) iniciada.")
-
+        logging.info("EventHandler: Iniciado.")
         while not self.stop_event.is_set():
             try:
-                item = self.queue.get(timeout=0.2)
-                if item is None:
-                    break
-
-                self.process_event(item)
+                item = self.queue.get(timeout=1.0)
+                self._process_event(item)
                 self.queue.task_done()
-
             except queue.Empty:
                 continue
             except Exception as e:
-                logging.error(
-                    f"Erro inesperado na thread do EventHandler: {e}", exc_info=True
-                )
-                time.sleep(1)
+                logging.error(f"EventHandler: Erro no loop: {e}")
 
-        logging.info("Thread do Gestor de Eventos (SQLite) terminada.")
+    def _process_event(self, item):
+        event_data = item.get("event_data")
+        frame = item.get("frame")
 
-    def process_event(self, item):
-        """Guarda os dados do evento em SQLite e a imagem em JPG."""
-        conn = None
-        try:
-            event_data = item.get("event_data")
-            frame = item.get("frame")
-            if event_data is None or frame is None:
-                logging.warning(f"Evento inválido. Ignorando.")
-                return
+        if not event_data: return
 
-            event_type = event_data.get("type", "DESCONHECIDO")
-            details = event_data.get("value", None)
-            timestamp_str = event_data.get("timestamp", datetime.now().isoformat() + "Z")
+        # --- FILTRO DE IMPORTÂNCIA ---
+        score = event_data.get("score", 0)
+        if score < 80: return
+        # -----------------------------
 
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        filename_base = f"{int(time.time())}_{event_data['type']}"
+
+        # 1. Imagem
+        img_filename = f"{filename_base}.jpg"
+        img_full_path = os.path.join(self.save_path, "images", img_filename)
+
+        if frame is not None:
             try:
-                timestamp_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except ValueError:
-                timestamp_dt = datetime.now()
-                timestamp_str = timestamp_dt.isoformat() + "Z"
+                cv2.imwrite(img_full_path, frame)
+            except:
+                img_filename = ""
+        else:
+            img_filename = ""
 
-            date_path = timestamp_dt.strftime("%Y/%m/%d")
-            image_dir = os.path.join(self.image_save_path, date_path)
-            os.makedirs(image_dir, exist_ok=True)
+        # 2. Vídeo (MUDANÇA PARA MP4 H.264)
+        vid_filename = ""
+        severity = event_data.get("severity", 0)
 
-            filename_base = (
-                timestamp_dt.strftime("%Y-%m-%dT%H-%M-%S.%f") + f"_{event_type}"
-            )
-            image_filename = filename_base + ".jpg"
-            image_full_path = os.path.join(image_dir, image_filename)
+        if severity >= 2 and self.camera_thread_ref:
+            logging.info(f"Gravando vídeo (H.264) para: {event_data['type']} (Score: {score})")
+            # Volta para .mp4
+            vid_filename = f"{filename_base}.mp4"
+            vid_full_path = os.path.join(self.save_path, "videos", vid_filename)
 
-            success = cv2.imwrite(
-                image_full_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            )
-            image_relative_path = None
-            if success:
-                image_relative_path = os.path.join(date_path, image_filename).replace(
-                    os.path.sep, "/"
-                )
-            else:
-                logging.error(f"Falha ao guardar imagem: {image_full_path}")
+            threading.Thread(target=self._save_video_clip,
+                             args=(vid_full_path,)).start()
 
-            conn = self._get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute(
-                """
-                INSERT INTO alerts (timestamp, event_type, details, image_file)
-                VALUES (?, ?, ?, ?)
-            """,
-                (timestamp_str, event_type, details, image_relative_path),
-            )
-            logging.debug("ProcessEvent: INSERT executado.")
-
-            log_msg_img = f"Imagem: {image_relative_path}" if success else "Imagem falhou"
-            logging.warning(
-                f"*** ALERTA GUARDADO (SQLite) *** Tipo: {event_type}, {log_msg_img}"
-            )
-
-        except sqlite3.Error as db_err:
-            logging.error(f"Erro SQLite ao processar/gravar evento: {db_err}", exc_info=True)
+        # 3. DB
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO alerts (timestamp, type, message, severity, score, image_path, video_path, synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                (timestamp, event_data['type'], event_data['message'], severity,
+                 score, img_filename, vid_filename))
+            conn.commit()
+            conn.close()
+            logging.info(f"Evento Crítico salvo DB: {event_data['type']} (Score: {int(score)})")
         except Exception as e:
-            logging.error(f"Falha inesperada ao processar/gravar evento: {e}", exc_info=True)
-        finally:
-            if conn:
-                conn.close()
+            logging.error(f"Erro SQLite: {e}")
+
+    def _save_video_clip(self, filepath):
+        if not self.camera_thread_ref: return
+        frames = self.camera_thread_ref.get_recent_frames()
+        if not frames: return
+
+        try:
+            height, width, _ = frames[0].shape
+
+            # --- MUDANÇA: 'avc1' (H.264) é o padrão ouro e costuma ser limpo nos logs ---
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+            fps = 20.0
+
+            out = cv2.VideoWriter(filepath, fourcc, fps, (width, height))
+            for f in frames:
+                out.write(f)
+            out.release()
+            logging.info(f"Vídeo MP4 salvo: {os.path.basename(filepath)}")
+        except Exception as e:
+            logging.error(f"Erro ao gravar vídeo: {e}")
+
+    # --- Métodos MQTT ---
+    def get_pending_alerts(self, limit=10):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT * FROM alerts WHERE synced=0 ORDER BY id ASC LIMIT ?", (limit,))
+            rows = c.fetchall()
+            conn.close()
+            alerts = []
+            for row in rows:
+                al = dict(row)
+                alerts.append({
+                    "id": al["id"],
+                    "timestamp": al["timestamp"],
+                    "event_type": al["type"],
+                    "details": {
+                        "message": al["message"], "score": al["score"],
+                        "severity": al["severity"], "image": al["image_path"],
+                        "video": al["video_path"]
+                    }
+                })
+            return alerts
+        except:
+            return []
+
+    def mark_alert_as_sent(self, db_id, sent_time):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("UPDATE alerts SET synced=1, synced_time=? WHERE id=?", (sent_time, db_id))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+
+    def cleanup_sent_alerts(self, days_to_keep=7):
+        if days_to_keep <= 0: return 0, 0
+        deleted = 0;
+        failed = 0
+        cutoff = (datetime.now() - timedelta(days=days_to_keep)).strftime("%Y-%m-%d")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT id, image_path, video_path FROM alerts WHERE synced=1 AND timestamp < ?", (cutoff,))
+            rows = c.fetchall()
+            for row in rows:
+                try:
+                    if row["image_path"]:
+                        p = os.path.join(self.save_path, "images", row["image_path"])
+                        if os.path.exists(p): os.remove(p)
+                    if row["video_path"]:
+                        p = os.path.join(self.save_path, "videos", row["video_path"])
+                        if os.path.exists(p): os.remove(p)
+                    c.execute("DELETE FROM alerts WHERE id=?", (row["id"],))
+                    deleted += 1
+                except:
+                    failed += 1
+            conn.commit();
+            conn.close()
+        except:
+            pass
+        return deleted, failed
 
     def get_alerts(self, limit=50):
-        """Busca os últimos 'limit' alertas da base de dados (para a UI)."""
-        conn = None
-        alerts = []
         try:
-            conn = self._get_db_connection()
-            conn.row_factory = sqlite3.Row  # Retorna como dicionários
-            cursor = conn.cursor()
-
-            safe_limit = int(limit)
-            cursor.execute(
-                """
-                SELECT id, timestamp, event_type, details, image_file, mqtt_sent_timestamp
-                FROM alerts
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """,
-                (safe_limit,),
-            )
-            alerts = [dict(row) for row in cursor.fetchall()]
-        except sqlite3.Error as e:
-            logging.error(f"Erro SQLite ao buscar alertas: {e}", exc_info=True)
-            alerts = []
-        finally:
-            if conn:
-                conn.close()
-        return alerts
-
-    # --- MÉTODOS NOVOS (para MQTTUploader) ---
-
-    def get_pending_alerts(self, limit=10):
-        """Busca alertas que ainda não foram enviados via MQTT."""
-        conn = None
-        alerts = []
-        try:
-            conn = self._get_db_connection()
+            conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, timestamp, event_type, details
-                FROM alerts
-                WHERE mqtt_sent_timestamp IS NULL
-                ORDER BY timestamp ASC
-                LIMIT ?
-            """,
-                (int(limit),),
-            )
-            alerts = [dict(row) for row in cursor.fetchall()]
-        except sqlite3.Error as e:
-            logging.error(f"Erro SQLite ao buscar alertas pendentes: {e}", exc_info=True)
-        finally:
-            if conn:
-                conn.close()
-        return alerts
-
-    def mark_alert_as_sent(self, alert_id: int, sent_timestamp: str):
-        """Atualiza um alerta como enviado no DB."""
-        conn = None
-        try:
-            conn = self._get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE alerts
-                SET mqtt_sent_timestamp = ?
-                WHERE id = ? AND mqtt_sent_timestamp IS NULL
-            """,
-                (sent_timestamp, alert_id),
-            )
-            if cursor.rowcount == 0:
-                 logging.warning(f"MarkAsSent: Alerta ID {alert_id} não encontrado ou já marcado.")
-        except sqlite3.Error as e:
-            logging.error(f"Erro SQLite ao marcar alerta {alert_id} como enviado: {e}", exc_info=True)
-            raise
-        finally:
-            if conn:
-                conn.close()
-
-    def cleanup_sent_alerts(self, days_old=10):
-        """
-        Apaga alertas E imagens que foram enviados há mais de 'days_old' dias.
-        Retorna (deleted_count, failed_count)
-        """
-        conn = None
-        deleted_count = 0
-        failed_count = 0
-        
-        cutoff_date_sql = f"date('now', '-{int(days_old)} days', 'localtime')"
-
-        try:
-            conn = self._get_db_connection()
-            conn.isolation_level = "DEFERRED" 
-            cursor = conn.cursor()
-            
-            # 1. Encontra os alertas e imagens para apagar
-            cursor.execute(
-                f"""
-                SELECT id, image_file FROM alerts
-                WHERE mqtt_sent_timestamp IS NOT NULL
-                AND mqtt_sent_timestamp < {cutoff_date_sql}
-                """
-            )
-            alerts_to_delete = cursor.fetchall()
-            if not alerts_to_delete:
-                return 0, 0
-
-            logging.info(f"Cleanup: Encontrados {len(alerts_to_delete)} alertas antigos para apagar.")
-
-            for alert_id, image_relative_path in alerts_to_delete:
-                # 2. Apaga a imagem associada
-                if image_relative_path:
-                    try:
-                        full_image_path = os.path.join(
-                            self.image_save_path, image_relative_path.replace("/", os.path.sep)
-                        )
-                        if os.path.exists(full_image_path):
-                            os.remove(full_image_path)
-                        else:
-                            logging.warning(f"Cleanup: Imagem {full_image_path} não encontrada.")
-                    except OSError as e:
-                        logging.error(f"Cleanup: Falha ao apagar imagem {full_image_path}: {e}")
-                        failed_count += 1
-
-                # 3. Apaga a entrada do DB
-                try:
-                    cursor.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
-                    deleted_count += 1
-                except sqlite3.Error as e:
-                     logging.error(f"Cleanup: Falha ao apagar alerta ID {alert_id} do DB: {e}")
-                     failed_count += 1
-            
-            # 4. Confirma a transação
-            conn.commit()
-
-        except sqlite3.Error as e:
-            logging.error(f"Erro SQLite na transação de limpeza: {e}", exc_info=True)
-            if conn:
-                conn.rollback()
-        except Exception as e:
-            logging.error(f"Erro inesperado na limpeza: {e}", exc_info=True)
-            if conn:
-                conn.rollback()
-        finally:
-            if conn:
-                conn.close()
-                
-        return deleted_count, failed_count
+            c = conn.cursor()
+            c.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
+            rows = c.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+        except:
+            return []

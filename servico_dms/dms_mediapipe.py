@@ -35,13 +35,17 @@ class MediaPipeMonitor(BaseMonitor):
             (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
         ])
 
-        # phone_detected é mantido como False fixo para não quebrar dependências antigas
         self.latest_metrics = {
-            "ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0, "phone_detected": False
+            "ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0
         }
 
         self.score_manager = ScoreManager()
         self.last_process_time = time.time()
+
+        # --- OTIMIZAÇÃO DE PERFORMANCE ---
+        self.process_width = 320  # A IA processará nesta largura (muito mais rápido)
+        self.prev_frame_time = 0  # Para calcular FPS
+        self.current_fps = 0
 
         # Cores
         self.COLOR_GREEN = (0, 255, 0)
@@ -51,28 +55,41 @@ class MediaPipeMonitor(BaseMonitor):
     def process_frame(self, frame: np.ndarray, frame_rgb: np.ndarray):
         img_h, img_w, _ = frame.shape
         current_time = time.time()
+
+        # --- Cálculo de FPS Real ---
+        if self.prev_frame_time > 0:
+            fps_calc = 1.0 / (current_time - self.prev_frame_time)
+            # Filtro suave para o número não saltar muito
+            self.current_fps = 0.9 * self.current_fps + 0.1 * fps_calc
+        self.prev_frame_time = current_time
+
+        # Cálculo de DT para a física do ScoreManager
         dt = current_time - self.last_process_time
         self.last_process_time = current_time
-
         if dt > 1.0: dt = 0.03
         if dt <= 0: dt = 0.001
 
-        results = self.face_mesh.process(frame_rgb)
+        # --- OTIMIZAÇÃO 1: Redimensionar para a IA ---
+        # Processamos uma imagem pequena (ex: 320px), mas desenhamos na grande.
+        # Como o MediaPipe devolve coordenadas normalizadas (0.0 a 1.0),
+        # isto funciona automaticamente!
+        frame_small = cv2.resize(frame_rgb, (self.process_width, int(self.process_width * img_h / img_w)))
+        results = self.face_mesh.process(frame_small)
 
         # Caso 1: Sem rosto
         if not results.multi_face_landmarks:
-            metrics = self._get_empty_metrics()
-            self.latest_metrics = metrics
-            score, events = self.score_manager.update(metrics, dt)
+            # Score Manager atualiza (recuperação) mesmo sem rosto
+            score, events = self.score_manager.update(self._get_empty_metrics(), dt)
 
             cv2.putText(frame, "ROSTO NAO DETECTADO", (50, img_h // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, self.COLOR_RED, 2)
             self._draw_hud(frame, score, 0.0, 0.0)
-
             return frame, events, self.latest_metrics, False
 
         # Caso 2: Rosto Detetado
         face_landmarks = results.multi_face_landmarks[0]
+
+        # Convertemos landmarks para numpy usando o tamanho da imagem ORIGINAL (img_w, img_h)
         landmarks_np = np.array([(lm.x, lm.y) for lm in face_landmarks.landmark])
 
         left_ear = self._calculate_ear(landmarks_np, self.LEFT_EYE)
@@ -83,26 +100,27 @@ class MediaPipeMonitor(BaseMonitor):
 
         self.latest_metrics = {
             "ear": round(avg_ear, 3), "mar": round(mar, 3),
-            "pitch": round(pitch, 1), "yaw": round(yaw, 1), "roll": round(roll, 1),
-            "phone_detected": False  # Sempre falso pois removemos o YOLO
+            "pitch": round(pitch, 1), "yaw": round(yaw, 1), "roll": round(roll, 1)
         }
 
         score, events = self.score_manager.update(self.latest_metrics, dt)
 
-        # 1. Desenha a Teia (Malha)
-        self.mp_drawing.draw_landmarks(
-            image=frame,
-            landmark_list=face_landmarks,
-            connections=self.mp_face_mesh.FACEMESH_TESSELATION,
-            landmark_drawing_spec=None,
-            connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_tesselation_style()
-        )
+        # --- OTIMIZAÇÃO 2: Desenho Mais Leve ---
+        # Comentei a "TESSELATION" (a malha completa) porque é pesada e polui visualmente.
+        # Desenhamos apenas os contornos (olhos, lábios, face oval).
 
-        # 2. Desenha os Contornos
+        # self.mp_drawing.draw_landmarks(
+        #     image=frame,
+        #     landmark_list=face_landmarks,
+        #     connections=self.mp_face_mesh.FACEMESH_TESSELATION, # <--- PESADO
+        #     landmark_drawing_spec=None,
+        #     connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_tesselation_style()
+        # )
+
         self.mp_drawing.draw_landmarks(
             image=frame,
             landmark_list=face_landmarks,
-            connections=self.mp_face_mesh.FACEMESH_CONTOURS,
+            connections=self.mp_face_mesh.FACEMESH_CONTOURS,  # <--- LEVE E ÚTIL
             landmark_drawing_spec=None,
             connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_contours_style()
         )
@@ -113,34 +131,41 @@ class MediaPipeMonitor(BaseMonitor):
         return frame, events, self.latest_metrics, True
 
     def _get_empty_metrics(self):
-        return {"ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0, "phone_detected": False}
+        return {"ear": 1.0, "mar": 0.0, "pitch": 0.0, "yaw": 0.0, "roll": 0.0}
 
     def _draw_hud(self, frame, score, ear, mar, pitch=0, roll=0):
         color_score = self.COLOR_GREEN
         if score > 50: color_score = self.COLOR_YELLOW
         if score > 80: color_score = self.COLOR_RED
 
+        # Barra de Fadiga
         bar_width = 200
         filled_width = int((score / 100.0) * bar_width)
         cv2.rectangle(frame, (10, 10), (10 + bar_width, 40), (50, 50, 50), -1)
         cv2.rectangle(frame, (10, 10), (10 + filled_width, 40), color_score, -1)
-        cv2.putText(frame, f"FADIGA: {int(score)}%", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame, f"FADIGA: {int(score)}%", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        if ear > 0:
-            cv2.putText(frame, f"EAR:{ear:.2f} MAR:{mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200),
-                        1)
-            cv2.putText(frame, f"P:{int(pitch)} R:{int(roll)}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (200, 200, 200), 1)
+        # Info Técnica
+        cv2.putText(frame, f"EAR:{ear:.2f} MAR:{mar:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+        # FPS (Canto Superior Direito)
+        cv2.putText(frame, f"FPS: {int(self.current_fps)}", (frame.shape[1] - 100, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
     def update_settings(self, settings: dict) -> bool:
-        if self.default_settings: self.default_settings.update(settings)
-        self.score_manager.update_settings(settings)
+        """Atualiza configurações locais e repassa para o ScoreManager."""
+        if self.default_settings:
+            self.default_settings.update(settings)
+
+        if self.score_manager:
+            self.score_manager.update_settings(settings)
+
         return True
 
     def get_settings(self) -> dict:
         return self.default_settings
 
-    # --- Cálculos Matemáticos ---
+    # --- Cálculos Matemáticos (Mantidos iguais) ---
     def _calculate_ear(self, landmarks, indices):
         p1 = landmarks[indices[0]];
         p2 = landmarks[indices[1]]
@@ -166,6 +191,7 @@ class MediaPipeMonitor(BaseMonitor):
         return (v1 + v2) / (2.0 * h) if h != 0 else 0.0
 
     def _calculate_head_pose(self, face_landmarks, img_w, img_h):
+        # (Lógica inalterada, apenas usa img_w/img_h originais)
         image_points = np.array([
             (face_landmarks.landmark[1].x * img_w, face_landmarks.landmark[1].y * img_h),
             (face_landmarks.landmark[152].x * img_w, face_landmarks.landmark[152].y * img_h),

@@ -672,6 +672,32 @@ def serve_alert_image(filepath):
         return "Internal server error", 500
 
 
+@app.route("/alerts/videos/<path:filepath>")
+def serve_alert_video(filepath):
+    """Rota para servir ficheiros de vídeo."""
+    # ... (verificações de segurança mantêm-se iguais) ...
+    video_base_path = os.path.join(event_handler.save_path, "videos")
+    safe_path = os.path.abspath(os.path.join(video_base_path, filepath))
+
+    if not safe_path.startswith(video_base_path): return "Invalid path", 400
+    if not os.path.isfile(safe_path): return "Video not found", 404
+
+    try:
+        # Detecta extensão para decidir o MIME type correto
+        if filepath.endswith('.webm'):
+            mimetype = 'video/webm'
+        else:
+            mimetype = 'video/mp4'
+
+        return send_from_directory(
+            os.path.dirname(safe_path),
+            os.path.basename(safe_path),
+            mimetype=mimetype
+        )
+    except Exception as e:
+        logging.error(f"Erro servir vídeo: {e}")
+        return "Internal error", 500
+
 # --- Encerramento Gracioso (shutdown_handler) ---
 def shutdown_handler(signum, frame):
     if not stop_event.is_set():
@@ -743,6 +769,7 @@ if __name__ == "__main__":
             rotation_degrees=INITIAL_ROTATION,
             stop_event=stop_event,
         )
+        event_handler.set_camera_thread(cam_thread)
         cam_thread.start()
 
         logging.info("A aguardar o primeiro frame...")
